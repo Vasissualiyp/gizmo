@@ -189,6 +189,28 @@ R_S, so ~0.85 of the case-B one). jaco: `starforge_legacy_RT` reproduces the cas
 to case B with a case-A switch.
 Decision (MYG, 2026-10-06): deferred; not in the option-2 baseline. `starforge_RT` takes case B on its own.
 
+### 1.4 Photoionization over-counts injected photons; injection reprocessing hides it (unresolved-Strömgren probe, 2026-10-09)
+Found with `test/stromgren_unresolved` (branch `stromgren_probe` e6f9f258). Setup: a fixed 4e4 K source in a uniform box,
+Q swept so that R_S,B/Δx = 0.1-10, at n_H = 1e2 and 1e5. Runs are in /mnt/ceph/users/mgrudic/jaco_stromgren/.
+
+- **Defect.** The cooling module's photoionization rate c σ n_γ (`cooling.cc` ~912-925) is applied to the discretely
+  injected lump without limiting it to the photons present. Each injected photon then ionizes ~c~ σ n_HI Δt atoms:
+  63 measured vs 66 predicted at n_H = 1e2, and 820 vs ~930 at 1e5.
+  - With `RT_REPROCESS_INJECTED_PHOTONS` off, the ionized mass is 9-2300x the Strömgren mass in unresolved cases.
+  - With it on (production), resolved fronts still carry 16-100% excess ionized mass against the case-A reference:
+    1.16 M_S at R_S = 10 Δx, 1.46 at 3 Δx, 2.0 at 3 Δx and n_H = 1e5.
+- **What the construct does.** Its R_HII estimate is 0.72 R_S,B, and a cell is exempt only if max(r, Δx) < R_HII. So for
+  R_S,B ≲ 1.4 Δx every injected ionizing photon is turned into optical light at injection: no ionization, no
+  photoheating, no thermal pressure.
+  - At R_S,B ~ Δx the ionized mass is therefore a step function of resolution (0 → 1.51 M_S at 8x mass resolution).
+  - Radiation pressure can flip it by lowering the kernel density.
+- **Classification:** legacy defects.
+  - The construct is load-bearing for legacy photon conservation, so it must stay on in legacy until the
+    photoionization rate is limited to the photons present.
+  - jaco `starforge_RT` counts photons exactly (absorbed/injected EUV = 1.000) and drops the construct.
+
+Status: recorded, no decision.
+
 ## 2. Cooling solver
 
 ### 2.1 First cooling call from a warm neutral start
