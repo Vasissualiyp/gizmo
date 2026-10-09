@@ -72,9 +72,9 @@ void eos_gamma_probe_report(void) /* collective; rank 0 prints the totals since 
     variable as well. */
 void set_eos_pressure(int i, struct particle_data *pp, struct gas_cell_data *cell)
 {
-#ifdef JACO /* the cooling solver's own EOS on the cached composition, so the temperature it solved for survives here */
+#ifdef JACO /* the cooling solver's own EOS on the cached composition, so the temperature it solved for survives here, continued with its heat capacity between solves */
     double soundspeed=0, press, gamma_eos_index; struct jaco_eos_state eos;
-    jaco_cell_eos(i, pp, cell, cell[i].InternalEnergyPred, cell[i].Density*All.cf_a3inv, &eos);
+    jaco_cell_eos(i, pp, cell, cell[i].InternalEnergyPred, cell[i].Density*All.cf_a3inv, &eos, 1);
     cell[i].Temperature = eos.T; cell[i].Gamma = gamma_eos_index = eos.gamma; /* fresh gamma also feeds the sound speed below */
     press = cell[i].density_for_energy() * eos.P_over_rho / UNIT_SPECEGY_IN_CGS;
 #else

@@ -1,3 +1,7 @@
+#ifdef JACO
+#include "../cooling/jaco_eos_anchor.h"
+#endif
+
 /* forward declarations needed by member functions below */
 #ifdef EOS_SUBSTELLAR_ISM
 double hydrogen_molecule_gamma(double temp);
@@ -223,6 +227,7 @@ extern struct gas_cell_data
 #endif
 #ifdef JACO
     int JacoReheated; /*!< u was raised directly (not through the solver) since the last jaco solve: its cached ions may be stale */
+    struct jaco_eos_anchor JacoEos; /*!< jaco's EOS at the last solve or full evaluation, continued from there (jaco_cell_eos) */
 #endif
 #endif
 #ifdef GALSF
