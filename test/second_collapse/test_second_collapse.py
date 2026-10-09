@@ -13,14 +13,16 @@ Passes if
   still molecular is being cooled by something else), the effective index d ln P / d ln rho stays below 4/3 over at
   least a decade above the density where the centre first reaches 1500 K, and the centre is below 1e4 K at the stop;
 - the ledger closes: every collisional dissociation took 4.48 eV, and in the hot central cells the thermal energy plus
-  the H2 binding energy changes by the PdV work and the capped radiative heat to 2% of the PdV work, with formation
-  radiating less than 5% of it (the ledger is built from the solved states: the outputs' gross formation and
-  dissociation rates, at ~1e3-1e12 cycles per molecule, close only to the solver's tolerance on each row).
+  the H2 binding energy changes by the PdV work, the capped radiative heat and the formation energy that escapes
+  outside it to 2% of the PdV work, with formation radiating (capped or not) less than 5% of it (the ledger is built
+  from the solved states: the outputs' gross formation and dissociation rates, at ~1e3-1e12 cycles per molecule, close
+  only to the solver's tolerance on each row).
 
-The default starforge model fails the second criterion: its dissociate-and-reform cycle loses the binding energy
-radiated by formation on grains and through H- (formation_heat in h2_chemistry/chemical_heat.py), which at first-core
-cycling rates (~500 cycles per molecule) absorbs the PdV work, so the centre runs away isothermally at ~1800 K with
-2 x_H2 ~ 1. starforge_ledger_closed returns that energy to the gas where collisions de-excite the molecule.
+This tests the bookkeeping between the thermal, chemical and radiative reservoirs. The binding energy H2 formation does
+not give the gas is radiation (h2_chemistry/chemical_heat.py): were it to escape regardless of the optical depth, the
+dissociate-and-reform cycle at first-core rates (~500 cycles per molecule) would absorb the PdV work, and the centre would
+run away isothermally at ~1800 K with 2 x_H2 ~ 1. Under the optically-thick limit, as starforge has it, the first core
+keeps it. A model with transported radiation instead (no limit) is one more MODELS entry.
 
 The ledger models live in jaco's jaco_second_collapse branch; point the build's codegen at it with
 JACO_PYTHON="env PYTHONPATH=<that jaco>/src python3" in the environment. GIZMO_TEST_OUTPUT_ROOT puts each run's ~0.6 GB
@@ -49,9 +51,7 @@ STOP_LINE = "DENSEST_CELL_TRACK_STOP"
 COLUMNS = ("time", "rho", "T", "x_H2", "x_e", "Gamma", "u", "h_AU", "ID", "Sigma", "kappa_thick", "L_thick",
            "diss_heat", "diss_events", "form_heat", "form_events", "h2_net", "chem_heat", "total_heat",
            "energy_residual", "formation_radiated", "pdv", "f_thick")
-MODELS = {"starforge_ledger": pytest.mark.xfail(reason="the dissociate-and-reform cycle leaks the radiated formation "
-                                                  "energy: isothermal runaway at ~1800 K with 2 x_H2 ~ 1", strict=True),
-          "starforge_ledger_closed": ()}
+MODELS = {"starforge_ledger": ()}  # model -> pytest marks
 
 
 def read_track(output_dir):

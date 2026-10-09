@@ -640,24 +640,12 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
          " y=0.094444444444444442 z=0",
          1.0, 0.0},
 #endif
-        /* second_collapse first cores (MinGasTemp 2.73: T_min 2.73 K, u_min = MinEgySpec): the optically-thick cap's sum
-           holds the gas-dust exchange, whose dust temperature is fixed at the start of the step, so the capped heat swings
-           from +L to -L within ~1e-4 K, below tier 2's resolution in T; the energy root lies inside that swing, and every
-           tier failed */
-#ifdef JACO_MODEL_STARFORGE_LEDGER_NOCHEMHEAT
-        {"first-core 2357K", 224846258325.71915, 2356.729456984202, 9.9999999999999995e-21, 9.9999999999999995e-21, 9.9999999999999995e-21,
-         0.047480308298565768,
-         " Delta_t=2354185.4858398438 Delta_x=4138172191422.4985 G_0=1e-56 G_LW=1 ISRF=1 N_H=2.2226915267654074e+27"
-         " Td=2356.7294569857277 X=0.71550000000000002 Z_d=1 f_d=1 f_metal=0 f_neb=0 grad_v=3.2671795155385872e-08"
-         " grad_v_tf=3.2453549794235623e-08 kappa_thick=0.10144034349283229 n_Htot=119263489288751.3"
-         " pdv_work=-4.8308249402629834e-08 u_initial=224846258325.71915 x_C_tot=0.00029466573491730724"
-         " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.047480308298565768"
-         " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
-         " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05 y=0.094444444444444442"
-         " z=0",
-         2.73, 160803223.3050341},
-#endif
-#ifdef JACO_MODEL_STARFORGE_LEDGER_DB_CLOSED
+        /* second_collapse first cores (MinGasTemp 2.73: T_min 2.73 K, u_min = MinEgySpec), every tier failed: the
+           optically-thick limit's sum holds the gas-dust exchange, whose dust temperature is fixed at the start of the
+           step, so the capped heat swings from +L to -L within ~1e-4 K, below tier 2's resolution in T, and the energy
+           root lies inside that swing. Recorded with jaco models that gave the gas all the formation energy where
+           collisions de-excite H2 (as starforge does where its limit binds) and without chemical heat */
+#ifdef JACO_MODEL_STARFORGE
         {"first-core 1503K", 121395656386.58861, 1502.6913751144459, 2.6583749289755265e-10, 9.9999999999999995e-21, 9.9999999999999995e-21,
          0.49976333392480921,
          " Delta_t=9416741.943359375 Delta_x=5342715284255.708 G_0=1e-56 G_LW=1 ISRF=1 N_H=1.7071697376831721e+27"
@@ -669,8 +657,6 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
          " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05 y=0.094444444444444442"
          " z=0",
          2.73, 160803223.3050341},
-#endif
-#ifdef JACO_MODEL_STARFORGE_LEDGER_CLOSED
         {"first-core 1560K", 126848143385.8636, 1560.0406810550498, 1.0152424951204672e-09, 9.9999999999999995e-21, 9.9999999999999995e-21,
          0.49435455247069165,
          " Delta_t=4708370.9716796875 Delta_x=4849021243044.3115 G_0=1e-56 G_LW=1 ISRF=1 N_H=1.5664002354632944e+27"
@@ -689,6 +675,19 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
          " grad_v_tf=1.6646775224486218e-08 kappa_thick=0.10142059626920231 n_Htot=68076025036018.234"
          " pdv_work=7.1301492360397882e-09 u_initial=125505333440.98076 x_C_tot=0.00029466573491730724"
          " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.49455937852986848"
+         " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
+         " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05 y=0.094444444444444442"
+         " z=0",
+         2.73, 160803223.3050341},
+#endif
+#ifdef JACO_MODEL_STARFORGE_LEDGER_NOCHEMHEAT
+        {"first-core 2357K", 224846258325.71915, 2356.729456984202, 9.9999999999999995e-21, 9.9999999999999995e-21, 9.9999999999999995e-21,
+         0.047480308298565768,
+         " Delta_t=2354185.4858398438 Delta_x=4138172191422.4985 G_0=1e-56 G_LW=1 ISRF=1 N_H=2.2226915267654074e+27"
+         " Td=2356.7294569857277 X=0.71550000000000002 Z_d=1 f_d=1 f_metal=0 f_neb=0 grad_v=3.2671795155385872e-08"
+         " grad_v_tf=3.2453549794235623e-08 kappa_thick=0.10144034349283229 n_Htot=119263489288751.3"
+         " pdv_work=-4.8308249402629834e-08 u_initial=224846258325.71915 x_C_tot=0.00029466573491730724"
+         " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.047480308298565768"
          " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
          " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05 y=0.094444444444444442"
          " z=0",

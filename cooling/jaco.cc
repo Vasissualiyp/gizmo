@@ -871,21 +871,23 @@ void gizmo_to_jaco(int i, SolveVars *sv, Params *pr, struct particle_data *pp, s
 }
 
 #ifdef JACO_LEDGER
-#if !defined(JACO_HAS_OUTPUT_h2_diss_heat) || !defined(JACO_HAS_OUTPUT_f_thick)
+#if !defined(JACO_HAS_OUTPUT_h2_form_radiated) || !defined(JACO_HAS_OUTPUT_f_thick)
 #error "JACO_LEDGER needs a model with the H2 ledger's outputs and the optically-thick limit, e.g. JACO=starforge_ledger"
 #endif
 /* Adds the step just solved to cell i's H2 energy ledger, per gram (each output times Delta_t is its integral under
    backward Euler): [0] heat of the collisional dissociations, [1] their number, [2] heat of H2 formation, [3] H2 formed,
    [4] net H2 production of every process, [5] heat of every H2/H- reaction, [6] total heat (capped processes, H2/H-
-   reactions and PdV work), [7] |du - E_b dN_H2 - capped heat - PdV work + formation energy radiated|: the energy not
-   accounted for with H2's binding energy E_b = 4.48 eV counted as internal energy, from the solved state (the outputs'
-   gross formation and dissociation rates, ~1e3-1e12 cycles per molecule in a first core, only close to the solver's
-   tolerance on each row: [5] and [6] are not reliable there), [8] the formation energy radiated, E_b per molecule
-   formed less the heat given, [9] PdV work; [10], not a sum, is the optically-thick limit's factor on the capped heat. */
+   reactions and PdV work), [7] |du - E_b dN_H2 - capped heat - PdV work + escaped|: the energy not accounted for with
+   H2's binding energy E_b = 4.48 eV counted as internal energy, from the solved state (the outputs' gross formation and
+   dissociation rates, ~1e3-1e12 cycles per molecule in a first core, only close to the solver's tolerance on each row:
+   [5] and [6] are not reliable there), escaped being the formation energy that leaves outside the capped heat (E_b per
+   molecule formed less the formation heat), [8] the formation energy radiated: escaped, plus the capped formation
+   radiation (in the capped heat), [9] PdV work; [10], not a sum, is the optically-thick limit's factor on the capped
+   heat. */
 static void jaco_ledger_add(int i, const SolveVars *sv, const Params *pr, const Outputs *o, struct gas_cell_data *cell) {
     const double E_b = 4.48 * 1.602176634e-12 /* jaco's H2_BINDING_ENERGY */, rho = cell[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS, w = pr->Delta_t / rho;
     const double du = sv->u - pr->u_initial, dN_H2 = (sv->x_H_2 - pr->x_H_2_initial) * pr->n_Htot / rho;
-    const double radiated = (E_b * o->h2_form_events - o->h2_form_heat) * w;
+    const double escaped = (E_b * o->h2_form_events - o->h2_form_heat) * w;
     double *L = cell[i].JacoLedger;
     L[0] += o->h2_diss_heat * w;
     L[1] += o->h2_diss_events * w;
@@ -894,8 +896,8 @@ static void jaco_ledger_add(int i, const SolveVars *sv, const Params *pr, const 
     L[4] += o->h2_net * w;
     L[5] += o->h2_chem_heat * w;
     L[6] += (o->q_capped + o->h2_chem_heat + pr->pdv_work) * w;
-    L[7] += fabs(du - E_b * dN_H2 - (o->q_capped + pr->pdv_work) * w + radiated);
-    L[8] += radiated;
+    L[7] += fabs(du - E_b * dN_H2 - (o->q_capped + pr->pdv_work) * w + escaped);
+    L[8] += escaped - o->h2_form_radiated * w;
     L[9] += pr->pdv_work * w;
     L[10] = o->f_thick;
 }
