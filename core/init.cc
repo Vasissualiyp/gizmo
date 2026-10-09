@@ -575,6 +575,9 @@ void init(void)
         }
 #ifdef JACO
         if(RestartFlag != 1) {CellP[i].Gamma = GAMMA_DEFAULT; CellP[i].JacoReheated = 0;} /* gamma_eos_value() returns this until the first set_eos_pressure(); snapshots do not carry it */
+#ifdef JACO_LEDGER
+        if(RestartFlag != 1) {for(int k=0;k<JACO_LEDGER_N;k++) {CellP[i].JacoLedger[k] = 0;}}
+#endif
 #ifndef COOL_MOLECFRAC_NONEQM
         if(RestartFlag != 1) {CellP[i].MolecularMassFraction = CellP[i].MolecularMassFraction_perNeutralH = 0;} /* not read from snapshots in this configuration: start atomic */
 #endif

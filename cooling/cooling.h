@@ -21,6 +21,12 @@ double return_local_gammamultiplier(int target, struct gas_cell_data *cell);
 double evaluate_Compton_heating_cooling_rate(int target, double T, double nHcgs, double n_elec, double shielding_factor_for_exgalbg, struct gas_cell_data *cell);
 double get_background_radiation_temperature_for_emission_corrections(int target, struct gas_cell_data *cell);
 void   set_PdV_work_heatingrate(int i, double dtime, struct particle_data *pp, struct gas_cell_data *cell);
+#ifdef DENSEST_CELL_TRACK
+void   track_densest_cell(void);
+#endif
+#if defined(COOL_LOW_TEMPERATURES) && !defined(COOL_LOWTEMP_THIN_ONLY)
+double optically_thick_cooling_opacity(int target, double T, double rho, double n_elec, struct particle_data *pp, struct gas_cell_data *cell);
+#endif
 #if defined(RADTRANSFER)
 void   rt_cooling_radiation_to_bands(int i, double unew, double dtime, double rt_diag_dtie_code_dt, struct particle_data *pp, struct gas_cell_data *cell); /* the last double feeds RT_DIAG_IR_DOUBLE_COUNT only */
 #endif

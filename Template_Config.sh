@@ -379,6 +379,10 @@
 # ----   `python -m jaco.models.starforge.convert_spcool_tables`.
 ## ----------------------------------------------------------------------------------------------------
 #JACO=model_name            # enable the jaco  microphysics solver with the specified model. requires COOLING.
+#JACO_LEDGER                # write each cell's cumulative H2 energy ledger (JacoLedger); needs a model with its outputs, e.g. JACO=starforge_ledger
+#JACO_THICK_KAPPA_TMAX=1400  # diagnostic: a jaco model's optically-thick limit takes the opacity at min(T, this), i.e. dust that does not sublimate
+#JACO_DUST_SUBLIMATION       # diagnostic: a jaco model's dust survival f_d from sublimation at the gas temperature (default f_d = 1)
+#DENSEST_CELL_TRACK         # append the densest cooled gas cell's state (and JacoLedger) to densest_cell.txt; =<rho> with DENSEST_CELL_TRACK_STOP_DENSITY ends the run above rho [g/cm^3]
 ####################################################################################################
 
 

@@ -223,6 +223,10 @@ extern struct gas_cell_data
 #endif
 #ifdef JACO
     int JacoReheated; /*!< u was raised directly (not through the solver) since the last jaco solve: its cached ions may be stale */
+#ifdef JACO_LEDGER
+#define JACO_LEDGER_N 11
+    double JacoLedger[JACO_LEDGER_N]; /*!< H2 energy ledger, per gram since the start (jaco_ledger_add in jaco.cc) */
+#endif
 #endif
 #endif
 #ifdef GALSF

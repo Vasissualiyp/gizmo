@@ -97,6 +97,9 @@ void cooling_parent_routine(void)
 #ifdef JACO
         jaco_report_solve_stats(); /* collective: ranks with nothing to cool must still take part */
 #endif
+#ifdef DENSEST_CELL_TRACK
+        track_densest_cell();
+#endif
         return;
     }
 
@@ -132,6 +135,9 @@ void cooling_parent_routine(void)
 #ifdef JACO
     jaco_report_solve_stats();
 #endif
+#ifdef DENSEST_CELL_TRACK
+    track_densest_cell();
+#endif
 
 #ifdef CHIMES /* CHIMES records some extra timing information here owing to large possible imbalances */
   CPU_Step[CPU_COOLINGSFR] += measure_time(); MPI_Barrier(MPI_COMM_WORLD);
@@ -140,6 +146,86 @@ void cooling_parent_routine(void)
 }
 
 
+
+
+#ifdef DENSEST_CELL_TRACK
+/* Called after each cooling pass: appends the densest gas cell, over all ranks, to densest_cell.txt whenever its
+   density or temperature has moved by more than 0.1% since the last line (with JACO_LEDGER, its H2 energy ledger
+   too); collective. Above DENSEST_CELL_TRACK_STOP_DENSITY [g cm^-3] it writes a snapshot and ends the run. */
+void track_densest_cell(void)
+{
+    struct { double rho; int rank; } loc = {-1, ThisTask}, glob;
+    int jmax = -1;
+    for (int i = 0; i < NumPart; i++) {
+        if (P[i].Type != 0 || P[i].Mass <= 0) continue;
+        double r = CellP[i].Density * All.cf_a3inv;
+        if (r > loc.rho) { loc.rho = r; jmax = i; }
+    }
+    MPI_Allreduce(&loc, &glob, 1, MPI_DOUBLE_INT, MPI_MAXLOC, MPI_COMM_WORLD);
+    if (glob.rho <= 0) return;
+#ifdef JACO_LEDGER
+    enum { NLEDGER = JACO_LEDGER_N };
+#else
+    enum { NLEDGER = 0 };
+#endif
+    enum { NHEAD = 12, NREC = NHEAD + NLEDGER };
+    double rec[NREC] = {0};
+    if (ThisTask == glob.rank) {
+        rec[0] = All.Time;
+        rec[1] = CellP[jmax].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS;
+        rec[2] = CellP[jmax].Temperature;
+        rec[3] = 0.5 * CellP[jmax].MolecularMassFraction;
+        rec[4] = CellP[jmax].Ne;
+        rec[5] = CellP[jmax].gamma_eos_value();
+        rec[6] = CellP[jmax].InternalEnergy * UNIT_SPECEGY_IN_CGS;
+        rec[7] = P[jmax].KernelRadius * All.cf_atime * UNIT_LENGTH_IN_AU;
+        rec[8] = (double) P[jmax].ID;
+        /* the optically-thick limit's column, opacity and slab emission per unit mass, as CoolingRate takes them */
+        double Sigma = evaluate_NH_from_GradRho(P[jmax].GradRho, P[jmax].KernelRadius, CellP[jmax].Density, P[jmax].NumNgb, 1, jmax, P) * UNIT_SURFDEN_IN_CGS;
+        rec[9] = Sigma;
+#if defined(COOL_LOW_TEMPERATURES) && !defined(COOL_LOWTEMP_THIN_ONLY)
+        double T_kappa = rec[2];
+#ifdef JACO_THICK_KAPPA_TMAX
+        T_kappa = DMIN(T_kappa, JACO_THICK_KAPPA_TMAX);
+#endif
+        rec[10] = optically_thick_cooling_opacity(jmax, T_kappa, rec[1], CellP[jmax].Ne, P, CellP);
+        rec[11] = 5.67e-5 * pow(rec[2], 4) * 2.3 * HYDROGEN_MASSFRAC / (Sigma * (1 + rec[10] * Sigma));
+#endif
+#ifdef JACO_LEDGER
+        for (int k = 0; k < JACO_LEDGER_N; k++) rec[NHEAD + k] = CellP[jmax].JacoLedger[k];
+#endif
+    }
+    MPI_Bcast(rec, NREC, MPI_DOUBLE, glob.rank, MPI_COMM_WORLD);
+    if (ThisTask == 0) {
+        static double last_rho = 0, last_T = 0;
+        static FILE *fd = NULL;
+        if (!fd) {
+            char fname[DEFAULT_PATH_BUFFERSIZE_TOUSE];
+            snprintf(fname, DEFAULT_PATH_BUFFERSIZE_TOUSE, "%sdensest_cell.txt", All.OutputDir);
+            fd = fopen(fname, RestartFlag == 1 ? "a" : "w");
+            if (fd && RestartFlag != 1)
+                fprintf(fd, "# time rho[g/cm^3] T[K] x_H2 x_e Gamma u[erg/g] h[AU] ID Sigma[g/cm^2] kappa_thick[cm^2/g] "
+                            "L_thick[erg/g/s], then JacoLedger[0..%d] (jaco.cc jaco_ledger_add)\n",
+                        NLEDGER - 1);
+        }
+        if (fd && (fabs(rec[1] / last_rho - 1) > 1e-3 || fabs(rec[2] / last_T - 1) > 1e-3)) {
+            for (int k = 0; k < NREC; k++) fprintf(fd, "%.10e%c", rec[k], k == NREC - 1 ? '\n' : ' ');
+            fflush(fd);
+            last_rho = rec[1];
+            last_T = rec[2];
+        }
+    }
+#ifdef DENSEST_CELL_TRACK_STOP_DENSITY
+    if (rec[1] > DENSEST_CELL_TRACK_STOP_DENSITY) {
+        if (ThisTask == 0)
+            printf("DENSEST_CELL_TRACK_STOP: densest cell at %g g/cm^3 > DENSEST_CELL_TRACK_STOP_DENSITY at Time=%.10g; writing a snapshot and stopping\n",
+                   rec[1], All.Time);
+        savepositions(All.SnapshotFileCount++);
+        endrun(0);
+    }
+#endif
+}
+#endif
 
 
 /* Prepare the PdV work heating rate for the cooling sub-routine. Applies gravity-work correction for
@@ -1066,6 +1152,30 @@ double find_abundances_and_rates(double logT, double rho, int target, double shi
 
 
 
+#if defined(COOL_LOW_TEMPERATURES) && !defined(COOL_LOWTEMP_THIN_ONLY)
+/* kappa_eff [cm^2/g] of CoolingRate's optically-thick cooling limit at gas temperature T, density rho [g/cm^3] and
+   free electrons n_elec per H; the non-RT jaco models take it as their kappa_thick */
+double optically_thick_cooling_opacity(int target, double T, double rho, double n_elec, struct particle_data *pp, struct gas_cell_data *cell)
+{
+    double kappa_eff;
+    kappa_eff = rt_kappa_adaptive_IR_band(target,T,T,0,1, pp, cell) / UNIT_SURFDEN_IN_CGS; // will return simple opacity law kappa = 0.1cm^2/g (T/10K)^2, capped at 5 cm^2/g, in code units [convert to physical here]
+    if(kappa_eff < 0.1) {kappa_eff=0.1;}
+    if(T>1500.){
+        /* this is an approximate result for high-temperature opacities, but provides a pretty good fit from 1.5e3 - 1.0e9 K */
+        double k_electron = 0.2 * (1. + HYDROGEN_MASSFRAC); //0.167 * n_elec; /* Thompson scattering (non-relativistic) */
+        double k_molecular = 0.1 * pp[target].Metallicity[0]; /* molecular line opacities */
+
+        double k_Hminus = 1.1e-25 * sqrt(pp[target].Metallicity[0] * rho) * pow(T,7.7); /* negative H- ion opacity */
+        double k_Kramers = 4.0e25 * (1.+HYDROGEN_MASSFRAC) * (pp[target].Metallicity[0]+0.001) * rho / (T*T*T*sqrt(T)); /* free-free, bound-free, bound-bound transitions */
+        double k_radiative = k_molecular + 1./(1./k_Hminus + 1./(k_electron+k_Kramers)); /* approximate interpolation between the above opacities */
+        double k_conductive = 2.6e-7 * n_elec * T*T/(rho*rho); //*(1+pow(rho/1.e6,0.67) /* e- thermal conductivity can dominate at low-T, high-rho, here it as expressed as opacity */
+        kappa_eff += 1./(1./k_radiative + 1./k_conductive); /* effective opacity including both heat carriers (this is exact) */
+    }
+    return kappa_eff;
+}
+#endif
+
+
 /*  this function first computes the self-consistent temperature and abundance ratios, and then it calculates (heating rate-cooling rate)/n_h^2 in cgs units */
 double CoolingRateFromU(double u, double rho, double ne_guess, double *ne_eval, int target, struct particle_data *pp, struct gas_cell_data *cell)
 {
@@ -1462,21 +1572,7 @@ double CoolingRate(double logT,  double rho, double n_elec_guess, double *n_elec
         double surface_density = evaluate_NH_from_GradRho(cell[target].Gradients.Density,pp[target].KernelRadius,cell[target].Density,pp[target].NumNgb,1,target,pp);
         surface_density *=  UNIT_SURFDEN_IN_CGS; // converts to cgs
         double effective_area = 2.3 * PROTONMASS_CGS / surface_density; // since cooling rate is ultimately per-particle, need a particle-weight here
-        double kappa_eff; // effective kappa, accounting for metal abundance, temperature, and density //
-	
-	    kappa_eff = rt_kappa_adaptive_IR_band(target,T,T,0,1, pp, cell) / UNIT_SURFDEN_IN_CGS; // will return simple opacity law kappa = 0.1cm^2/g (T/10K)^2, capped at 5 cm^2/g, in code units [convert to physical here]
-        if(kappa_eff < 0.1) {kappa_eff=0.1;}
-        if(T>1500.){
-            /* this is an approximate result for high-temperature opacities, but provides a pretty good fit from 1.5e3 - 1.0e9 K */
-            double k_electron = 0.2 * (1. + HYDROGEN_MASSFRAC); //0.167 * n_elec; /* Thompson scattering (non-relativistic) */
-            double k_molecular = 0.1 * pp[target].Metallicity[0]; /* molecular line opacities */
-
-            double k_Hminus = 1.1e-25 * sqrt(pp[target].Metallicity[0] * rho) * pow(T,7.7); /* negative H- ion opacity */
-            double k_Kramers = 4.0e25 * (1.+HYDROGEN_MASSFRAC) * (pp[target].Metallicity[0]+0.001) * rho / (T*T*T*sqrt(T)); /* free-free, bound-free, bound-bound transitions */
-            double k_radiative = k_molecular + 1./(1./k_Hminus + 1./(k_electron+k_Kramers)); /* approximate interpolation between the above opacities */
-            double k_conductive = 2.6e-7 * n_elec * T*T/(rho*rho); //*(1+pow(rho/1.e6,0.67) /* e- thermal conductivity can dominate at low-T, high-rho, here it as expressed as opacity */
-            kappa_eff += 1./(1./k_radiative + 1./k_conductive); /* effective opacity including both heat carriers (this is exact) */
-        }
+        double kappa_eff = optically_thick_cooling_opacity(target, T, rho, n_elec, pp, cell); // effective kappa, accounting for metal abundance, temperature, and density //
         double tau_eff = kappa_eff * surface_density;
         double Lambda_Thick_BlackBody = 5.67e-5 * (T*T*T*T) * effective_area / ((1.+tau_eff) * nHcgs);
         if(Q > 0) {if(Q > Lambda_Thick_BlackBody) {Q=Lambda_Thick_BlackBody;}} else {if(Q < -Lambda_Thick_BlackBody) {Q=-Lambda_Thick_BlackBody;}}

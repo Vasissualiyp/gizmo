@@ -1441,6 +1441,7 @@ enum iofields
   IO_DELAY_TIME_HII,
   IO_MOLECULARFRACTION,
   IO_SHOCKMACHNUM,
+  IO_JACO_LEDGER,
   IO_LASTENTRY			/* This should be kept - it signals the end of the list */
 };
 

@@ -62,6 +62,11 @@ extern "C" int jaco_isfinite(double x);
 #if defined(RT_INFRARED) && !defined(JACO_HAS_VAR_Td)
 #error "JACO with RT_INFRARED needs a model that solves the dust temperature"
 #endif
+/* A model with the optically-thick cooling limit takes its opacity from CoolingRate's; with RT_INFRARED (which sets
+   COOL_LOWTEMP_THIN_ONLY) the IR band traps the cooling radiation instead, and the limit would count it twice */
+#if defined(JACO_HAS_PARAM_kappa_thick) && (!defined(COOL_LOW_TEMPERATURES) || defined(COOL_LOWTEMP_THIN_ONLY))
+#error "a jaco model with the optically-thick cooling limit (kappa_thick) needs COOL_LOW_TEMPERATURES without COOL_LOWTEMP_THIN_ONLY or RT_INFRARED"
+#endif
 #if defined(RADTRANSFER) && defined(TRANSPORT_SUBCYCLE) && !defined(TRANSPORT_SUBCYCLE_COOLING)
 #error "JACO with TRANSPORT_SUBCYCLE needs TRANSPORT_SUBCYCLE_COOLING: the bands would stream through the gas unabsorbed for the whole subcycle"
 #endif
@@ -425,6 +430,13 @@ static double jaco_pack_params(int i, Params *pr, struct particle_data *pp, stru
 #endif
 #ifdef JACO_HAS_PARAM_f_d
     pr->f_d = 1.0; /* no sublimation correction for now */
+#ifdef JACO_DUST_SUBLIMATION /* diagnostic: the dust surviving sublimation at the gas temperature (RT_INFRARED's
+                                return_dust_to_metals_ratio_vs_solar with Td = T, as in an optically thick core) */
+    {
+        double x = cell[i].Temperature / 1500.;
+        pr->f_d = DMAX(sigmoid_sqrt(9. * (1. - x)) * exp(-DMIN(40., x * x / 9.)), 1.e-25);
+    }
+#endif
 #endif
 
     /* Kim+23 nebular forbidden-line cooling of photoionized gas: on exactly where the standard module applies it */
@@ -784,6 +796,13 @@ void gizmo_to_jaco(int i, SolveVars *sv, Params *pr, struct particle_data *pp, s
     jaco_poison_params(pr);
 #endif
     jaco_pack_params(i, pr, pp, cell, cell[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS);
+#ifdef JACO_HAS_PARAM_kappa_thick /* the optically-thick cooling limit's opacity, at the start-of-step temperature */
+    double T_kappa = cell[i].Temperature;
+#ifdef JACO_THICK_KAPPA_TMAX /* diagnostic: the opacity of gas no hotter than this, e.g. of the dusty envelope around a core above sublimation */
+    T_kappa = DMIN(T_kappa, JACO_THICK_KAPPA_TMAX);
+#endif
+    pr->kappa_thick = optically_thick_cooling_opacity(i, T_kappa, cell[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS, cell[i].Ne, pp, cell);
+#endif
 #ifdef JACO_HAS_VAR_x_photon_EUV
     jaco_pack_bands(i, sv, pr, pp, cell); /* first: the metals' free electrons the seeds split off read the bands */
 #endif
@@ -851,6 +870,37 @@ void gizmo_to_jaco(int i, SolveVars *sv, Params *pr, struct particle_data *pp, s
 #endif
 }
 
+#ifdef JACO_LEDGER
+#if !defined(JACO_HAS_OUTPUT_h2_diss_heat) || !defined(JACO_HAS_OUTPUT_f_thick)
+#error "JACO_LEDGER needs a model with the H2 ledger's outputs and the optically-thick limit, e.g. JACO=starforge_ledger"
+#endif
+/* Adds the step just solved to cell i's H2 energy ledger, per gram (each output times Delta_t is its integral under
+   backward Euler): [0] heat of the collisional dissociations, [1] their number, [2] heat of H2 formation, [3] H2 formed,
+   [4] net H2 production of every process, [5] heat of every H2/H- reaction, [6] total heat (capped processes, H2/H-
+   reactions and PdV work), [7] |du - E_b dN_H2 - capped heat - PdV work + formation energy radiated|: the energy not
+   accounted for with H2's binding energy E_b = 4.48 eV counted as internal energy, from the solved state (the outputs'
+   gross formation and dissociation rates, ~1e3-1e12 cycles per molecule in a first core, only close to the solver's
+   tolerance on each row: [5] and [6] are not reliable there), [8] the formation energy radiated, E_b per molecule
+   formed less the heat given, [9] PdV work; [10], not a sum, is the optically-thick limit's factor on the capped heat. */
+static void jaco_ledger_add(int i, const SolveVars *sv, const Params *pr, const Outputs *o, struct gas_cell_data *cell) {
+    const double E_b = 4.48 * 1.602176634e-12 /* jaco's H2_BINDING_ENERGY */, rho = cell[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS, w = pr->Delta_t / rho;
+    const double du = sv->u - pr->u_initial, dN_H2 = (sv->x_H_2 - pr->x_H_2_initial) * pr->n_Htot / rho;
+    const double radiated = (E_b * o->h2_form_events - o->h2_form_heat) * w;
+    double *L = cell[i].JacoLedger;
+    L[0] += o->h2_diss_heat * w;
+    L[1] += o->h2_diss_events * w;
+    L[2] += o->h2_form_heat * w;
+    L[3] += o->h2_form_events * w;
+    L[4] += o->h2_net * w;
+    L[5] += o->h2_chem_heat * w;
+    L[6] += (o->q_capped + o->h2_chem_heat + pr->pdv_work) * w;
+    L[7] += fabs(du - E_b * dN_H2 - (o->q_capped + pr->pdv_work) * w + radiated);
+    L[8] += radiated;
+    L[9] += pr->pdv_work * w;
+    L[10] = o->f_thick;
+}
+#endif
+
 /* Write the solved state back to cell i, the bands included, and, if out, evaluate the model's outputs there with the
    step's energy accounting. */
 void jaco_to_gizmo(int i, const SolveVars *sv, const Params *pr, struct particle_data *pp, struct gas_cell_data *cell,
@@ -861,6 +911,9 @@ void jaco_to_gizmo(int i, const SolveVars *sv, const Params *pr, struct particle
     microphysics_outputs(sv, pr, &out->rate);
     out->dt = pr->Delta_t;
     out->gas_dE = (sv->u / UNIT_SPECEGY_IN_CGS - cell[i].InternalEnergy) * cell[i].Mass;
+#ifdef JACO_LEDGER
+    jaco_ledger_add(i, sv, pr, &out->rate, cell);
+#endif
 #ifdef JACO_HAS_VAR_x_photon_EUV
     jaco_write_bands(i, sv, pr, &out->rate, pp, cell, out);
 #endif
