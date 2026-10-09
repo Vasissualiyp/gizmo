@@ -4,7 +4,7 @@
 
    1. At the anchor (u = u0) the prediction is the anchor's own state, bit for bit.
    2. Over molecular, atomic, partly ionized and ionized compositions from 10 K to 1e7 K, every |u - u0| up to the
-      bound JACO_EOS_PREDICT_MAX_DU: T, P and the sound speed within TOL of the full EOS. Two controls show the check
+      bound JACO_EOS_PREDICT_MAX_DU: T and P within TOL of the full EOS, the sound speed within TOL_CS. Two controls show the check
       sees the failures it guards against: the chord through the origin (T = u/c_v0) and the ideal-gas pressure
       (gamma0 - 1) rho u, each off by more than TOL in molecular gas inside the bound.
    3. Beyond the bound, with no anchor, or after any change of a composition input, the anchor is refused: a stale
@@ -23,8 +23,9 @@ double jaco_electron_abundance(const SolveVars *sv, const Params *pr);
 #error "this test fills the STARFORGE family's Params"
 #endif
 
-/* the accuracy the anchor must hold inside its bound, relative, in T, P and the sound speed */
-static const double TOL = 2e-4;
+/* the accuracy the anchor must hold inside its bound, relative: T and P; the sound speed, whose gamma is held at the
+   anchor's and so is off at first order in T - T0 where H2's heat capacity varies */
+static const double TOL = 2e-4, TOL_CS = 2.5e-3;
 static int failures = 0, checks = 0;
 
 struct comp {
@@ -68,7 +69,7 @@ static void fill(const comp &c, SolveVars *sv, Params *pr) {
     pr->x_Fe = x_solar[8] * c.Z;
 }
 
-/* mass density for these Params, as jaco_mass_per_H takes it: with no H2 every species carries (3/2) kT */
+/* mass density at these Params (n_Htot included), as jaco_mass_per_H takes it: with no H2 every species carries (3/2) kT */
 static double mass_density(const Params *pr) {
     SolveVars s = {};
     s.T = 1e4;
@@ -140,14 +141,14 @@ int main() {
         if (f < max_du) fracs[nin++] = f; else if (f > max_du) beyond[nout++] = f;
     fracs[nin++] = max_du;
     beyond[nout++] = max_du * (1 + 1e-9);
-    std::printf("anchor bound |u - u0|/u0 <= %g, required accuracy %g\n", max_du, TOL);
+    std::printf("anchor bound |u - u0|/u0 <= %g, required accuracy %g (T, P), %g (c_s)\n", max_du, TOL, TOL_CS);
     std::printf("%-18s %10s | max rel. error over the anchor temperatures at |u - u0|/u0 =\n", "composition", "quantity");
     double worst[3] = {0, 0, 0}, chord_mol = 0, ideal_mol = 0;
     for (const comp &c : comps) {
         SolveVars sv;
         Params pr;
         fill(c, &sv, &pr);
-        const double rho = mass_density(&pr) * pr.n_Htot;
+        const double rho = mass_density(&pr);
         double err[3][8] = {};
         for (int t = 0; c.T[t] > 0; t++) {
             jaco_eos_anchor a = make_anchor(c.T[t], &sv, &pr, rho);
@@ -187,7 +188,7 @@ int main() {
         }
     }
     std::printf("worst inside the bound: T %.3e  P %.3e  c_s %.3e\n", worst[0], worst[1], worst[2]);
-    expect(worst[0] <= TOL && worst[1] <= TOL && worst[2] <= TOL, "anchor off by more than TOL inside its bound");
+    expect(worst[0] <= TOL && worst[1] <= TOL && worst[2] <= TOL_CS, "anchor off by more than TOL inside its bound");
     std::printf("controls, molecular gas inside the bound: chord T = u/c_v0 off by %.3e, ideal-gas P = (gamma0-1) rho u by %.3e\n",
                 chord_mol, ideal_mol);
     expect(chord_mol > TOL && ideal_mol > TOL, "a control is within TOL: the check could not see that failure");
@@ -198,7 +199,7 @@ int main() {
         SolveVars sv;
         Params pr;
         fill(m, &sv, &pr);
-        const double rho = mass_density(&pr) * pr.n_Htot;
+        const double rho = mass_density(&pr);
         jaco_eos_anchor a = make_anchor(150, &sv, &pr, rho);
         jaco_eos_anchor none = a;
         none.u = 0;
@@ -214,7 +215,7 @@ int main() {
             SolveVars sv2;
             Params pr2;
             fill(c2, &sv2, &pr2);
-            const double rho2 = mass_density(&pr2) * pr2.n_Htot;
+            const double rho2 = mass_density(&pr2);
             uint64_t key2 = comp_key(&sv2, &pr2);
             state s = full_eos(a.u, a.T, sv2, &pr2, rho2, &cv);
             double Ts = a.T, Ps = a.P_over_rho; /* what the stale anchor gives at u0 */

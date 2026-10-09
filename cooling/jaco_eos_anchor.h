@@ -9,8 +9,9 @@
 #include <stdint.h>
 #include <string.h>
 
-/* Largest |u - u0|/u0 over which an anchor is continued: T, P and c_s then stay within 1.4e-4 of the full EOS where
-   H2's rotational levels make u(T) most curved, and within 1e-6 in H2-free gas (test/jaco_eos_anchor) */
+/* Largest |u - u0|/u0 over which an anchor is continued: T and P then stay within 1.4e-4 of the full EOS where H2's
+   rotational levels make u(T) most curved, and the sound speed, its gamma held at the anchor's, within 1.8e-3; all
+   within 1e-6 in H2-free gas (test/jaco_eos_anchor) */
 #ifndef JACO_EOS_PREDICT_MAX_DU
 #define JACO_EOS_PREDICT_MAX_DU 0.03
 #endif
