@@ -23,18 +23,20 @@ cycling rates (~500 cycles per molecule) absorbs the PdV work, so the centre run
 2 x_H2 ~ 1. starforge_ledger_closed returns that energy to the gas where collisions de-excite the molecule.
 
 The ledger models live in jaco's jaco_second_collapse branch; point the build's codegen at it with
-JACO_PYTHON="env PYTHONPATH=<that jaco>/src python3" in the environment.
+JACO_PYTHON="env PYTHONPATH=<that jaco>/src python3" in the environment. GIZMO_TEST_OUTPUT_ROOT puts each run's ~0.6 GB
+of output elsewhere. Each model takes ~30 min on 2 ranks x 4 threads.
 """
 
 import os
+import shutil
 import subprocess
 from urllib.request import urlretrieve
 
 import numpy as np
 import pytest
 
-from gizmo.test import (build_gizmo_for_test, default_mpi_ranks, default_omp_threads, get_cooling_tables,
-                        finalize_variant_output, stash_baseline_output, clean_test_outputs, variant_output_dir)
+from gizmo.test import (build_gizmo_for_test, default_mpi_ranks, get_cooling_tables,
+                        write_params_with_overrides)
 
 TEST_NAME = "second_collapse"
 IC_URL = "https://users.flatironinstitute.org/~mgrudic/gizmo_tests/larson_penston/larson_penston_ics.hdf5"
@@ -122,46 +124,52 @@ def ledger_closure(track):
     return per_event, d["energy_residual"].sum() / work, d["formation_radiated"].sum() / work
 
 
-def run_until_stop(num_mpi_ranks, num_omp_threads, timeout=6 * 3600):
-    """Run GIZMO in the test directory; it ends on the density trigger, not at TimeMax. Returns its stdout path."""
+def output_dir(model):
+    """The run's OutputDir: under $GIZMO_TEST_OUTPUT_ROOT if set (e.g. on bulk storage: each run writes ~0.6 GB of
+    snapshots), else in the test directory"""
+    root = os.environ.get("GIZMO_TEST_OUTPUT_ROOT")
+    return os.path.join(root, f"{TEST_NAME}_{model}") if root else os.path.abspath(f"test/{TEST_NAME}/output_{model}")
+
+
+def run_until_stop(outdir, num_mpi_ranks, num_omp_threads, timeout=6 * 3600):
+    """Run GIZMO in the test directory, writing to outdir; it ends on the density trigger, not at TimeMax. Returns
+    whether it stopped there."""
+    params = write_params_with_overrides(f"{TEST_NAME}.params", {"OutputDir": outdir})
     env = dict(os.environ, OMP_NUM_THREADS=str(max(num_omp_threads, 1)))
-    cmd = ["mpirun", "-np", str(num_mpi_ranks), "--bind-to", "none", "./GIZMO", f"{TEST_NAME}.params", "0"]
-    out, err = f"test_{TEST_NAME}.out", f"test_{TEST_NAME}.err"
+    cmd = ["mpirun", "-np", str(num_mpi_ranks), "--bind-to", "none", "./GIZMO", params, "0"]
+    out, err = os.path.join(outdir, f"test_{TEST_NAME}.out"), os.path.join(outdir, f"test_{TEST_NAME}.err")
     with open(out, "w") as fo, open(err, "w") as fe:
         try:
             proc = subprocess.run(cmd, stdout=fo, stderr=fe, timeout=timeout, env=env, check=False)
         except subprocess.TimeoutExpired:
             pytest.skip(f"{TEST_NAME} did not reach the second collapse within {timeout} s")
     if proc.returncode != 0:
-        raise RuntimeError(f"GIZMO exited with status {proc.returncode}; see test/{TEST_NAME}/{err}")
-    return out
+        raise RuntimeError(f"GIZMO exited with status {proc.returncode}; see {err}")
+    with open(out) as f:
+        return any(STOP_LINE in line for line in f)
 
 
 @pytest.mark.parametrize("num_mpi_ranks", (min(default_mpi_ranks(), 2),))
-@pytest.mark.parametrize("num_omp_threads", (min(default_omp_threads(), 4),))
+@pytest.mark.parametrize("num_omp_threads", (4,))
 @pytest.mark.parametrize("model", [pytest.param(m, marks=k) for m, k in MODELS.items()])
 def test_second_collapse(num_mpi_ranks, num_omp_threads, model):
-    flags = (f"JACO={model}", "JACO_LEDGER")
+    outdir = output_dir(model)
+    if os.path.isdir(outdir):
+        shutil.rmtree(outdir)
+    os.makedirs(outdir)
     get_cooling_tables(f"test/{TEST_NAME}")
-    clean_test_outputs(TEST_NAME, flags)
-    build_gizmo_for_test(TEST_NAME, num_omp_threads, flags)
-    stash_baseline_output(TEST_NAME, flags)
+    build_gizmo_for_test(TEST_NAME, num_omp_threads, (f"JACO={model}", "JACO_LEDGER"))
     cwd = os.getcwd()
     try:
         os.chdir(f"test/{TEST_NAME}")
-        try:
-            if not os.path.isfile(f"{TEST_NAME}_ics.hdf5"):  # the larson_penston IC
-                urlretrieve(IC_URL, f"{TEST_NAME}_ics.hdf5")
-            out = run_until_stop(num_mpi_ranks, num_omp_threads)
-            with open(out) as f:
-                stopped = any(STOP_LINE in line for line in f)
-        finally:
-            os.chdir(cwd)
+        if not os.path.isfile(f"{TEST_NAME}_ics.hdf5"):  # the larson_penston IC
+            urlretrieve(IC_URL, f"{TEST_NAME}_ics.hdf5")
+        stopped = run_until_stop(outdir, num_mpi_ranks, num_omp_threads)
     finally:
-        finalize_variant_output(TEST_NAME, flags)
+        os.chdir(cwd)
 
     assert stopped, "the centre never passed the stop density: no second collapse"
-    track = read_track(variant_output_dir(TEST_NAME, flags))
+    track = read_track(outdir)
     env = collapse_envelope(track)
     per_event, energy, radiated = ledger_closure(track)
     assert per_event < 1e-9
