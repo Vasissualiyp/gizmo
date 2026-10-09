@@ -190,6 +190,19 @@ equilibrium n_H^2/n_H2 at 7.6x Saha at 2000 K (30x at 1500 K, ~1 at 4000 K), in 
 ~150 K cooler than in Masunaga & Inutsuka (2000). Remedy: derive the three-body rate from dissociation by detailed
 balance.
 
+### 1.7 H2 formation energy that escapes uncapped fakes a second collapse (2026-10-09)
+- In `starforge`, collisional dissociation takes 4.48 eV, but formation returns less: grain 0.2 + 4.2f eV, the H- route
+  3.53f eV, plus the 0.754 eV radiative-attachment photon. The remainder is booked as radiation that always escapes.
+- In a first core, H2 dissociates and re-forms 1e3-1e12 times per molecule. The leak (1.1-1.4x the PdV work) pins the
+  centre at ~1800 K with H2 intact: an isothermal runaway that passes a naive gamma < 4/3 check.
+- Branch `jaco_second_collapse`, test/second_collapse.
+
+Decision (MYG, 2026-10-09): every part of a chemical reaction's energy booked as escaping radiation is radiative
+cooling under the optically-thick cap. Thin gas is unchanged; thick gas traps it.
+
+This must be revisited with full RT: second collapse under `starforge_RT` is a cornerstone sensitive test of the
+bookkeeping between the chemical, radiative and thermal reservoirs (plan P5 gates).
+
 ## 2. Solver
 
 ### 2.1 Tier-1 budget stall
