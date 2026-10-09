@@ -104,10 +104,10 @@ the LTE boxes:
     ledger; the band ledger, injection and gas-share checks as for STARFORGE.
 starforge_legacy_RT documents all four parts. Its IR gas absorption drains 26-45% of the ledger at n_H >= 1e7 over the
 run, as GIZMO's kick does; test_rt_closed_box_gas_share_vs_legacy compares the two drains per unit band energy in the LTE
-boxes (1e-2). jaco takes the gas absorption at kappa_gas c_tilde rho E (over the dust absorption opacity for the
-per-kick cap), GIZMO at kappa_gas / kappa(0,0) of the absorbed energy, kappa(0,0) counting the dust's IR scattering:
-the jaco drain is 1/A(T_rad) times GIZMO's, A = 1 - 0.5 / (1 + 725^2 / (1 + T_rad^2)) (1.036 at 200 K, 1.190 at 500 K;
-1.000 in the 12 K boxes), so that test is a strict xfail."""
+boxes (1e-2). GIZMO gives the gas kappa_gas / kappa(0,0) of the absorbed energy, kappa(0,0) the extinction, whose dust
+part lacks the absorption factor A(T_rad) = 1 - 0.5 / (1 + 725^2 / (1 + T_rad^2)): without A(T_rad) in its kick gas
+share (jaco before legacy_rt_gas_share), starforge_legacy_RT drains 1/A(T_rad) times as fast, 1.036 at 200 K and
+1.190 at 500 K."""
 
 import os
 import re
@@ -645,18 +645,8 @@ def test_rt_closed_box(flags, n_h, star, lte, num_mpi_ranks):
         (check_source if is_source(flags) else check_bare)(flags, n_h, star)
 
 
-def gas_share_case(model, t):
-    marks = ()
-    if model == "starforge_legacy_RT":
-        marks = (pytest.mark.xfail(strict=True, reason=(
-            "jaco's kick_gas_share takes the gas absorption at kappa_gas over the dust absorption opacity, GIZMO's kick at "
-            "kappa_gas over the total (0,0) opacity, which counts the dust's IR scattering: 1/A(T_rad) more drain, "
-            "A = 1 - 0.5/(1 + 725^2/(1 + T_rad^2)), 1.037 at 200 K and 1.19 at 500 K")),)
-    return pytest.param(model, t, id=f"{model}-lte{t:g}", marks=marks)
-
-
-@pytest.mark.parametrize("model,t_lte", [gas_share_case(m, t) for m, v in JACO_MODELS.items() if v["reproduces_legacy"]
-                                         for t in T_LTE])
+@pytest.mark.parametrize("model,t_lte", [pytest.param(m, t, id=f"{m}-lte{t:g}") for m, v in JACO_MODELS.items()
+                                         if v["reproduces_legacy"] for t in T_LTE])
 def test_rt_closed_box_gas_share_vs_legacy(model, t_lte):
     """A jaco model that reproduces GIZMO's coupling must drain the IR band into the gas at GIZMO's rate: in the hot,
     IR-thick LTE box the drain coefficient (drain_coefficient) of the jaco run over the STARFORGE run's, within
