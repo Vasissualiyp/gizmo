@@ -50,6 +50,22 @@ static const double EQ_TOL = 0.03;      /* ... and then T must be within 3% of a
    IR band; 2 a dark protostellar core, the IR band at 100 K blackbody */
 static int g_rt_field = 0;
 
+#ifdef JACO_HAS_PARAM_A_dust
+/* The dust's absorption of the background radiation as GIZMO's non-RT estimate takes it (RT_ISRF_BACKGROUND, z = 0) at
+   the column N_H: c rho [kappa(2.73 K) e_CMB + kappa_opt e_opt e^-tau + kappa(20 K) ((1 - e^-tau)/2 e_opt + e_IR)], energy
+   densities in eV cm^-3, kappa_opt = 180 Z cm^2/g, the IR opacities the Semenov table's at T_rad = T_dust */
+static double background_dust_absorption(const Params *pr) {
+    const double Z = pr->Z_d, rho = pr->n_Htot * 1.6735575e-24 / pr->X, kappa_opt = 180. * Z;
+    const double e_cmb = 0.262, e_ir = 0.31 * pr->ISRF, e_opt = 0.66 * pr->ISRF + 7.8e-3;
+    const double tau = fmin(kappa_opt * pr->N_H * 1.67262178e-24, 100.);
+    return 2.9979e10 * rho * 1.60217733e-12 *
+           (0.0422 * Z * e_cmb + kappa_opt * e_opt * exp(-tau) + 0.331 * Z * (-0.5 * expm1(-tau) * e_opt + e_ir));
+}
+#endif
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+static void seed_dust_temperature(SolveVars *s, const Params *pr);
+#endif
+
 static void starforge_params(Params *pr, double n, double dt) {
     memset(pr, 0, sizeof(*pr));
 #ifdef JACO_HAS_PARAM_rsol
@@ -100,6 +116,15 @@ static void starforge_params(Params *pr, double n, double dt) {
     pr->x_Fe = 2.5e-5;
     pr->x_O_tot = 4.9e-4;
     pr->z = 0;
+#if defined(JACO_HAS_PARAM_rho) && !defined(JACO_HAS_PARAM_T_rad)
+    pr->rho = n * 1.6735575e-24 / pr->X;
+#endif
+#ifdef JACO_HAS_PARAM_N_H_cool
+    pr->N_H_cool = pr->N_H;
+#endif
+#ifdef JACO_HAS_PARAM_A_dust
+    pr->A_dust = background_dust_absorption(pr);
+#endif
 }
 
 /* Start-of-step values of the time-dependent species from a seed, as gizmo_to_jaco makes them: the H+ seed within
@@ -117,6 +142,9 @@ static void set_initial(SolveVars *s, Params *pr) {
     s->x_photon_IR = (lit * 1. + core * 7.5657e-15 * 1e8 / 1.60217733e-12 + (1 - lit - core) * 0.65) / n;
     if (!(s->Td > 0)) s->Td = 10.;
 #endif
+#endif
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+    if (!(s->Td > 0)) seed_dust_temperature(s, pr);
 #endif
 #ifdef JACO_HAS_PARAM_Td_initial
     pr->Td_initial = s->Td;
@@ -211,6 +239,38 @@ static double diag_derivative(const SolveVars *sv, const Params *pr, const Solve
 
 static const double var_floor[N_VARS] = JACO_VAR_FLOOR_INIT, var_ceiling[N_VARS] = JACO_VAR_CEILING_INIT;
 static const double var_scale[N_VARS] = JACO_VAR_SCALE_INIT;
+
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+/* The dust temperature as the host seeds it: the root of the dust balance at the seed's gas temperature and composition
+   (GIZMO's estimate at the cached temperature), from a walk away from T in the direction the balance points */
+static void seed_dust_temperature(SolveVars *s, const Params *pr) {
+    const double lo = var_floor[IDX_Td], hi = var_ceiling[IDX_Td];
+    SolveVars x = *s, F;
+    static double J[N_VARS][N_VARS];
+    auto row = [&](double Td) {
+        x.Td = Td;
+        microphysics_func_jac(&x, pr, &F, J);
+        return F.Td;
+    };
+    double a = fmin(fmax(s->T, lo), hi), fa = row(a), b = a, fb = fa, fac = 1.1;
+    while (fa != 0 && (fb > 0) == (fa > 0) && b > lo && b < hi) {
+        a = b, fa = fb;
+        b = fa > 0 ? fmin(hi, a * fac) : fmax(lo, a / fac);
+        fb = row(b);
+        fac *= 1.1;
+    }
+    if (fa == 0 || (fb > 0) == (fa > 0)) {
+        s->Td = fa == 0 ? a : b; /* a root, or the bound the balance points past */
+        return;
+    }
+    for (int it = 0; it < 80; it++) {
+        double m = sqrt(a * b), fm = row(m);
+        if ((fm > 0) == (fa > 0)) a = m, fa = fm;
+        else b = m;
+    }
+    s->Td = sqrt(a * b);
+}
+#endif
 static const int var_kind[N_VARS] = JACO_VAR_KIND_INIT;
 static const int var_time_dependent[N_VARS] = JACO_VAR_TIME_DEPENDENT_INIT;
 /* a tier-3 answer solves the sub-steps' backward-Euler equations, not the full step's: only its steady-state rows can be
@@ -602,15 +662,35 @@ static int run_replays(const JacoSolverSettings *set) {
    given, else the case no longer matches the model and fails */
 static int params_by_name(const char *text, Params *pr) {
     static const char *names[N_PARAMS] = JACO_PARAM_NAMES;
+    /* the dust balance's inputs, for cells recorded before it: GIZMO's density, the shielding column, the background */
+    static const char *derived[] = {"rho", "N_H_cool", "A_dust"};
+    int missing_derived = 0;
     for (int k = 0; k < N_PARAMS; k++) {
         char key[64];
         snprintf(key, sizeof(key), " %s=", names[k]);
         const char *q = strstr(text, key);
         if (!q) {
+            int d = 0;
+            for (const char *name : derived) d |= !strcmp(name, names[k]);
+            if (d) {
+                missing_derived = 1;
+                continue;
+            }
             printf("recorded cell: no value for Params.%s\n", names[k]);
             return 1;
         }
         pr->data[k] = strtod(q + strlen(key), NULL);
+    }
+    if (missing_derived) {
+#if defined(JACO_HAS_PARAM_rho) && !defined(JACO_HAS_PARAM_T_rad)
+        if (!strstr(text, " rho=")) pr->rho = pr->n_Htot * 1.6735575e-24 / pr->X;
+#endif
+#ifdef JACO_HAS_PARAM_N_H_cool
+        if (!strstr(text, " N_H_cool=")) pr->N_H_cool = pr->N_H;
+#endif
+#ifdef JACO_HAS_PARAM_A_dust
+        if (!strstr(text, " A_dust=")) pr->A_dust = background_dust_absorption(pr);
+#endif
     }
     return 0;
 }
@@ -641,10 +721,11 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
          1.0, 0.0},
 #endif
         /* second_collapse first cores (MinGasTemp 2.73: T_min 2.73 K, u_min = MinEgySpec), every tier failed: the
-           optically-thick limit's sum holds the gas-dust exchange, whose dust temperature is fixed at the start of the
-           step, so the capped heat swings from +L to -L within ~1e-4 K, below tier 2's resolution in T, and the energy
-           root lies inside that swing. Recorded with jaco models that gave the gas all the formation energy where
-           collisions de-excite H2 (as starforge does where its limit binds) and without chemical heat */
+           optically-thick limit's sum held the gas-dust exchange at a dust temperature fixed at the start of the step,
+           so the capped heat swung from +L to -L within ~1e-4 K, below tier 2's resolution in T, and the energy root lay
+           inside that swing. Recorded with jaco models that gave the gas all the formation energy where collisions
+           de-excite H2 (as starforge does where its limit binds) and without chemical heat, before the dust temperature
+           was solved (its inputs derived: params_by_name) */
 #ifdef JACO_MODEL_STARFORGE
         {"first-core 1503K", 121395656386.58861, 1502.6913751144459, 2.6583749289755265e-10, 9.9999999999999995e-21, 9.9999999999999995e-21,
          0.49976333392480921,
@@ -746,6 +827,9 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
         sv.x_H_2 = cells[c].x_H_2;
         char why[256] = "ok";
         int bad = params_by_name(cells[c].params, &pr);
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+        if (!bad) seed_dust_temperature(&sv, &pr); /* as the host seeds it */
+#endif
         JacoSolveInfo info = {};
         SolveVars in = sv;
         JacoSolverSettings cs = *set;
@@ -954,9 +1038,10 @@ static void run_sweep(const JacoSolverSettings *set, int full, Stats &sweep, Sta
         if (pr.Delta_t >= 1e13 && !info.pinned && st.fail + st.check_fail == fails_before) {
             double shift, dist;
             int r = near_root(&sv, &pr, set, &shift, &dist);
-            if (r == 2)
+            if (r == 2) {
                 st.eq_ref_fail++;
-            else if (shift < EQ_GATE) {
+                printf("REFERENCE FAILURE (%s): the equilibrium reference's chemistry failed\n", c.what);
+            } else if (shift < EQ_GATE) {
                 st.eq_gated++;
                 if (r == 0)
                     st.eq_match++;
@@ -1212,6 +1297,9 @@ int main(int argc, char **argv) {
         int do_warm = argc > 10 ? atoi(argv[10]) : 0;
         Params pr;
         starforge_params(&pr, n, dt);
+#ifdef JACO_HAS_PARAM_rsol
+        if (dt >= DT_EQ) pr.rsol = 0; /* as the sweep's equilibrium set */
+#endif
         pr.pdv_work = pdv;
         SolveVars sv = {};
         seed_variant(&sv, T0, variant, pr.y);
@@ -1232,6 +1320,12 @@ int main(int argc, char **argv) {
         char why[256] = "ok";
         double worst = 0;
         if (!rc) check_answer(&sv, &pr, &set, why, &worst);
+        if (!rc && getenv("JACO_NEAR_ROOT")) { /* the equilibrium reference at the answer, its chemistry traced */
+            double shift, dist;
+            JacoSolverSettings v = set;
+            v.verbose = atoi(getenv("JACO_NEAR_ROOT"));
+            printf("near_root: %d\n", near_root(&sv, &pr, &v, &shift, &dist));
+        }
         printf("rc=%d tier=%d nfeval=%d nonfinite_jac=%d pinned=%d T=%.9g xHp=%.4g xHep=%.4g xHepp=%.4g xH2=%.4g", rc, info.tier,
                info.nfeval, info.n_nonfinite_jac, info.pinned, sv.T, sv.x_Hplus, sv.x_Heplus, sv.x_Heplusplus, sv.x_H_2);
 #ifdef JACO_HAS_VAR_Td

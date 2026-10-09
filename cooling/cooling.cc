@@ -181,7 +181,7 @@ void track_densest_cell(void)
         rec[7] = P[jmax].KernelRadius * All.cf_atime * UNIT_LENGTH_IN_AU;
         rec[8] = (double) P[jmax].ID;
         /* the optically-thick limit's column, opacity and slab emission per unit mass, as CoolingRate takes them */
-        double Sigma = evaluate_NH_from_GradRho(P[jmax].GradRho, P[jmax].KernelRadius, CellP[jmax].Density, P[jmax].NumNgb, 1, jmax, P) * UNIT_SURFDEN_IN_CGS;
+        double Sigma = evaluate_NH_from_GradRho(CellP[jmax].Gradients.Density, P[jmax].KernelRadius, CellP[jmax].Density, P[jmax].NumNgb, 1, jmax, P) * UNIT_SURFDEN_IN_CGS;
         rec[9] = Sigma;
 #if defined(COOL_LOW_TEMPERATURES) && !defined(COOL_LOWTEMP_THIN_ONLY)
         double T_kappa = rec[2];
@@ -2331,27 +2331,26 @@ double molecfrac_rootfind_function(double fH2, double x00, double x01, double x_
 
 
 
-/* simple subroutine to estimate the dust temperatures in our runs without detailed tracking of these individually [more detailed chemistry models do this] */
-double get_equilibrium_dust_temperature_estimate(int i, double shielding_factor_for_exgalbg, double T, struct particle_data *pp, struct gas_cell_data *cell)
+/* the background radiation the dust temperature estimate assumes: energy densities [eV/cm^3] and temperatures [K] of the
+   CMB, the ISRF's dust (IR) and stellar (optical/UV) components */
+static void dust_background_radiation(double *e_CMB, double *T_cmb, double *e_IR, double *Tdust_ext, double *e_HiEgy, double *T_hiegy)
 {
-#if defined(RT_INFRARED)
-    if(i >= 0) {return cell[i].Dust_Temperature;} // this is pre-computed -- simply return it
-#endif
-    /* simple three-component model [can do fancier] with cmb, dust, high-energy photons */
-    double e_CMB=0.262*All.cf_a3inv/All.cf_atime, T_cmb=2.73/All.cf_atime; // CMB [energy in eV/cm^3, T in K]
-    double e_IR=0.31, Tdust_ext=DMAX(30.,T_cmb); // Milky way ISRF from Draine (2011), assume peak of dust emission at ~100 microns
-    double e_HiEgy=0.66, T_hiegy=5800.; // Milky way ISRF from Draine (2011), assume peak of stellar emission at ~0.6 microns [can still have hot dust, this effect is pretty weak]
+    *e_CMB=0.262*All.cf_a3inv/All.cf_atime; *T_cmb=2.73/All.cf_atime; // CMB [energy in eV/cm^3, T in K]
+    *e_IR=0.31; *Tdust_ext=DMAX(30.,*T_cmb); // Milky way ISRF from Draine (2011), assume peak of dust emission at ~100 microns
+    *e_HiEgy=0.66; *T_hiegy=5800.; // Milky way ISRF from Draine (2011), assume peak of stellar emission at ~0.6 microns [can still have hot dust, this effect is pretty weak]
 #ifdef RT_ISRF_BACKGROUND
-    e_IR *= All.InterstellarRadiationFieldStrength; e_HiEgy *= All.InterstellarRadiationFieldStrength; // need to re-scale the assumed ISRF components
+    *e_IR *= All.InterstellarRadiationFieldStrength; *e_HiEgy *= All.InterstellarRadiationFieldStrength; // need to re-scale the assumed ISRF components
     if(!All.ComovingIntegrationOn){
-	e_CMB *= pow(1.+All.RadiationBackgroundRedshift,4);
- 	T_cmb *= (1.+All.RadiationBackgroundRedshift);
+	*e_CMB *= pow(1.+All.RadiationBackgroundRedshift,4);
+ 	*T_cmb *= (1.+All.RadiationBackgroundRedshift);
     }
 #endif
+}
 
-    if(i >= 0)
-    {
-#ifdef SINGLE_STAR_SINK_DYNAMICS // treatment using direct dust temperature solver accounting for absorption and gas-dust coupling - want this when capturing the dynamics of dense collapsing cores
+/* the dust's absorption rate per unit volume (code units) of the background radiation (CMB, and the attenuated ISRF
+   under RT_ISRF_BACKGROUND) and of the RT bands, as the SINGLE_STAR_SINK_DYNAMICS estimate below takes it */
+static double dust_absorption_rate(int i, double e_CMB, double T_cmb, double e_IR, double e_HiEgy, struct particle_data *pp, struct gas_cell_data *cell)
+{
 	double absorption_rate=0, vol_inv = cell[i].Density * All.cf_a3inv / cell[i].Mass, fac_abs = C_LIGHT_CODE * cell[i].Density * All.cf_a3inv;
 #if defined(RADTRANSFER) || defined(RT_USE_GRAVTREE_SAVE_RAD_ENERGY) // we have information about individual radiation bands and their opacities; use these to compute dust absorption rate
 	for(int k=0;k<N_RT_FREQ_BINS;k++){
@@ -2373,6 +2372,30 @@ double get_equilibrium_dust_temperature_estimate(int i, double shielding_factor_
 	absorption_rate += fac_abs * kappa_opt * (e_HiEgy/UNIT_PRESSURE_IN_EV) * exp(DMAX(-tau_opt,-100));
 	absorption_rate += fac_abs * kappa_IR * ((-0.5*expm1(DMAX(-tau_opt,-100)) * e_HiEgy + e_IR)/UNIT_PRESSURE_IN_EV); // this assumes absorbed ONIR photons are reradiated into IR, factor of 0.5 assumes 1/2 of reradiated IR photons do not go deeper into the cloud
 #endif
+	return absorption_rate;
+}
+
+double get_dust_absorption_rate_estimate(int i, struct particle_data *pp, struct gas_cell_data *cell)
+{
+    double e_CMB, T_cmb, e_IR, Tdust_ext, e_HiEgy, T_hiegy;
+    dust_background_radiation(&e_CMB, &T_cmb, &e_IR, &Tdust_ext, &e_HiEgy, &T_hiegy);
+    return dust_absorption_rate(i, e_CMB, T_cmb, e_IR, e_HiEgy, pp, cell);
+}
+
+/* simple subroutine to estimate the dust temperatures in our runs without detailed tracking of these individually [more detailed chemistry models do this] */
+double get_equilibrium_dust_temperature_estimate(int i, double shielding_factor_for_exgalbg, double T, struct particle_data *pp, struct gas_cell_data *cell)
+{
+#if defined(RT_INFRARED)
+    if(i >= 0) {return cell[i].Dust_Temperature;} // this is pre-computed -- simply return it
+#endif
+    /* simple three-component model [can do fancier] with cmb, dust, high-energy photons */
+    double e_CMB, T_cmb, e_IR, Tdust_ext, e_HiEgy, T_hiegy;
+    dust_background_radiation(&e_CMB, &T_cmb, &e_IR, &Tdust_ext, &e_HiEgy, &T_hiegy);
+
+    if(i >= 0)
+    {
+#ifdef SINGLE_STAR_SINK_DYNAMICS // treatment using direct dust temperature solver accounting for absorption and gas-dust coupling - want this when capturing the dynamics of dense collapsing cores
+	double absorption_rate = dust_absorption_rate(i, e_CMB, T_cmb, e_IR, e_HiEgy, pp, cell);
 	// OK now we have our dust absorption rate, let's call the solver
 	double Tdust = rt_eqm_dust_temp(i, T, absorption_rate, pp, cell);
 	return Tdust;

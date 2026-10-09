@@ -62,6 +62,12 @@ extern "C" int jaco_isfinite(double x);
 #if defined(RT_INFRARED) && !defined(JACO_HAS_VAR_Td)
 #error "JACO with RT_INFRARED needs a model that solves the dust temperature"
 #endif
+/* Without an IR band the dust temperature solves GIZMO's SINGLE_STAR_SINK_DYNAMICS dust balance (rt_eqm_dust_temp), which
+   CoolingRate uses where it has dust physics only with SINK_DYNAMICS and the FIRE (> 2) or RT-heating modules */
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR) && defined(COOL_LOW_TEMPERATURES) && \
+    !(defined(SINGLE_STAR_SINK_DYNAMICS) && ((GALSF_FB_FIRE_STELLAREVOLUTION > 2) || defined(SINGLE_STAR_FB_RT_HEATING)))
+#error "a jaco model that solves the dust temperature without an IR band follows GIZMO's SINGLE_STAR_SINK_DYNAMICS dust balance, which this configuration does not use"
+#endif
 /* A model with the optically-thick cooling limit takes its opacity from CoolingRate's; with RT_INFRARED (which sets
    COOL_LOWTEMP_THIN_ONLY) the IR band traps the cooling radiation instead, and the limit would count it twice */
 #if defined(JACO_HAS_PARAM_kappa_thick) && (!defined(COOL_LOW_TEMPERATURES) || defined(COOL_LOWTEMP_THIN_ONLY))
@@ -230,9 +236,17 @@ void jaco_build_cie_table(void) {
 #ifdef JACO_HAS_PARAM_Td_initial
     pr.Td_initial = 20.;
 #endif
-    pr.rho = 2.3e-24; /* n_Htot = 1 */
     pr.Z_metals = 0.014;
     pr.gamma_eos = 5. / 3.;
+#endif
+#ifdef JACO_HAS_PARAM_rho
+    pr.rho = 2.3e-24; /* n_Htot = 1 */
+#endif
+#ifdef JACO_HAS_PARAM_A_dust
+    pr.A_dust = 0; /* radiation-free */
+#endif
+#ifdef JACO_HAS_PARAM_N_H_cool
+    pr.N_H_cool = 1e20;
 #endif
 #ifdef JACO_VAR_TIME_DEPENDENT_x_Hplus
     pr.Delta_t = 1e30; /* the table is the steady state: no pull towards the continuation's start */
@@ -670,14 +684,14 @@ void jaco_cell_eos(int i, struct particle_data *pp, struct gas_cell_data *cell, 
     eos->x_e = jaco_electron_abundance(&sv, &pr);
 }
 
-#ifdef JACO_HAS_VAR_x_photon_EUV
-static const int jaco_var_initial_param[N_VARS] = JACO_VAR_INITIAL_PARAM_INIT;
-#define JACO_PARAM_OF_INITIAL(k) (jaco_var_initial_param[k])
 #ifdef JACO_HAS_VAR_Td
 static const double jaco_var_floor[N_VARS] = JACO_VAR_FLOOR_INIT, jaco_var_ceiling[N_VARS] = JACO_VAR_CEILING_INIT;
 #define JACO_TD_FLOOR (jaco_var_floor[IDX_Td])
 #define JACO_TD_CEILING (jaco_var_ceiling[IDX_Td])
 #endif
+#ifdef JACO_HAS_VAR_x_photon_EUV
+static const int jaco_var_initial_param[N_VARS] = JACO_VAR_INITIAL_PARAM_INIT;
+#define JACO_PARAM_OF_INITIAL(k) (jaco_var_initial_param[k])
 /* The bands the model solves: GIZMO's bin, the solve variable (per H nucleus), and its unit, photons (the ionizing band,
    counted at rt_nu_eff_eV as GIZMO counts them) or eV */
 struct jaco_band {
@@ -714,7 +728,7 @@ static void jaco_pack_bands(int i, SolveVars *sv, Params *pr, struct particle_da
     pr->sigma_HI = rt_ion_sigma_HI[RT_FREQ_BIN_H0] * L * L;
     pr->eps_HI = rt_ion_G_HI[RT_FREQ_BIN_H0] * UNIT_ENERGY_IN_CGS;
     pr->hnu_EUV = rt_nu_eff_eV[RT_FREQ_BIN_H0];
-#ifdef JACO_HAS_VAR_Td
+#ifdef JACO_HAS_VAR_x_photon_IR
     double T_floor = get_min_allowed_dustIRrad_temperature(), T_cmb = 2.73 / All.cf_atime;
 #ifdef RT_ISRF_BACKGROUND
     if (!All.ComovingIntegrationOn) T_cmb *= 1. + All.RadiationBackgroundRedshift;
@@ -779,7 +793,7 @@ static void jaco_write_bands(int i, const SolveVars *sv, const Params *pr, const
     pp[i].dp += pp[i].Vel * ((momfac - 1.) * cell[i].Mass);
     pp[i].Vel *= momfac;
     cell[i].VelPred *= momfac;
-#ifdef JACO_HAS_VAR_Td
+#ifdef JACO_HAS_VAR_x_photon_IR
     cell[i].Dust_Temperature = DMAX(sv->Td, get_min_allowed_dustIRrad_temperature());
     cell[i].Radiation_Temperature = DMAX(out->T_rad_new, get_min_allowed_dustIRrad_temperature());
 #endif
@@ -802,6 +816,10 @@ void gizmo_to_jaco(int i, SolveVars *sv, Params *pr, struct particle_data *pp, s
     T_kappa = DMIN(T_kappa, JACO_THICK_KAPPA_TMAX);
 #endif
     pr->kappa_thick = optically_thick_cooling_opacity(i, T_kappa, cell[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS, cell[i].Ne, pp, cell);
+#endif
+#ifdef JACO_HAS_PARAM_N_H_cool /* CoolingRate's column (the optically-thick limit's and dust_dEdt's): the limited density gradient */
+    pr->N_H_cool = evaluate_NH_from_GradRho(cell[i].Gradients.Density, pp[i].KernelRadius, cell[i].Density, pp[i].NumNgb, 1, i, pp) *
+                   UNIT_SURFDEN_IN_CGS / PROTONMASS_CGS;
 #endif
 #ifdef JACO_HAS_VAR_x_photon_EUV
     jaco_pack_bands(i, sv, pr, pp, cell); /* first: the metals' free electrons the seeds split off read the bands */
@@ -863,6 +881,17 @@ void gizmo_to_jaco(int i, SolveVars *sv, Params *pr, struct particle_data *pp, s
         Td = &pr->Td;
 #endif
         jaco_radiation_inputs(i, cell[i].Temperature, NULL, G_LW, Td, pp, cell);
+    }
+#endif
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+    {
+        /* GIZMO's non-RT dust balance: the dust's absorption of the background radiation (and the bands), the density
+           its emission reads, and as the seed GIZMO's dust temperature at the cached gas temperature */
+        pr->A_dust = get_dust_absorption_rate_estimate(i, pp, cell) * UNIT_PRESSURE_IN_CGS / UNIT_TIME_IN_CGS;
+        pr->rho = cell[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS;
+        double Td = 0;
+        jaco_radiation_inputs(i, cell[i].Temperature, NULL, NULL, &Td, pp, cell);
+        sv->Td = (jaco_isfinite(Td) && Td > 0) ? DMIN(DMAX(Td, JACO_TD_FLOOR), JACO_TD_CEILING) : DMAX(cell[i].Temperature, JACO_TD_FLOOR);
     }
 #endif
 #ifdef JACO_DEBUG_PARAMS
@@ -936,6 +965,10 @@ void jaco_to_gizmo(int i, const SolveVars *sv, const Params *pr, struct particle
     cell[i].MolecularMassFraction = 2.0 * xH2;
     double xH0 = DMAX(1.0 - xHp, 0); /* neutral H including H2, as in the standard cooling module */
     cell[i].MolecularMassFraction_perNeutralH = (xH0 > 0) ? DMIN(1, cell[i].MolecularMassFraction / xH0) : 0;
+#endif
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR) && !defined(RADTRANSFER) && defined(OUTPUT_DUST_TEMPERATURE) && \
+    (GALSF_FB_FIRE_STELLAREVOLUTION > 2)
+    cell[i].Dust_Temperature = sv->Td;
 #endif
     cell[i].JacoReheated = 0;
 
