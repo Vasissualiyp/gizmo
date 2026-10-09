@@ -743,6 +743,10 @@ static void jaco_write_bands(int i, const SolveVars *sv, const Params *pr, const
         }
         double dE = E_new - E_old;
         if (dE < 0) acc->band_removed -= dE; else acc->band_added += dE;
+        acc->band_dE_over_rsol += dE * (C_LIGHT_CODE / C_LIGHT_CODE_REDUCED);
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+        rt_diag_add(RT_DIAG_COOLING_TO_BAND, bin, dE);
+#endif
         if (bin == RT_FREQ_BIN_H0) acc->euv_loss -= dE;
         dE_total += dE;
         cell[i].Rad_E_gamma[bin] = cell[i].Rad_E_gamma_Pred[bin] = E_new;
@@ -1104,6 +1108,81 @@ static void jaco_coolrate_detail(const SolveVars *sv, const Params *pr, struct g
 }
 #endif
 
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED) && defined(JACO_HAS_VAR_x_photon_EUV)
+/* Energy ledger of the step for test/rt_closed_box, in the model's convention: E_gas + sum_b E_b c/c_tilde, with the dust a
+   reservoir of zero capacity. Its rate R [erg cm^-3 s^-1] at state sv is the energy row, plus each band row times the energy
+   it carries over rsol, plus the dust row, with the backward-Euler terms added back (the gas's at the cell's density rho)
+   and the PdV work taken out. Every exchange the model conserves cancels in it, so R is the sum of the model's own sources
+   and sinks of the ledger, and a converged step changes the ledger by Delta_t (R + PdV) up to the rows' weighted residual.
+   The start-of-step values stay as packed: the gas opacity also reads u_initial. With bound, also tol times the row scales
+   of jaco_solver.cc's convergence test, weighted as the rows are. */
+static double jaco_ledger_rate(const SolveVars *sv, const Params *p, double rho, double tol, double *bound) {
+    SolveVars F;
+    double J[N_VARS][N_VARS];
+    microphysics_func_jac(sv, p, &F, J);
+    double r = F.T + F.Td + (rho * (sv->u - p->u_initial) / p->Delta_t - p->pdv_work);
+    /* 2.34e-24 g: jaco_solver.cc's JACO_MASS_PER_H, which scales the energy row */
+    double b = 2.34e-24 * p->n_Htot * sv->u / p->Delta_t + fabs(J[IDX_T][IDX_T]) * sv->T + fabs(J[IDX_Td][IDX_Td]) * sv->Td;
+    for (int k = 0; k < JACO_N_BANDS; k++) {
+        const int v = jaco_bands[k].var;
+        double w = (jaco_bands[k].photons ? p->hnu_EUV : 1.) * ELECTRONVOLT_IN_ERGS / p->rsol;
+        r += (F.data[v] + p->n_Htot * (sv->data[v] - p->data[JACO_PARAM_OF_INITIAL(v)]) / p->Delta_t) * w;
+        b += fabs(J[v][v]) * (sv->data[v] + 1e-14) * w;
+    }
+    if (bound) *bound = tol * b;
+    return r;
+}
+
+/* Tally one solved cell into rt_cool_diag.txt (jaco_* columns, code energy): the measured change of the ledger, Delta_t R
+   with parts of it taken out by switching one thing off at a time (cosmic rays: ISRF = 0; photoionization heating:
+   eps_HI = 0; what the photoelectric band drives: the band emptied; what depends on the reduced speed of light: with the
+   photoelectric band empty, R - R(rsol = 1), which vanishes in a model whose every exchange is in the c/c_tilde
+   convention), and the PdV work. A part the model has no switch for is zero. */
+static void jaco_diag_ledger(const SolveVars *sv, const Params *pr, const struct jaco_step_outputs *out, int tier, double tol,
+                             double rho, double volume_cgs) {
+    const double f = pr->Delta_t * volume_cgs / UNIT_ENERGY_IN_CGS;
+    double bound, R = jaco_ledger_rate(sv, pr, rho, (tier == JACO_TIER_ROOTFIND ? 10. : 1.) * tol, &bound); /* tier 2 accepts at 10 tol */
+    double R_cr = 0, R_ion = 0, R_nofuv = R, R_rsol;
+    Params p;
+#ifdef JACO_HAS_PARAM_ISRF
+    p = *pr;
+    p.ISRF = 0;
+    R_cr = R - jaco_ledger_rate(sv, &p, rho, 0, NULL);
+#endif
+#ifdef JACO_HAS_PARAM_eps_HI
+    p = *pr;
+    p.eps_HI = 0;
+    R_ion = R - jaco_ledger_rate(sv, &p, rho, 0, NULL);
+#endif
+    SolveVars s = *sv;
+    p = *pr;
+#ifdef JACO_HAS_VAR_x_photon_FUV
+    s.x_photon_FUV = p.x_photon_FUV_initial = 0;
+    R_nofuv = jaco_ledger_rate(&s, &p, rho, 0, NULL);
+#endif
+    p.rsol = 1;
+    R_rsol = R_nofuv - jaco_ledger_rate(&s, &p, rho, 0, NULL);
+    double dE = out->gas_dE + out->band_dE_over_rsol, pdv = pr->pdv_work * f, err = dE - (R * f + pdv);
+    rt_diag_sc(RT_DIAG_SC_JACO_GAS, out->gas_dE);
+    rt_diag_sc(RT_DIAG_SC_JACO_BANDS, out->band_dE_over_rsol);
+    rt_diag_sc(RT_DIAG_SC_JACO_R, R * f);
+    rt_diag_sc(RT_DIAG_SC_JACO_R_CR, R_cr * f);
+    rt_diag_sc(RT_DIAG_SC_JACO_R_PHOTOION, R_ion * f);
+    rt_diag_sc(RT_DIAG_SC_JACO_R_FUV, (R - R_nofuv) * f);
+    rt_diag_sc(RT_DIAG_SC_JACO_R_RSOL, R_rsol * f);
+    rt_diag_sc(RT_DIAG_SC_JACO_PDV, pdv);
+    rt_diag_sc(RT_DIAG_SC_JACO_N, 1);
+    if (tier >= JACO_TIER_SUBCYCLE) { /* the identity holds per substep, not over the step */
+        rt_diag_sc(RT_DIAG_SC_JACO_ERR_SUBCYCLED, err);
+        rt_diag_sc(RT_DIAG_SC_JACO_N_SUBCYCLED, 1);
+        return;
+    }
+    rt_diag_sc(RT_DIAG_SC_JACO_ERR, err);
+    rt_diag_sc(RT_DIAG_SC_JACO_ERR_ABS, fabs(err));
+    rt_diag_sc(RT_DIAG_SC_JACO_BOUND, bound * f);
+}
+#endif
+
 void call_jaco(struct particle_data *p, struct gas_cell_data *c) {
     double dtime = get_particle_timestep_in_physical(0, p);
     if (dtime == 0)
@@ -1167,5 +1246,10 @@ void call_jaco(struct particle_data *p, struct gas_cell_data *c) {
     struct jaco_step_outputs out;
     jaco_to_gizmo(0, &sv, &pr, p, c, &out);
     jaco_stats_add(&info, &out);
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED) && defined(JACO_HAS_VAR_x_photon_EUV)
+    rt_diag_add(RT_DIAG_COOL_GAS, 0, out.gas_dE);
+    jaco_diag_ledger(&sv, &pr, &out, info.tier, set.tol, c->Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS,
+                     c->Mass / (c->Density * All.cf_a3inv) * pow(UNIT_LENGTH_IN_CGS, 3));
+#endif
 }
 #endif

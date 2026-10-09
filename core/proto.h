@@ -18,6 +18,7 @@ struct jaco_step_outputs {
     double dt;                   /* s */
     double gas_dE;               /* gas internal energy change over the step, code units */
     double band_removed, band_added; /* band energy the model removed and added, code units */
+    double band_dE_over_rsol;     /* sum over the bands of their change times c/c_tilde, code units */
     double photoionized, euv_loss;   /* ionizing band: energy the photoionizations took, and the band's loss */
     long band_clipped;           /* bands whose solved energy was negative or not finite, and was replaced */
     int euv_open;                /* the ionizing band's loss is not what the photoionizations took over the step */
@@ -991,7 +992,10 @@ enum {RT_DIAG_SC_DEU, RT_DIAG_SC_Q, RT_DIAG_SC_DTIE, RT_DIAG_SC_DTIE_CODE, RT_DI
       RT_DIAG_SC_N_TOUSE_POS, RT_DIAG_SC_N_COOL, RT_DIAG_SC_DC_ABS_IR, RT_DIAG_SC_DC_ABS_NONIR, RT_DIAG_SC_DC_EMIT, RT_DIAG_SC_DC_COUPLE,
       RT_DIAG_SC_DK_REEMIT, RT_DIAG_SC_DK_EMIT_IMPLIED, RT_DIAG_SC_DK_COUPLE_IMPLIED, RT_DIAG_SC_M_COOL, RT_DIAG_SC_MT_GAS,
       RT_DIAG_SC_MT_DUST_COOL, RT_DIAG_SC_MT_RAD, RT_DIAG_SC_M_KICK, RT_DIAG_SC_MT_DUST_KICK, RT_DIAG_SC_MT_GAS_KICK, RT_DIAG_SC_KICK_DU,
-      RT_DIAG_SC_KICK_DERAD, RT_DIAG_SC_DTIE_DISCARD, RT_DIAG_SC_DEPOSIT_K1, RT_DIAG_SC_DEPOSIT_K2, RT_DIAG_NSC};
+      RT_DIAG_SC_KICK_DERAD, RT_DIAG_SC_DTIE_DISCARD, RT_DIAG_SC_DEPOSIT_K1, RT_DIAG_SC_DEPOSIT_K2,
+      RT_DIAG_SC_JACO_GAS, RT_DIAG_SC_JACO_BANDS, RT_DIAG_SC_JACO_R, RT_DIAG_SC_JACO_R_CR, RT_DIAG_SC_JACO_R_PHOTOION, RT_DIAG_SC_JACO_R_FUV, RT_DIAG_SC_JACO_R_RSOL,
+      RT_DIAG_SC_JACO_PDV, RT_DIAG_SC_JACO_ERR, RT_DIAG_SC_JACO_ERR_ABS, RT_DIAG_SC_JACO_BOUND, RT_DIAG_SC_JACO_ERR_SUBCYCLED,
+      RT_DIAG_SC_JACO_N_SUBCYCLED, RT_DIAG_SC_JACO_N, RT_DIAG_NSC};
 void rt_diag_sc(int idx, double v);
 extern int rt_diag_kick_mode; /* do_the_kick's mode: 0 = opening half-kick, 1 = closing */
 /* terms of the most recent CoolingRate call for a cell, erg cm^3 s^-1 (lambda-type: positive = gas cooling); after DoCooling
