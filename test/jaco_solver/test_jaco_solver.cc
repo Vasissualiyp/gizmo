@@ -627,11 +627,12 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
     const Recorded cells[] = {
 #ifdef JACO_MODEL_STARFORGE
         /* shu_jets[jaco] (MinGasTemp 0, so T_min = 1 K and u_min = 0): dense molecular gas cooled below the CMB by
-           expansion, its energy root near 1.6 K, where the H2 cooling's Jacobian was not finite; every tier failed */
+           expansion, its energy root near 1.6 K, where the H2 cooling's Jacobian was not finite; every tier failed.
+           Recorded before the optically-thick limit: kappa_thick is GIZMO's opacity floor, its value at this T */
         {"shu_jets 1.8K molecular", 96026865.17575416, 1.8327357182447774, 1e-20, 1e-20, 1e-20, 0.49999999987066052,
          " Delta_t=18833483.88671875 Delta_x=1665022286145074 G_0=6.536608459132372e-28 G_LW=1 ISRF=1"
          " N_H=7.5481994987645799e+22 Td=2.8020555354610974 X=0.71550000000000002 Z_d=1 f_d=1 f_metal=0 f_neb=0"
-         " grad_v=2.3111437077742243e-10 grad_v_tf=8.6221397732264687e-11 n_Htot=1430418.353342931"
+         " grad_v=2.3111437077742243e-10 grad_v_tf=8.6221397732264687e-11 kappa_thick=0.1 n_Htot=1430418.353342931"
          " pdv_work=-5.1417100242972378e-18 u_initial=96026865.17575416 x_C_tot=0.00029466573491730724"
          " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.49999999987066052"
          " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
