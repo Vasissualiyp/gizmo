@@ -17,10 +17,12 @@
  *      non-finite system, and on a budget stall (a neutral budget at round-off holding the step
  *      below tol, which only shrinks it further).
  *   2  1-D rootfind in T: chemistry solved at fixed T, R(T) = energy residual; geometric
- *      bracketing outward from T0 then Brent in ln T, then a short Newton polish. If R keeps its
- *      sign down to the floor (or up to the ceiling) the answer is the floor (ceiling). If that
- *      fails, it is repeated with every chemistry solve started from one end of the bracket, then
- *      the other (where the chemistry is bistable: each branch, the start's first).
+ *      bracketing outward from T0 then Brent in ln T, to tol and further while the energy row
+ *      fails the acceptance test (R can rise faster than tol in ln T resolves), then a short
+ *      Newton polish. If R keeps its sign down to the floor (or up to the ceiling) the answer is
+ *      the floor (ceiling). If that fails, it is repeated with every chemistry solve started from
+ *      one end of the bracket, then the other (where the chemistry is bistable: each branch, the
+ *      start's first).
  *   3  subcycling: halve the substep until tiers 1-2 succeed on each piece.
  * A non-finite residual rejects that step or trial point. A non-finite Jacobian column (the
  * generated derivative of a rate that underflowed to zero can be 0/0 although the rate itself is
@@ -727,6 +729,9 @@ struct RootCtx {
     struct Counters *c;
     int level; /* the time-dependent species a td_bracketed search is over */
     const SolveVars *seed; /* if set, every evaluation starts from it instead of the nearest remembered state */
+    /* if set, Brent stops at its tolerance in y only where this accepts the residual val at the solved state x, else it goes
+       on to the resolution of y */
+    int (*accept)(struct RootCtx *ctx, const SolveVars *x, double val);
     int nhist, next;
     double yh[JACO_ROOT_HISTORY];
     SolveVars xh[JACO_ROOT_HISTORY];
@@ -740,6 +745,7 @@ static void root_init(struct RootCtx *ctx, int (*eval)(double, SolveVars *, stru
     ctx->c = c;
     ctx->level = 0;
     ctx->seed = NULL;
+    ctx->accept = NULL;
     ctx->nhist = 0;
     ctx->next = 0;
 }
@@ -766,11 +772,13 @@ static int root_eval(struct RootCtx *ctx, double y, SolveVars *x, double *val) {
 }
 
 /* Brent's method on [a, b] (fa, fb of opposite sign; xa, xb the solved states there) to
-   |dy| <= ytol. The root and its solved state are returned. */
+   |dy| <= ytol, or past it to the resolution of y while ctx->accept rejects the residual there. The root and its solved
+   state are returned. */
 static int brent(struct RootCtx *ctx, double a, double fa, const SolveVars *xa, double b, double fb, const SolveVars *xb,
                  double ytol, double *root, SolveVars *x_root) {
     SolveVars sa = *xa, sb = *xb, sc = sa;
     double cc = a, fc = fa, dd = b - a, ee = dd;
+    int resolving = 0; /* past ytol with the residual not accepted */
     for (int it = 0; it < JACO_BRENT_MAXITER; it++) {
         if ((fb > 0) == (fc > 0)) {
             cc = a;
@@ -783,7 +791,11 @@ static int brent(struct RootCtx *ctx, double a, double fa, const SolveVars *xa, 
             b = cc; fb = fc; sb = sc;
             cc = a; fc = fa; sc = sa;
         }
-        double tol1 = 2e-16 * fabs(b) + 0.5 * ytol, xm = 0.5 * (cc - b);
+        double tol1 = 2e-16 * fabs(b) + (resolving ? 0 : 0.5 * ytol), xm = 0.5 * (cc - b);
+        if (ctx->accept && fb != 0 && (fabs(xm) <= tol1 || resolving) && fabs(xm) > 2e-16 * fabs(b)) {
+            resolving = !ctx->accept(ctx, &sb, fb);
+            tol1 = resolving ? 2e-16 * fabs(b) : fabs(xm);
+        }
         if (fabs(xm) <= tol1 || fb == 0) {
             *root = b;
             *x_root = sb;
@@ -1055,6 +1067,19 @@ static int energy_eval(double y, SolveVars *x, struct RootCtx *ctx, double *val)
     return energy_residual(exp(y), x, ctx->pr, ctx->set, ctx->c, val);
 }
 
+/* The energy row passes the acceptance test (verify) at x. A residual can rise by more than that within tol in ln T: the
+   optically-thick limit swings from -L to +L where the capped sum crosses zero, within ~1e-4 K where the sum holds a
+   stiff term (the gas-dust exchange in a first core), and the energy root lies inside the swing when the uncapped
+   heat is below L. Brent then has to resolve the swing. */
+static int energy_accept(struct RootCtx *ctx, const SolveVars *x, double R) {
+    const double lim = JACO_VERIFY_FAC * ctx->set->tol;
+    if (fabs(R) <= lim * JACO_MASS_PER_H * ctx->pr->n_Htot * x->u / ctx->pr->Delta_t) return 1; /* row_scale's J-free part */
+    SolveVars s = *x;
+    struct Eval e;
+    if (evaluate(&s, ctx->pr, &e, ctx->c)) return 1; /* left to verify */
+    return fabs(R) <= lim * row_scale(&s, ctx->pr, &e, IDX_T);
+}
+
 /* Move x to the energy floor: the T where u(T, x) = u_min (or T_min), with the chemistry solved
    there; a fixed point because the EOS depends on the abundances. R is the energy residual there. */
 static int pin_to_floor(SolveVars *x, const Params *pr, const struct JacoSolverSettings *set, struct Counters *c,
@@ -1076,6 +1101,7 @@ static enum Outcome rootfind_T(SolveVars *sv, const Params *pr, const struct Jac
     struct RootCtx ctx;
     root_init(&ctx, energy_eval, pr, set, c);
     ctx.seed = seed;
+    ctx.accept = energy_accept;
     const double T_hi = set->T_max;
     SolveVars xa = *sv;
     double Ta = fmax(set->T_min, fmin(T_hi, sv->T)), Ra;
