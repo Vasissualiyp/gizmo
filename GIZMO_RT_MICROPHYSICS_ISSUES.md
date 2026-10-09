@@ -158,7 +158,13 @@ Runs, A/B arms and scripts are in /mnt/ceph/users/mgrudic/jaco_cbox/.
 Classification: the A(T_rad) denominator is a legacy defect: gas absorption is undercounted by A. jaco departing from it
 is a fidelity defect against `starforge_legacy_RT`'s brief. The per-step drain belongs to the deferred convention
 decision (1.1c-d); `starforge_RT` removes it by construction.
-Status: recorded, no decision.
+Decision (MYG, 2026-10-09):
+- Gas-share denominator: `starforge_legacy_RT` takes GIZMO's A(T_rad), so it tracks legacy term for term. The legacy
+  defect stays recorded for a later baseline batch.
+- Per-step drain: fix it in baseline GIZMO now, with 1.1d's per-site convention: the IR gas share deposited at c/c~
+  once per half-kick to u; the opening half-kick's deposit no longer destroyed; the return limiter in one unit system.
+  rt_closed_box asserts the full ledger. The RT benchmarks are re-baselined, and `starforge_legacy_RT` tracks the
+  fixed convention.
 
 ### 1.2 Cooling-radiation return limiter under reduced c
 `rt_cooling_radiation_to_bands`: `ratefact` carries c~/c but `de_u` does not, so the cap degenerates to "a band gains
