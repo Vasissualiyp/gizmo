@@ -78,8 +78,38 @@ Molecular variant (EOS check): the STARFORGE build plus EOS_GAMMA_PROBE at n_H =
 so the gas cools through the H2 rotational regime and its adiabatic index changes between EOS updates. After every
 update the sound speed must be the ideal-gas one for the adiabatic index of the temperature that update computed:
 |SoundSpeed^2 rho / (gamma P) - 1| < 1e-12, with gamma spanning > 0.05. Taking gamma before the temperature refresh
-leaves the sound speed one update behind."""
+leaves the sound speed one update behind.
 
+STARFORGE in IR-thick gas: the STARFORGE variant also runs at n_H = 1e8 and 1e9, and from a hot start in local thermal
+equilibrium (LTE: fully molecular gas, dust and the IR band at T_LTE = 200 or 500 K, the IR band at a T^4, the other bands
+empty; n_H = 1e9). It reports the box in the convention a jaco model conserves, E_gas + sum_b E_b c/c_tilde, with the flows
+that move it: the IR gas share (deposited 1:1, so the ledger loses c/c_tilde - 1 of it), the cooling step's net heating
+that no band pays or receives (photoheating, photoelectric and cosmic-ray heating), and the return limiters.
+
+jaco variants (JACO=<model> on the STARFORGE build, JACO_MODELS): the model's cooling step does every exchange between the
+bands, the gas and the dust; the kicks only transport. A model conserves E_gas + sum_b E_b c/c_tilde (the dust a
+reservoir of zero capacity) in every exchange except those it documents. cooling/jaco.cc tallies, per solved cell, the
+step's change of that ledger and Delta_t R, R the model's net ledger rate at the solved state (energy row, band rows
+weighted by their energy over c_tilde/c, dust row; conserving exchanges cancel in it), split by switching off one thing
+at a time: cosmic rays, photoionization heating, the photoelectric band, and the reduced speed of light (what depends on
+c_tilde/c once the photoelectric band is empty: in starforge_legacy_RT the IR band's gas absorption at c_tilde/c; zero in
+a model whose every exchange is in the c/c_tilde convention). At n_H = 1e7, 1e8, 1e9 with and without the star, and in
+the LTE boxes:
+  - the step changes the ledger by Delta_t (R + PdV) to within the solver's bound (tol times its row scales) in every row,
+    and to 1e-6 of the ledger over the run (measured 1e-11 to 1.5e-9);
+  - end to end, the box's ledger moves only by R, the PdV work and the kicks' band sources (1e-6): nothing outside the
+    model's step creates or destroys energy (with the star, the IR kick sources around it do not sum to zero, about
+    -0.8% of the injected energy; GIZMO's own STARFORGE run shows the same);
+  - the parts of R the model does not document, and what is left of R past its documented parts, are < 1e-6 of the
+    ledger; the band ledger, injection and gas-share checks as for STARFORGE.
+starforge_legacy_RT documents all four parts. Its IR gas absorption drains 26-45% of the ledger at n_H >= 1e7 over the
+run, as GIZMO's kick does; test_rt_closed_box_gas_share_vs_legacy compares the two drains per unit band energy in the LTE
+boxes (1e-2). jaco takes the gas absorption at kappa_gas c_tilde rho E (over the dust absorption opacity for the
+per-kick cap), GIZMO at kappa_gas / kappa(0,0) of the absorbed energy, kappa(0,0) counting the dust's IR scattering:
+the jaco drain is 1/A(T_rad) times GIZMO's, A = 1 - 0.5 / (1 + 725^2 / (1 + T_rad^2)) (1.036 at 200 K, 1.190 at 500 K;
+1.000 in the 12 K boxes), so that test is a strict xfail."""
+
+import os
 import re
 import numpy as np
 import h5py
@@ -114,8 +144,27 @@ TOL_GAMMA_PROBE = 1e-12
 # G ~ 0: the star binds no gas, so it cannot accrete; the critical density keeps sink formation off
 STARFORGE_PARAMS = {"GravityConstantInternal": "1e-100", "CritPhysDensity": "1e30"}
 STAR_MASS = 30.0
+# jaco models of the STARFORGE coupling on the STARFORGE build: the model's cooling step does every exchange between the bands,
+# the gas and the dust, the kicks only transport. Per model, the parts of its ledger rate that it documents as sources or
+# sinks (cr: cosmic-ray heating; photoion: photoionization heating; fuv: what the photoelectric band drives; rsol: what
+# depends on the reduced speed of light, in starforge_legacy_RT the IR band's gas absorption at c_tilde/c); every other
+# part must vanish. reproduces_legacy: the model must drain the IR band into the gas as GIZMO's kick does
+JACO_MODELS = {"starforge_legacy_RT": {"documented": ("cr", "photoion", "fuv", "rsol"), "reproduces_legacy": True}}
+JACO_PARTS = ("cr", "photoion", "fuv", "rsol")
+JACO_DENSITIES = (1e7, 1e8, 1e9)
+# hot, IR-thick start in local thermal equilibrium: fully molecular gas, dust and the IR band at T_LTE, the IR band at a T^4,
+# the other bands empty (n_H = 1e9: a protostellar core's first-core gas)
+T_LTE = (200.0, 500.0)
+N_LTE = 1e9
+A_RAD = 7.5657e-15  # erg cm^-3 K^-4
+
+
+def jaco_flags(model):
+    return STARFORGE + (f"JACO={model}",)
+
+
 VARIANTS = {PLAIN_RT: "bare", PLAIN_COOLING: "cooling", POINT_SOURCE: "source", ILIEV: "iliev", STARFORGE: "starforge",
-            MOLECULAR: "molecular"}
+            MOLECULAR: "molecular", **{jaco_flags(m): f"jaco_{m}" for m in JACO_MODELS}}
 CHANNELS = ("absorbed", "donated_in", "ir_gas_share", "cooling_to_band", "injected", "kick_source")
 BANDS = ("photoelectric", "NUV", "optical-NIR", "IR")
 BANDS_STARFORGE = ("ionizing",) + BANDS
@@ -139,6 +188,11 @@ TOL_GAS_SHARE = 1e-4  # of the share. The smallest miss with the share deposited
 # the deposit itself closes to 1e-8, and at n_H = 1e3, where the cooling step moves 1e4 x the share, an untraced 6e-10 of
 # the gas thermal energy (6e-6 of the share) is left
 TAU_STEP_SATURATED = 3.0
+TIME_FIRST_OUTPUT = 0.024  # TimeBetSnapshot; the restart ramp's steps all fall before it
+TOL_JACO_SOLVE = 1e-6  # the jaco solver's relative tolerance (JACO_TOL_DEFAULT), on the ledger it changes per step
+TOL_JACO_UNDOCUMENTED = 1e-6  # of the ledger: any part of the model's ledger rate it does not document
+TOL_DRAIN_COEFFICIENT = 1e-2  # jaco over GIZMO, of the IR band's drain into the gas per unit band energy
+OUT_ROOT = Path(os.environ.get("RT_CLOSED_BOX_OUTPUT_ROOT", TEST_DIR))  # absolute, < 100 characters (OutputDir)
 
 
 def fdust(t_dust):
@@ -164,15 +218,23 @@ def is_source(flags):
     return "RT_SOURCES=16" in flags
 
 
-def ic_name(flags, n_h, star):
-    kind = ("_molecular" if is_molecular(flags) else "_starforge" if is_starforge(flags) else "_cooling" if "COOLING" in flags
-            else "_source" if is_source(flags) else "")
-    return f"{TEST_NAME}_n{tag(n_h)}{kind}{'_star' if star else ''}_ics"
+def jaco_model(flags):
+    return next((f.split("=", 1)[1] for f in flags if f.startswith("JACO=")), None)
 
 
-def output_dir(flags, n_h, star):
+def setup_tag(star, lte):
+    return f"{'_star' if star else ''}{f'_lte{lte:g}' if lte else ''}"
+
+
+def ic_name(flags, n_h, star, lte=None):
+    kind = ("_molecular" if is_molecular(flags) else f"_jaco_{jaco_model(flags)}" if jaco_model(flags) else "_starforge"
+            if is_starforge(flags) else "_cooling" if "COOLING" in flags else "_source" if is_source(flags) else "")
+    return f"{TEST_NAME}_n{tag(n_h)}{kind}{setup_tag(star, lte)}_ics"
+
+
+def output_dir(flags, n_h, star, lte=None):
     """short on purpose: GIZMO truncates long OutputDir values"""
-    return TEST_DIR / f"output_{VARIANTS[flags]}{'_star' if star else ''}_n{tag(n_h)}"
+    return OUT_ROOT / f"output_{VARIANTS[flags]}{setup_tag(star, lte)}_n{tag(n_h)}"
 
 
 def band_history(flags, n_h, star):
@@ -191,9 +253,9 @@ def band_history(flags, n_h, star):
     return np.array(t), np.array(e), first
 
 
-def diag(flags, n_h, star):
+def diag(flags, n_h, star, lte=None):
     """the RT_DIAG_IR_DOUBLE_COUNT rows, with every flow summed from the start of the run"""
-    fn = f"{output_dir(flags, n_h, star)}/rt_ir_diag.txt"
+    fn = f"{output_dir(flags, n_h, star, lte)}/rt_ir_diag.txt"
     nb = int(re.search(r"E_rad\[0\.\.(\d+)\]", open(fn).readline()).group(1)) + 1
     d = np.atleast_2d(np.loadtxt(fn))
     o = {"t": d[:, 0], "routed": np.cumsum(d[:, 2]), "lum_injected": np.cumsum(d[:, 3]), "L_sun": d[:, 4],
@@ -205,18 +267,44 @@ def diag(flags, n_h, star):
     return o
 
 
-def cool_diag(flags, n_h, star):
-    """rt_cool_diag.txt (named columns, per-row sums) summed over the run"""
-    fn = f"{output_dir(flags, n_h, star)}/rt_cool_diag.txt"
+def cool_diag(flags, n_h, star, cumulative=False, lte=None):
+    """rt_cool_diag.txt (named columns, per-row sums) summed over the run, or summed from the start at each row"""
+    fn = f"{output_dir(flags, n_h, star, lte)}/rt_cool_diag.txt"
     names = open(fn).readline().split()[2:]
     d = np.atleast_2d(np.loadtxt(fn))
+    if cumulative:
+        return {k: np.cumsum(d[:, 1 + j]) for j, k in enumerate(names)}
     return {k: d[:, 1 + j].sum() for j, k in enumerate(names)}
+
+
+def thermal_history(flags, n_h, star, lte=None):
+    """per snapshot: time and the gas-mass-weighted gas, dust and IR radiation temperatures and IR band energy density
+    [eV cm^-3], over the whole box and over the cells within 2 pc of its centre (the star's neighbourhood)"""
+    rows = []
+    for fn in sorted(glob(f"{output_dir(flags, n_h, star, lte)}/snapshot_*.hdf5")):
+        with h5py.File(fn, "r") as F:
+            g, box = F["PartType0"], F["Header"].attrs["BoxSize"]
+            m, rho = g["Masses"][:].astype(np.float64), g["Density"][:].astype(np.float64)
+            r = np.linalg.norm(g["Coordinates"][:] - 0.5 * box, axis=1)
+            q = (g["Temperature"][:], g["Dust_Temperature"][:], g["IRBand_Radiation_Temperature"][:],
+                 g["PhotonEnergy"][:, -1] * rho / m * UNIT_RHO_CGS * 1e10 / EV_ERG)
+            near = r < 2.0
+            rows.append((F["Header"].attrs["Time"],) + tuple(np.average(x, weights=m) for x in q)
+                        + tuple(np.average(x[near], weights=m[near]) for x in q))
+    return np.array(rows)
+
+
+def print_thermal_history(flags, n_h, star, lte=None):
+    h = thermal_history(flags, n_h, star, lte)
+    print("     time    box: T_gas    T_dust    T_rad   u_IR[eV/cm^3]   r < 2 pc: T_gas    T_dust    T_rad   u_IR")
+    for row in h:
+        print(f"    {row[0]:.4f}   " + " ".join(f"{x:9.4g}" for x in row[1:5]) + "        " + " ".join(f"{x:9.4g}" for x in row[5:]))
 
 
 _built = {}
 
 
-def run(flags, n_h, star, num_mpi_ranks):
+def run(flags, n_h, star, num_mpi_ranks, lte=None):
     """Build once per flag set (its variants differ only in the IC), then run from the snapshot-format IC"""
     cooling, starforge = "COOLING" in flags, is_starforge(flags)
     if cooling:
@@ -230,14 +318,17 @@ def run(flags, n_h, star, num_mpi_ranks):
         kw.update(t_gas=T_MOLECULAR, h2_per_neutral_h=1.0)
     if is_source(flags):
         kw.update(u_bands_ev=U_BANDS_EV_SOURCE, neutral_hydrogen=True, source_mass=SOURCE_MASS)
-    make_rt_closed_box_ics(str(TEST_DIR / f"{ic_name(flags, n_h, star)}.hdf5"), n_h=n_h, **kw)
+    if lte:
+        kw.update(t_gas=lte, t_rad=lte, u_bands_ev=(0.0,) * 4 + (A_RAD * lte**4 / EV_ERG,), h2_per_neutral_h=1.0)
+    make_rt_closed_box_ics(str(TEST_DIR / f"{ic_name(flags, n_h, star, lte)}.hdf5"), n_h=n_h, **kw)
     if _built.get("flags") != flags or not (TEST_DIR / "GIZMO").is_file():
         _built.clear()
         build_gizmo_for_test(TEST_NAME, 0, flags)
         _built["flags"] = flags
-    out = output_dir(flags, n_h, star)
+    out = output_dir(flags, n_h, star, lte)
     shutil.rmtree(out, ignore_errors=True)
-    overrides = {"InitCondFile": ic_name(flags, n_h, star), "OutputDir": out.name}
+    out.parent.mkdir(parents=True, exist_ok=True)
+    overrides = {"InitCondFile": ic_name(flags, n_h, star, lte), "OutputDir": out.name if OUT_ROOT == TEST_DIR else str(out)}
     if starforge:
         overrides.update(STARFORGE_PARAMS)
     if is_source(flags):
@@ -252,11 +343,11 @@ def run(flags, n_h, star, num_mpi_ranks):
     assert_final_time(sorted(glob(f"{out}/snapshot_*.hdf5"))[-1], TEST_NAME)
 
 
-def check_gas_share(flags, n_h, star):
+def check_gas_share(flags, n_h, star, lte=None):
     """the IR gas share reaches the gas exactly once, and nothing is dropped from DtInternalEnergy. With the star the
     gas also gains and loses energy outside the kick and the cooling solve (HII-region model), so only the second
     holds exactly there and the first is reported"""
-    o, c = diag(flags, n_h, star), cool_diag(flags, n_h, star)
+    o, c = diag(flags, n_h, star, lte), cool_diag(flags, n_h, star, lte=lte)
     E = o["E"]
     share = o["ir_gas_share"][-1].sum()
     d_th = o["E_thermal"][-1] - o["E_thermal"][0]
@@ -373,8 +464,8 @@ def check_source(flags, n_h, star):
     assert abs(gain[-1] - 1) < TOL_INJECTION, f"band energy gain = {gain[-1]:.6f} x c_tilde/c L t"
 
 
-def check_starforge(flags, n_h, star):
-    o = diag(flags, n_h, star)
+def check_starforge(flags, n_h, star, lte=None):
+    o = diag(flags, n_h, star, lte)
     E, routed = o["E"], o["routed"]
     nb = E.shape[1]
     ir, h0, opt = nb - 1, 0, nb - 2
@@ -388,13 +479,15 @@ def check_starforge(flags, n_h, star):
     injected = o["injected"].sum(axis=1)
     budget = E.sum(axis=1) + o["E_thermal"] - injected
 
-    print(f"\n{VARIANTS[flags]}{' + star' if star else ''}, n_H = {n_h:g}: star luminosity {o['L_sun'][-1]:.4g} L_sun")
+    print(f"\n{VARIANTS[flags]}{' + star' if star else ''}{f', LTE at {lte:g} K' if lte else ''}, n_H = {n_h:g}: star "
+          f"luminosity {o['L_sun'][-1]:.4g} L_sun")
     print("  band            E(0)         E(end)      absorbed   donated in   kick source  cooling ret.   injected")
     for k, b in enumerate(BANDS_STARFORGE):
         print(f"  {b:13s} {E[0, k]:11.5g} {E[-1, k]:12.5g} {ch['absorbed'][k]:12.5g} {ch['donated_in'][k]:12.5g} "
               f"{ch['kick_source'][k]:12.5g} {ch['cooling_to_band'][k]:12.5g} {ch['injected'][k]:12.5g}")
-    print(f"  IR ledger: (IR change - kick source - cooling return - injection + gas share) / routed = {ir_ledger:.8f}; "
-          f"direct donation to IR / routed = {ch['donated_in'][ir] / routed[-1]:.6f}; routed {routed[-1]:.6g}")
+    if routed[-1] > 0:
+        print(f"  IR ledger: (IR change - kick source - cooling return - injection + gas share) / routed = {ir_ledger:.8f}; "
+              f"direct donation to IR / routed = {ch['donated_in'][ir] / routed[-1]:.6f}; routed {routed[-1]:.6g}")
     print(f"  band ledger residual {residual:+.3e} of the initial band energy")
     print(f"  ionizing band: absorbed {ch['absorbed'][h0]:.6g}, all donated to optical-NIR ({ch['donated_in'][opt]:.6g}); "
           f"gas thermal energy peaks at {o['E_thermal'].max():.4g} (t = {o['t'][np.argmax(o['E_thermal'])]:.3g}) from "
@@ -410,13 +503,104 @@ def check_starforge(flags, n_h, star):
               f"{o['cooling_to_band'][i].sum():12.5g}   {o['cooling_offered'][i] / C_RATIO:16.5g}"
               f"                        {o['cooling_gas'][i]:12.5g}   {o['kick_source'][i].sum():12.5g}")
 
-    check_gas_share(flags, n_h, star)
-    assert routed[-1] > 0.5 * E[0, 1:ir].sum(), "the donor bands were not absorbed: the test is not exercising them"
+    # the same box in the c/c_tilde convention a jaco model conserves (check_jaco), with the flows that move it
+    c_cum = cool_diag(flags, n_h, star, cumulative=True, lte=lte)
+    ledger = o["E_thermal"] + (E.sum(axis=1) - injected) / C_RATIO
+    share_term = -(1 / C_RATIO - 1) * o["ir_gas_share"][:, ir]  # band loss at c/c_tilde, gas gain at 1
+    unrouted = c_cum["gas_unrouted"]  # the cooling step's net heating that no band pays or receives
+    clips = (sum(c_cum[k] for k in c_cum if k.startswith("band_clip_min")) -
+             sum(c_cum[k] for k in c_cum if k.startswith("band_clip_max"))) / C_RATIO
+    kick = o["kick_source"].sum(axis=1) / C_RATIO
+    rest = ledger - ledger[0] - share_term - unrouted - clips - kick
+    print(f"  ledger E_gas + (bands - injected) c/c_tilde, and the flows that move it (cumulative, / its start {ledger[0]:.6g}):")
+    print("     time      ledger/l0-1   IR gas share   unrouted heat   return clips   kick sources   rest")
+    for t_out in np.arange(0, o["t"][-1] + 1e-9, TIME_FIRST_OUTPUT):
+        i = int(np.argmin(np.abs(o["t"] - t_out)))
+        print(f"    {o['t'][i]:.4f}   " + "   ".join(f"{x / ledger[0]:+.4e}" for x in
+                                                     (ledger[i] - ledger[0], share_term[i], unrouted[i], clips[i], kick[i], rest[i])))
+    print_thermal_history(flags, n_h, star, lte)
+    print(f"  IR gas-absorption drain coefficient {drain_coefficient(flags, n_h, star, lte):.6g} per code time")
+
+    check_gas_share(flags, n_h, star, lte)
     assert abs(residual) < TOL_BAND_LEDGER, f"band ledger does not close: residual {residual:+.3e} of the band energy"
+    if lte:  # nothing to donate
+        return
+    assert routed[-1] > 0.5 * E[0, 1:ir].sum(), "the donor bands were not absorbed: the test is not exercising them"
     if star:
         assert abs(injected[-1] / o["lum_injected"][-1] - 1) < TOL_INJECTION, "injected energy is not c_tilde/c L dt"
     assert abs(ir_ledger - 1) < TOL_IR_LEDGER, f"IR gain = {ir_ledger:.6f}x the energy routed to it"
     assert ch["donated_in"][ir] == 0, f"{ch['donated_in'][ir] / routed[-1]:.6f} x routed donated to the IR band directly"
+
+
+def drain_coefficient(flags, n_h, star, lte=None):
+    """The IR band's drain into the gas through its gas absorption, per unit time and per unit of the band's energy (in
+    the c/c_tilde ledger, so the ratio is the same in either convention), over the run after the first output: GIZMO's
+    kick moves the gas share at 1:1 (the ledger loses c/c_tilde - 1 of it), the jaco model reports it (jaco_R_rsol_dt)"""
+    o, c = diag(flags, n_h, star, lte), cool_diag(flags, n_h, star, cumulative=True, lte=lte)
+    drain = c["jaco_R_rsol_dt"] if jaco_model(flags) else -(1 / C_RATIO - 1) * o["ir_gas_share"][:, -1]
+    t, e_ir = o["t"], o["E"][:, -1] / C_RATIO
+    i = int(np.argmin(np.abs(t - TIME_FIRST_OUTPUT)))
+    return -(drain[-1] - drain[i]) / np.sum(0.5 * (e_ir[i + 1:] + e_ir[i:-1]) * np.diff(t[i:]))
+
+
+def check_jaco(flags, n_h, star, lte=None):
+    """A jaco model's energy ledger. The model conserves E_gas + sum_b E_b c/c_tilde (the dust a reservoir of zero
+    capacity) in every exchange but those it documents (JACO_MODELS); cooling/jaco.cc tallies, per solved cell, the
+    step's change of that ledger, Delta_t R (R: the model's net ledger rate at the solved state, the conserving
+    exchanges cancelled) with the documented parts switched off one at a time, and the PdV work."""
+    model = jaco_model(flags)
+    o, c = diag(flags, n_h, star, lte), cool_diag(flags, n_h, star, cumulative=True, lte=lte)
+    E, inj = o["E"], o["injected"].sum(axis=1)
+    e0_bands = E[0].sum()
+    band_flows = o["kick_source"].sum(axis=1) + o["cooling_to_band"].sum(axis=1) + inj
+    band_residual = (E.sum(axis=1) - e0_bands - band_flows) / e0_bands
+    ledger = o["E_thermal"] + (E.sum(axis=1) - inj) / C_RATIO  # E_gas + sum_b E_b c/c_tilde, less the injection
+    scale = ledger[0]
+    R, pdv, kick = c["jaco_R_dt"], c["jaco_pdv_dt"], o["kick_source"].sum(axis=1) / C_RATIO
+    parts = {k: c[f"jaco_R_{k}_dt"] for k in JACO_PARTS}
+    rest = R - sum(parts.values())
+    # end to end: the box's ledger against the model's own rate, the PdV work and the kicks' band sources (transport,
+    # which sums to zero over the box, and the radiation work terms)
+    drift = ledger - ledger[0] - R - pdv - kick
+    gas_outside = o["E_thermal"] - o["E_thermal"][0] - c["jaco_gas_dE"] - c["gas_kick_dE"]
+    err_abs, bound = (np.diff(c[k], prepend=0) for k in ("jaco_ledger_err_abs", "jaco_ledger_bound"))  # per row
+    legacy = o["E_thermal"] + E.sum(axis=1) - inj  # the 1:1 band/gas convention
+    print(f"\n{VARIANTS[flags]}{' + star' if star else ''}{f', LTE at {lte:g} K' if lte else ''}, n_H = {n_h:g}: "
+          f"{c['jaco_n_solves'][-1]:.0f} solves, {c['jaco_n_subcycled'][-1]:.0f} subcycled; star luminosity {o['L_sun'][-1]:.4g} L_sun")
+    print(f"  ledger E_gas + sum_b E_b c/c_tilde - injected c/c_tilde: start {scale:.6g} (gas {o['E_thermal'][0]:.4g}), end "
+          f"{ledger[-1]:.6g}; model rate integral {R[-1]:+.6g} = " + " + ".join(f"{k} {parts[k][-1]:+.4g}" for k in JACO_PARTS)
+          + f" + rest {rest[-1]:+.4g}; PdV {pdv[-1]:+.4g}; kick sources {kick[-1]:+.4g}")
+    print(f"  solve: step change - Delta_t (R + PdV) = {c['jaco_ledger_err'][-1]:+.4g} = {c['jaco_ledger_err'][-1] / scale:+.3e} of "
+          f"the ledger (sum |.| {c['jaco_ledger_err_abs'][-1]:.4g}, at most {np.max(err_abs / np.maximum(bound, 1e-300)):.3e} of "
+          f"the solver's bound in a row; subcycled {c['jaco_ledger_err_subcycled'][-1]:+.4g})")
+    print(f"  band ledger residual {band_residual[-1]:+.3e} of the initial band energy; gas change outside the jaco step and "
+          f"the kick {gas_outside[-1]:+.4g}; IR gas-absorption drain coefficient {drain_coefficient(flags, n_h, star, lte):.6g} "
+          f"per code time")
+    print("     time    ledger/l0-1   drift/l0     R/l0: total     " + "    ".join(f"{k:>8s}" for k in JACO_PARTS)
+          + "       rest    1:1 budget/b0-1")
+    for t_out in np.arange(0, o["t"][-1] + 1e-9, TIME_FIRST_OUTPUT):
+        i = int(np.argmin(np.abs(o["t"] - t_out)))
+        print(f"    {o['t'][i]:.4f}   {ledger[i] / scale - 1:+.4e}   {drift[i] / scale:+.3e}   "
+              + " ".join(f"{x / scale:+.3e}" for x in [R[i]] + [parts[k][i] for k in JACO_PARTS] + [rest[i]])
+              + f"   {legacy[i] / legacy[0] - 1:+.4e}")
+    print_thermal_history(flags, n_h, star, lte)
+
+    assert c["jaco_n_solves"][-1] > 0, "no jaco solve was tallied: the check is not exercised"
+    assert abs(band_residual[-1]) < TOL_BAND_LEDGER, f"band ledger does not close: residual {band_residual[-1]:+.3e}"
+    if star:
+        assert abs(inj[-1] / o["lum_injected"][-1] - 1) < TOL_INJECTION, "injected energy is not c_tilde/c L dt"
+    else:  # with the star the HII-region model may also heat the gas
+        assert abs(gas_outside[-1]) < TOL_JACO_SOLVE * scale, f"gas energy changed outside the jaco step: {gas_outside[-1]:+.4g}"
+    assert np.all(err_abs <= bound), \
+        f"the solves change the ledger by Delta_t (R + PdV) to {np.max(err_abs / np.maximum(bound, 1e-300)):.3g}x the solver's bound"
+    assert abs(c["jaco_ledger_err"][-1]) < TOL_JACO_SOLVE * scale, \
+        f"the solves change the ledger by Delta_t (R + PdV) to {c['jaco_ledger_err'][-1] / scale:+.3e} of it"
+    assert np.max(np.abs(drift)) < TOL_JACO_SOLVE * scale, \
+        f"the box's ledger departs from the model's rate by {np.max(np.abs(drift)) / scale:.3e} of it"
+    for k in JACO_PARTS:
+        if k not in JACO_MODELS[model]["documented"]:
+            assert abs(parts[k][-1]) < TOL_JACO_UNDOCUMENTED * scale, f"{model}: undocumented {k} part {parts[k][-1] / scale:+.3e}"
+    assert abs(rest[-1]) < TOL_JACO_UNDOCUMENTED * scale, f"{model}: undocumented ledger rate {rest[-1] / scale:+.3e} of it"
 
 
 def check_molecular(flags, n_h, star):
@@ -432,8 +616,8 @@ def check_molecular(flags, n_h, star):
     assert max_rel.max() < TOL_GAMMA_PROBE, f"sound speed inconsistent with the refreshed adiabatic index: {max_rel.max():.3e}"
 
 
-def case(flags, n_h, *marks, star=False):
-    return pytest.param(flags, n_h, star, id=f"{VARIANTS[flags]}{'_star' if star else ''}-n{tag(n_h)}", marks=marks)
+def case(flags, n_h, *marks, star=False, lte=None):
+    return pytest.param(flags, n_h, star, lte, id=f"{VARIANTS[flags]}{setup_tag(star, lte)}-n{tag(n_h)}", marks=marks)
 
 
 # grouped by flag set, so each set is built once
@@ -441,12 +625,48 @@ CASES = ([case(PLAIN_RT, n) for n in (1e3, 1e4, 1e5, 1e7)]
          + [case(PLAIN_COOLING, n) for n in (1e3, 1e5, 1e7)]
          + [case(POINT_SOURCE, 1e3), case(ILIEV, 1e3)]
          + [case(STARFORGE, n, star=s) for n in (1e3, 1e7) for s in (False, True)]
-         + [case(MOLECULAR, 1e4)])
+         + [case(STARFORGE, n) for n in (1e8, 1e9)] + [case(STARFORGE, N_LTE, lte=t) for t in T_LTE]
+         + [case(MOLECULAR, 1e4)]
+         + [case(jaco_flags(m), n, star=s) for m in JACO_MODELS for n in JACO_DENSITIES for s in (False, True)]
+         + [case(jaco_flags(m), N_LTE, lte=t) for m in JACO_MODELS for t in T_LTE])
 
 
 @pytest.mark.parametrize("num_mpi_ranks", (default_mpi_ranks(max_ranks=8),))
-@pytest.mark.parametrize("flags,n_h,star", CASES)
-def test_rt_closed_box(flags, n_h, star, num_mpi_ranks):
-    run(flags, n_h, star, num_mpi_ranks)
-    (check_molecular if is_molecular(flags) else check_starforge if is_starforge(flags) else check_source if is_source(flags)
-     else check_bare)(flags, n_h, star)
+@pytest.mark.parametrize("flags,n_h,star,lte", CASES)
+def test_rt_closed_box(flags, n_h, star, lte, num_mpi_ranks):
+    run(flags, n_h, star, num_mpi_ranks, lte)
+    if is_molecular(flags):
+        check_molecular(flags, n_h, star)
+    elif jaco_model(flags):
+        check_jaco(flags, n_h, star, lte)
+    elif is_starforge(flags):
+        check_starforge(flags, n_h, star, lte)
+    else:
+        (check_source if is_source(flags) else check_bare)(flags, n_h, star)
+
+
+def gas_share_case(model, t):
+    marks = ()
+    if model == "starforge_legacy_RT":
+        marks = (pytest.mark.xfail(strict=True, reason=(
+            "jaco's kick_gas_share takes the gas absorption at kappa_gas over the dust absorption opacity, GIZMO's kick at "
+            "kappa_gas over the total (0,0) opacity, which counts the dust's IR scattering: 1/A(T_rad) more drain, "
+            "A = 1 - 0.5/(1 + 725^2/(1 + T_rad^2)), 1.037 at 200 K and 1.19 at 500 K")),)
+    return pytest.param(model, t, id=f"{model}-lte{t:g}", marks=marks)
+
+
+@pytest.mark.parametrize("model,t_lte", [gas_share_case(m, t) for m, v in JACO_MODELS.items() if v["reproduces_legacy"]
+                                         for t in T_LTE])
+def test_rt_closed_box_gas_share_vs_legacy(model, t_lte):
+    """A jaco model that reproduces GIZMO's coupling must drain the IR band into the gas at GIZMO's rate: in the hot,
+    IR-thick LTE box the drain coefficient (drain_coefficient) of the jaco run over the STARFORGE run's, within
+    TOL_DRAIN_COEFFICIENT. Uses both runs' outputs, so the LTE cases of test_rt_closed_box must have run first."""
+    legacy, jaco = (STARFORGE, N_LTE, False, t_lte), (jaco_flags(model), N_LTE, False, t_lte)
+    for f in (legacy, jaco):
+        if not (output_dir(*f) / "rt_ir_diag.txt").is_file():
+            pytest.skip(f"{output_dir(*f)} missing: run the LTE cases of test_rt_closed_box first")
+    k_legacy, k_jaco = drain_coefficient(*legacy), drain_coefficient(*jaco)
+    a = 1 - 0.5 / (1 + 725.0**2 / (1 + t_lte**2))
+    print(f"\n{model}, LTE at {t_lte:g} K: IR gas-absorption drain coefficient {k_jaco:.6g} vs GIZMO {k_legacy:.6g} per code "
+          f"time, ratio {k_jaco / k_legacy:.5f} (1/A(T_rad) = {1 / a:.5f})")
+    assert abs(k_jaco / k_legacy - 1) < TOL_DRAIN_COEFFICIENT, f"drain coefficient {k_jaco / k_legacy:.4f}x GIZMO's"

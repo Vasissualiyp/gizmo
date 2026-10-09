@@ -670,7 +670,11 @@ static double rt_diag_chan[RT_DIAG_NCHAN][N_RT_FREQ_BINS], rt_diag_cool_gas = 0,
    backward-Euler residual and gas_unrouted the net heating exchanged with no band. band_*, deu_*: band energy (code units, reduced-c
    clock); band_clip_*: what each cooling-return limiter withheld. gas_IR_share_K1/K2: IR gas share given to the gas by the
    opening/closing half-kick, in band units (the split is not tracked under TRANSPORT_SUBCYCLE); gas_DtIE_discarded: the
-   DtInternalEnergy the hydro pre-loop drops, as energy over a half-step. */
+   DtInternalEnergy the hydro pre-loop drops, as energy over a half-step. jaco_*: the JACO cooling step (cooling/jaco.cc), code
+   energy at the true c, in the model's ledger E_gas + sum_b E_b c/c_tilde: the gas and band changes, Delta_t times the ledger's net
+   rate R at the solved state with its cosmic-ray, photoionization-heating, photoelectric-band and reduced-c parts, the PdV
+   work, the step's change minus Delta_t (R + PdV) (signed, absolute, and the solver tolerance's bound on it; subcycled solves
+   separately). */
 static double rt_diag_sc_sum[RT_DIAG_NSC];
 static const char *rt_diag_sc_names[RT_DIAG_NSC] = {"gas_dE_cooling", "gas_Q_dt", "gas_DtIE_term", "gas_DtIE_code_dt", "gas_thick_limiter",
     "gas_mol", "gas_mol_heating_part", "gas_dust_coupling", "gas_metal", "gas_HHe", "gas_compton", "gas_CR", "gas_photoelectric",
@@ -679,7 +683,9 @@ static const char *rt_diag_sc_names[RT_DIAG_NSC] = {"gas_dE_cooling", "gas_Q_dt"
     "band_clip_min_deu", "band_clip_min_zero", "deu_work", "deu_radabs", "n_deu_touse_pos", "n_cool", "band_coolstep_dust_abs_IR",
     "band_coolstep_dust_abs_nonIR", "band_coolstep_dust_emit", "band_coolstep_dust_coupling", "band_kick_dust_reemit",
     "band_kick_dust_emit_implied", "band_kick_dust_coupling_implied", "M_cool", "MT_gas", "MT_dust_cool", "MT_rad", "M_kick",
-    "MT_dust_kick", "MT_gas_kick", "gas_kick_dE", "band_kick_dE", "gas_DtIE_discarded", "gas_IR_share_K1", "gas_IR_share_K2"};
+    "MT_dust_kick", "MT_gas_kick", "gas_kick_dE", "band_kick_dE", "gas_DtIE_discarded", "gas_IR_share_K1", "gas_IR_share_K2",
+    "jaco_gas_dE", "jaco_bands_dE_over_rsol", "jaco_R_dt", "jaco_R_cr_dt", "jaco_R_photoion_dt", "jaco_R_fuv_dt", "jaco_R_rsol_dt", "jaco_pdv_dt",
+    "jaco_ledger_err", "jaco_ledger_err_abs", "jaco_ledger_bound", "jaco_ledger_err_subcycled", "jaco_n_subcycled", "jaco_n_solves"};
 int rt_diag_kick_mode = 0;
 thread_local struct rt_diag_cool_terms rt_diag_cr;
 static thread_local double rt_diag_dc_last[4]; /* dust_dE_cooling's last absorption (IR, other bands), emission, gas coupling */
