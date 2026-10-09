@@ -26,14 +26,13 @@ struct jaco_eos_anchor {
     uint64_t key;      /* jaco_eos_key_add over the composition inputs the anchor was evaluated at */
 };
 
-/* Fold x into a composition key: a change in any bit of any input changes the key, up to a 2^-64 collision */
+/* Fold x into a composition key. Each fold is a bijection of the key for a given x, so a change in any one input
+   always changes the key; changes in several could cancel with probability ~2^-64. */
 static inline uint64_t jaco_eos_key_add(uint64_t key, double x) {
     uint64_t z;
     memcpy(&z, &x, sizeof(z));
-    z ^= key + 0x9e3779b97f4a7c15ULL + (key << 6) + (key >> 2);
-    z = (z ^ (z >> 30)) * 0xbf58476d1ce4e5b9ULL;
-    z = (z ^ (z >> 27)) * 0x94d049bb133111ebULL;
-    return z ^ (z >> 31);
+    z ^= key;
+    return ((z << 29) | (z >> 35)) * 0x9e3779b97f4a7c15ULL;
 }
 
 /* T and P/rho at specific energy u (erg/g) from anchor a, for a cell whose composition key is key: returns 1, or 0 where

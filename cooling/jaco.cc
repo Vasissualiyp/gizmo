@@ -627,7 +627,8 @@ static uint64_t jaco_cell_eos_key(int i, struct particle_data *pp, struct gas_ce
     key = jaco_eos_key_add(key, cell[i].HII);
 #endif
 #ifdef METALS
-    for (int k = 0; k < NUM_METAL_SPECIES; k++)
+    const int n_read = (NUM_METAL_SPECIES < 10) ? 1 : (NUM_METAL_SPECIES < 11 ? NUM_METAL_SPECIES : 11); /* Z; He, C..Fe (jaco_pack_params) */
+    for (int k = 0; k < n_read; k++)
         key = jaco_eos_key_add(key, pp[i].Metallicity[k]);
 #endif
     return key;
