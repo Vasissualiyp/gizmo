@@ -846,15 +846,27 @@ static int balance_eval(double y, SolveVars *x, struct RootCtx *ctx, double *val
     return 0;
 }
 
+/* the row of balance temperature ctx->level at exp(y), every other variable held */
+static int balance_row_eval(double y, SolveVars *x, struct RootCtx *ctx, double *val) {
+    const int k = balance.k[ctx->level];
+    x->data[k] = fmax(var_floor[k], fmin(exp(y), var_ceiling[k]));
+    struct Eval e;
+    if (evaluate(x, ctx->pr, &e, ctx->c)) return -1;
+    *val = e.F.data[k];
+    return 0;
+}
+
 /* Balance temperature `level` (fixed T and bracketed species) as GIZMO's rt_eqm_dust_temp finds the dust temperature:
    from its current value, in the direction its row points, by steps of 10% growing by 10% each, to the first sign
    change, then Brent in ln; at a bound with the row still pointing past it, the bound. The walk only stops at a stable
-   root (the row decreasing through zero), the one the previous value leads to where an opacity switch makes two. */
+   root (the row decreasing through zero), the one the previous value leads to where an opacity switch makes two.
+   With alone, every other variable is held, else the later balance temperatures and the steady state are solved at
+   each trial. */
 static int balance_bracketed(SolveVars *sv, const Params *pr, const struct JacoSolverSettings *set, struct Counters *c,
-                             int level, SolveVars *F_out) {
+                             int level, SolveVars *F_out, int alone) {
     const int k = balance.k[level];
     struct RootCtx ctx;
-    root_init(&ctx, balance_eval, pr, set, c);
+    root_init(&ctx, alone ? balance_row_eval : balance_eval, pr, set, c);
     ctx.level = level;
     const double y_lo = log(var_floor[k]), y_hi = log(var_ceiling[k]), step = log(1.1);
     SolveVars xa = *sv, xb;
@@ -895,8 +907,31 @@ static int balance_bracketed(SolveVars *sv, const Params *pr, const struct JacoS
 /* at fixed T and bracketed species: the balance temperatures from `level` on bracketed, then Newton on the rest */
 static int balance_inner(SolveVars *x, const Params *pr, const struct JacoSolverSettings *set, struct Counters *c, int level,
                          SolveVars *F_out) {
-    if (level < N_BALANCE) return balance_bracketed(x, pr, set, c, level, F_out);
+    if (level < N_BALANCE) return balance_bracketed(x, pr, set, c, level, F_out, 0);
     return newton(x, pr, set, SOLVE_IONS | SOLVE_FAST, JACO_CHEM_MAXITER, NULL, c, F_out) == NEWTON_OK ? 0 : -1;
+}
+
+/* Each balance temperature whose row reads no radiation band (the dust temperature of a model without transported
+   radiation) re-solved alone at the current state, as GIZMO estimates the dust temperature at each temperature it
+   evaluates: the start of the fallbacks at fixed T once Newton from the start has failed. A balance row can switch
+   sharply (dust sublimation), which Newton from far across the switch does not get over, and a balance seeded from
+   another temperature (a warm start in tier 2) can be far from it. Returns how many were re-solved. */
+static int balance_reseed(SolveVars *sv, const Params *pr, const struct JacoSolverSettings *set, struct Counters *c) {
+    struct Eval e;
+    if (N_BALANCE == 0 || evaluate(sv, pr, &e, c)) return 0;
+    int n = 0;
+    for (int l = 0; l < N_BALANCE; l++) {
+        const int k = balance.k[l];
+        int alone = 1;
+        for (int j = 2; j < N_VARS; j++)
+            if (var_kind[j] == JACO_KIND_RADIATION && e.J[k][j] != 0) alone = 0;
+        SolveVars x = *sv;
+        if (alone && balance_bracketed(&x, pr, set, c, l, NULL, 1) == 0) {
+            *sv = x;
+            n++;
+        }
+    }
+    return n;
 }
 
 /* The steady-state variables and the bands at fixed T (and fixed time-dependent species): Newton; if that fails, the
@@ -908,6 +943,10 @@ static int ions_at_fixed(SolveVars *sv, const Params *pr, const struct JacoSolve
     SolveVars start = *sv;
     int st = newton(sv, pr, set, mask, JACO_CHEM_MAXITER, NULL, c, F_out);
     if (st == NEWTON_OK) return 0;
+    if (balance_reseed(&start, pr, set, c)) {
+        *sv = start;
+        if (newton(sv, pr, set, mask, JACO_CHEM_MAXITER, NULL, c, F_out) == NEWTON_OK) return 0;
+    }
     *sv = start;
     if (ionized_seed(sv, pr) && newton(sv, pr, set, mask, JACO_CHEM_MAXITER, NULL, c, F_out) == NEWTON_OK) return 0;
     *sv = start;
@@ -1038,6 +1077,10 @@ static int chemistry_at_T(SolveVars *sv, const Params *pr, const struct JacoSolv
     SolveVars start = *sv;
     int st = newton(sv, pr, set, mask, JACO_CHEM_MAXITER, NULL, c, F_out);
     if (st == NEWTON_OK) return 0;
+    if (balance_reseed(&start, pr, set, c)) {
+        *sv = start;
+        if (newton(sv, pr, set, mask, JACO_CHEM_MAXITER, NULL, c, F_out) == NEWTON_OK) return 0;
+    }
     *sv = start;
     if (ionized_seed(sv, pr) && newton(sv, pr, set, mask, JACO_CHEM_MAXITER, NULL, c, F_out) == NEWTON_OK)
         return 0;
