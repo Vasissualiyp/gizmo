@@ -4,6 +4,7 @@ output/densest_cell.txt, against one-zone adiabats of the same gas (scratch refe
     python plot_second_collapse.py out.png label=run_dir [label=run_dir ...] [--onezone onezone.npz]
 """
 
+import os
 import sys
 import numpy as np
 import matplotlib
@@ -11,7 +12,8 @@ import matplotlib
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-sys.path.insert(0, __file__.rsplit("/", 1)[0])
+HERE = os.path.dirname(os.path.abspath(__file__))
+sys.path[:0] = [HERE, os.path.join(HERE, "..", "..", "python_src")]  # this tree's gizmo, as test/conftest.py does
 from test_second_collapse import COLUMNS, collapse_envelope, effective_gamma  # noqa: E402
 
 COLORS = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4"]  # categorical slots 1-5, fixed order
