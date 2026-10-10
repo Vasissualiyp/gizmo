@@ -205,6 +205,9 @@ void compute_additional_forces_for_all_particles(void)
      * particles each call; inactive particles retain prior-step gradients
      * (hydro semantics). Independent of DMGrad_gradient_calc (different
      * Spec, different storage); both fire when both flags are on. */
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+    cbe_corridor_begin();   /* CBEGrad + AGSForce share one import and list per subgroup; AGSForce_calc ends it */
+#endif
     CBEGrad_gradient_calc();
 #endif
 #if defined(DM_FUZZY) || defined(CBE_INTEGRATOR) || defined(DM_SIDM)

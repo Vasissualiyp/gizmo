@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <vector>
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
 #include "../mesh/neighbor_list.h"            /* gizmo_sym_* globals */
@@ -116,6 +117,10 @@ GizmoHydroCorridorMode gizmo_hydro_corridor_get_mode(void)
  * gizmo_hydro_cleanup_symlist_and_ghosts() after hydro_force(). */
 static nlr_external_csr g_corridor_csr;
 static bool             g_corridor_csr_valid = false;
+/* Each row's search radius in the published list (the contract on struct
+ * nlr_external_csr): the ghost safety factor times the row's KernelRadius,
+ * frozen for the corridor span. */
+static std::vector<double> g_corridor_query_radii;
 /* Import epoch of the ghost pool the published CSR was built from (stamped at
  * begin and at every fallback republish). The value-refresh fast path in
  * gizmo_hydro_corridor_refresh_ghost_values runs ONLY when the CURRENT live
@@ -151,14 +156,27 @@ void gizmo_hydro_corridor_begin(void)
      * ghosts() after hydro_force(), spanning all three consumers. */
     if(NTask > 1 && !ghost_pool_is_live()) return;
 
-    g_corridor_csr.active_indices = gizmo_sym_active_indices;
-    g_corridor_csr.num_active     = gizmo_sym_num_active;
-    g_corridor_csr.offsets        = gizmo_sym_neighbor_list.offsets;
-    g_corridor_csr.neighbors      = gizmo_sym_neighbor_list.neighbors;
-    g_corridor_csr.total_pairs    = gizmo_sym_neighbor_list.total_pairs;
-    g_corridor_csr.owner_name     = "corridor:hydro";
-    g_corridor_csr_valid          = true;
-    g_corridor_pool_epoch         = ghost_provenance_epoch();
+    /* The search gizmo_gradients_prep_symlist built (gpu_build_symmetric_neighbor_list:
+     * symmetric, gas only, the default radius policy, both radii scaled by the
+     * ghost safety factor); each consumer is checked against it. */
+    g_corridor_query_radii.resize((size_t)gizmo_sym_num_active);
+    for(int aa = 0; aa < gizmo_sym_num_active; aa++) {
+        g_corridor_query_radii[aa] = gsl_safety * (double)P[gizmo_sym_active_indices[aa]].KernelRadius;
+    }
+    g_corridor_csr.active_indices        = gizmo_sym_active_indices;
+    g_corridor_csr.num_active            = gizmo_sym_num_active;
+    g_corridor_csr.offsets               = gizmo_sym_neighbor_list.offsets;
+    g_corridor_csr.neighbors             = gizmo_sym_neighbor_list.neighbors;
+    g_corridor_csr.total_pairs           = gizmo_sym_neighbor_list.total_pairs;
+    g_corridor_csr.owner_name            = "corridor:hydro";
+    g_corridor_csr.type_mask             = 1u;
+    g_corridor_csr.search_mode           = MODE_B_SEARCH_SYMMETRIC;
+    g_corridor_csr.radius_policy         = MODE_B_RADIUS_DEFAULT;
+    g_corridor_csr.neighbor_radius_scale = gsl_safety;
+    g_corridor_csr.query_radii           = g_corridor_query_radii.data();
+    g_corridor_csr_valid                 = true;
+    g_corridor_pool_epoch                = ghost_provenance_epoch();
+    g_corridor_csr.pool_epoch            = g_corridor_pool_epoch;
 
 }
 
@@ -185,7 +203,9 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage)
      * (epoch match; see g_corridor_pool_epoch). Any other state — pool torn
      * down by an intervening loop's own ghost lifecycle, epoch mismatch, or
      * a refresh-guard failure — falls CLOSED to the full path below. */
-    if(ghost_pool_is_live() && ghost_provenance_epoch() == g_corridor_pool_epoch) {
+    int same_pool = (ghost_pool_is_live() && ghost_provenance_epoch() == g_corridor_pool_epoch) ? 1 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &same_pool, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);   /* both paths are collective */
+    if(same_pool) {
         int refresh_rc = ghost_refresh_values();
         if(refresh_rc == GHOST_REFRESH_OK) {
             return;
@@ -210,6 +230,7 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage)
     g_corridor_csr.neighbors   = gizmo_sym_neighbor_list.neighbors;
     g_corridor_csr.total_pairs = gizmo_sym_neighbor_list.total_pairs;
     g_corridor_pool_epoch      = ghost_provenance_epoch();
+    g_corridor_csr.pool_epoch  = g_corridor_pool_epoch;
 
 }
 

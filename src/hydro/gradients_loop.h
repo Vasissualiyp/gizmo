@@ -596,6 +596,9 @@ struct GradientsIterSpec
     static constexpr int                     search_mode        = MODE_B_SEARCH_SYMMETRIC;
     static constexpr unsigned int            neighbor_type_mask = (1u << 0);
     static constexpr mode_b_radius_policy_t  radius_policy      = MODE_B_RADIUS_DEFAULT;
+    /* gradient_accumulate_neighbor_iter drops every pair with r >= max(h_i, h_j),
+     * so a list searched wider (the corridor's under TURB_DIFF_DYNAMIC) is exact. */
+    static constexpr bool accepts_wider_neighbor_list = true;
     static constexpr WritePattern   write_pattern              = WritePattern::ActiveReduceOnly;
     static constexpr SidxCacheKind  sidx_cache_kind            = SidxCacheKind::GasOnly;
     static constexpr bool           uses_ghost_writeback       = false;

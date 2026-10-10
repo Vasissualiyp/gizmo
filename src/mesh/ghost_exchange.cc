@@ -1744,18 +1744,25 @@ int ghost_refresh_values(void)
        A non-NULL ghost_send_home_idx already implies an import happened with no
        cleanup since (cleanup NULLs it). */
     if(NTask <= 1)               return GHOST_REFRESH_SKIP_SERIAL;
-    if(NumPart_before_ghost < 0) return GHOST_REFRESH_FAIL_NO_POOL;
-    if(!ghost_send_home_idx || !ghost_wb_send_count || !ghost_wb_send_disp ||
-       !ghost_wb_recv_count || !ghost_wb_recv_disp)
-                                 return GHOST_REFRESH_FAIL_NO_PROVENANCE;
-    /* Live-pool consistency: current pool counts must match the preserved
-       provenance (topology unchanged; no intervening reimport with different
-       totals). */
-    long long send_tot = 0, recv_tot = 0;
-    for(int t = 0; t < NTask; t++) { send_tot += ghost_wb_send_count[t]; recv_tot += ghost_wb_recv_count[t]; }
-    if(NumPart != NumPart_before_ghost + NumGhostParticles) return GHOST_REFRESH_FAIL_POOL_MUTATED;
-    if(recv_tot != (long long)NumGhostParticles)            return GHOST_REFRESH_FAIL_POOL_MUTATED;
-    if(send_tot != (long long)ghost_send_home_count)        return GHOST_REFRESH_FAIL_POOL_MUTATED;
+    int rc = GHOST_REFRESH_OK;
+    if(NumPart_before_ghost < 0) {rc = GHOST_REFRESH_FAIL_NO_POOL;}
+    else if(!ghost_send_home_idx || !ghost_wb_send_count || !ghost_wb_send_disp ||
+            !ghost_wb_recv_count || !ghost_wb_recv_disp) {rc = GHOST_REFRESH_FAIL_NO_PROVENANCE;}
+    else {
+        /* Live-pool consistency: current pool counts must match the preserved
+           provenance (topology unchanged; no intervening reimport with different
+           totals). */
+        long long send_tot = 0, recv_tot = 0;
+        for(int t = 0; t < NTask; t++) { send_tot += ghost_wb_send_count[t]; recv_tot += ghost_wb_recv_count[t]; }
+        if(NumPart != NumPart_before_ghost + NumGhostParticles ||
+           recv_tot != (long long)NumGhostParticles ||
+           send_tot != (long long)ghost_send_home_count) {rc = GHOST_REFRESH_FAIL_POOL_MUTATED;}
+    }
+    /* The transport below is collective, and so is the caller's fallback (a
+       cleanup + re-import): every rank refreshes or none does. */
+    int any_failed = (rc != GHOST_REFRESH_OK) ? 1 : 0, any_failed_global = any_failed;
+    MPI_Allreduce(&any_failed, &any_failed_global, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if(any_failed_global) {return (rc != GHOST_REFRESH_OK) ? rc : GHOST_REFRESH_FAIL_ON_PEER;}
 
     int ns = ghost_send_home_count;
     /* Re-pack current owner values via the SAME transport import uses, in the SAME

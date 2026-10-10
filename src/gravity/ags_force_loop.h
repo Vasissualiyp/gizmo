@@ -71,6 +71,33 @@ int ags_gravity_kernel_shared_BITFLAG(short int particle_type_primary);
  * the legacy body that lived in gravity/ags_rkern.cc. */
 void AGSForce_calc(void);
 
+/* The AGSForce actives of this step, by neighbour-type subgroup: an active i
+ * belongs to subgroup ags_gravity_kernel_shared_BITFLAG(P[i].Type) (types with
+ * no shared kernel are not searched).  `masks` lists every subgroup present on
+ * ANY rank, ascending, so it is the same on every rank and the per-subgroup
+ * loops stay collective; `actives[s]` holds this rank's members of masks[s] in
+ * ActiveParticleList order, possibly none. */
+struct AgsForcePartition {
+    std::vector<unsigned int>     masks;
+    std::vector<std::vector<int>> actives;
+};
+/* Fills `part` (collective: one Allreduce). */
+void ags_force_partition_actives(AgsForcePartition &part);
+
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+/* The CBE neighbour corridor's view, for its consumers (CBEGrad, AGSForce):
+ * the step's partition (from cbe_corridor_begin; a consumer reached without it
+ * builds the partition itself); whether the corridor serves the calls (false
+ * without a begin, or when a subgroup mask holds gas -- CBE neighbours are never
+ * gas -- and the loops then search as they do alone); then the
+ * shared A/B decision and, in Mode A, subgroup s's list.  Re-fetch the list
+ * after every cbe_corridor_refresh: a refresh may rebuild it. */
+AgsForcePartition       &cbe_corridor_partition(void);
+bool                     cbe_corridor_serves(void);
+NlrForceMode             cbe_corridor_mode(void);
+const nlr_external_csr  *cbe_corridor_list(int subgroup);
+#endif
+
 
 /* ============================================================================
  * Per-loop RNG salt — XOR-mixed into the SIDM scatter counter so this loop's
@@ -91,7 +118,7 @@ static constexpr uint64_t AGS_FORCE_RNG_SALT = gizmo_loop_rng_salt("ags_force");
  * `local.X` directly. */
 struct AgsForceLocalIn {
     double Mass;
-    double AGS_KernelRadius;       /* un-inflated radius; physics-side */
+    double AGS_KernelRadius;       /* the kernel radius the pair terms use */
     Vec3<double> Pos;
     Vec3<double> Vel;
     int Type;
@@ -224,16 +251,16 @@ struct AgsForceCallScalars {
     uint64_t         rng_salt;               /* = AGS_FORCE_RNG_SALT (compile-time) */
 };
 
-/* Active-particle state. `h_search` is the SIDM-inflated value handed in by
- * the runner walker; `local.AGS_KernelRadius` is the un-inflated physics
- * radius used by the per-pair filter. Subtle but critical separation:
- * legacy gravity/ags_force_gpu.cc:179-181 + :273 made the same distinction.
+/* Active-particle state. `h_search` is the search radius handed in by the
+ * runner walker (AgsForceSpec::search_radius: the particle's own
+ * AGS_KernelRadius); `local.AGS_KernelRadius` is the radius the per-pair
+ * filter and the pair terms use.
  *
  * `pos` is top-level (Mode B walker reads it directly); `local` carries the
  * full host-fill struct for the flux templates. */
 struct AgsForceActiveState {
     Vec3<double>        pos;
-    double              h_search;          /* SIDM 3x-inflated when DM_SIDM */
+    double              h_search;          /* the runner's search radius */
     AgsForceLocalIn     local;
     short int           TimeBin;           /* for hydro-convention wakeup write */
     int                 origin_local_idx;
@@ -289,9 +316,9 @@ static void ags_force_pair_kernel_body(const AgsForceActiveState& active,
     kernel.r = sqrt(r2);
     kernel.h_j = Pj.AGS_KernelRadius;
 
-    /* Pair-overlap filter on UN-inflated radii. Legacy:
-     *   gravity/ags_force_gpu.cc:301-305 — SIDM uses r > h_i+h_j; non-SIDM
-     *   uses r > h_i AND r > h_j (symmetric). */
+    /* Every pair term vanishes once r reaches both kernel radii -- including the
+     * SIDM interaction probability, which sums the two kernels -- so the pair
+     * is dropped when r > h_i AND r > h_j (symmetric). */
     if(kernel.r > kernel.h_i && kernel.r > kernel.h_j) return;
 
     kernel_hinv(kernel.h_j, &kernel.hinv_j, &kernel.hinv3_j, &kernel.hinv4_j);
@@ -383,9 +410,10 @@ struct AgsForceSpec {
     static constexpr const char *loop_name = "ags_force";
     static constexpr ModeBEvalOMP modeb_eval_omp = ModeBEvalOMP::EpsilonAtomic; /* DM_SIDM reads the live Pj.Vel before its atomic kick, so scatters into one particle depend on their order at the level of the integration error, which is accepted; the RNG is counter-based and order-independent */
 
-    /* SIDM pair-filter is r <= h_i+h_j; non-SIDM is r <= max(h_i,h_j). Both
-     * are symmetric pair predicates — neighbor pool must include j with
-     * h_j > h_i and r > h_i (the symmetric search semantic). */
+    /* The pair filter is r <= max(h_i,h_j), with or without SIDM (its
+     * interaction probability sums the two kernels): a symmetric pair
+     * predicate, so the neighbour pool must include j with h_j > h_i and
+     * r > h_i (the symmetric search semantic). */
     static constexpr int                     search_mode        = MODE_B_SEARCH_SYMMETRIC;
     static constexpr unsigned int            neighbor_type_mask = 0xFFFFFFFFu;  /* per-subgroup override */
     /* AGS-force pair physics: h_j reach is P[j].AGS_KernelRadius for every type
@@ -526,7 +554,7 @@ struct AgsForceSpec {
 
         AgsForceLocalIn& L = a.local;
         L.Mass             = dctx.P[i].Mass;
-        L.AGS_KernelRadius = (double)dctx.P[i].AGS_KernelRadius;   /* un-inflated */
+        L.AGS_KernelRadius = (double)dctx.P[i].AGS_KernelRadius;
         L.Pos              = a.pos;
 #if defined(CBE_INTEGRATOR)
         /* In a CBE build local.Vel IS the CBE bulk velocity; load the PREDICTED

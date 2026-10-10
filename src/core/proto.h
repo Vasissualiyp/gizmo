@@ -736,13 +736,16 @@ void gizmo_reset_unmet_split_demand(void);
  * NumPart, the home-rank/home-index maps, and any built CSR stay valid. Returns
  * a ghost_refresh_status; on any GHOST_REFRESH_FAIL_* the caller must fall back
  * to a full ghost_exchange_cleanup() + reimport (fail-closed, never a silent
- * partial refresh). Production callers use ghost_refresh_values() only. */
+ * partial refresh). The outcome is collective: every rank refreshes or none
+ * does, so the fallback is entered by all ranks together. Production callers
+ * use ghost_refresh_values() only. */
 enum ghost_refresh_status {
     GHOST_REFRESH_OK              = 0,  /* in-place value refresh done */
     GHOST_REFRESH_SKIP_SERIAL,          /* NTask<=1: no remote ghosts, nothing to do */
     GHOST_REFRESH_FAIL_NO_POOL,         /* no live ghost pool (NumPart_before_ghost<0) */
     GHOST_REFRESH_FAIL_NO_PROVENANCE,   /* send provenance / comm maps absent */
-    GHOST_REFRESH_FAIL_POOL_MUTATED     /* live-pool counts inconsistent with provenance */
+    GHOST_REFRESH_FAIL_POOL_MUTATED,    /* live-pool counts inconsistent with provenance */
+    GHOST_REFRESH_FAIL_ON_PEER          /* this rank could refresh, another could not */
 };
 int ghost_refresh_values(void);
 /* Monotonic count of completed ghost imports. Read by the hydro corridor, which
@@ -1393,6 +1396,14 @@ void cbe_step_diagnostics_observe_grad_nonfinite(long long count);
  * passes: raw LSQ + pairwise BJ-style limiter); inactive particles retain
  * prior gradient (hydro semantics). */
 void CBEGrad_gradient_calc(void);
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+/* The CBE neighbour corridor (declarations/precompiler_logic.h): CBEGrad's two
+ * passes and AGSForce share one ghost import and one neighbour list per
+ * subgroup (sidm/cbe_integrator_gradients.cc). */
+void cbe_corridor_begin(void);
+void cbe_corridor_refresh(void);
+void cbe_corridor_end(void);
+#endif
 #endif
 #endif
 

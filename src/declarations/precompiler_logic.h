@@ -147,6 +147,9 @@
 #define CBE_INTEGRATOR_PARTICLETYPES 2 /* Particle types carrying a CBE moment distribution (bitmask over Type; default type = 1 */
 #endif
 #define CBE_INTEGRATOR_DOES_TYPE(t) (((1<<(t)) & (CBE_INTEGRATOR_PARTICLETYPES)) != 0) /* macro for utility purposes */
+#if defined(CBE_INTEGRATOR_WITHGRADIENTS) && !defined(DM_SIDM)
+#define CBE_NEIGHBOUR_CORRIDOR /* CBEGrad's two passes and AGSForce share one ghost import and one neighbour list per subgroup (sidm/cbe_integrator_gradients.cc); SIDM types never carry CBE, so a DM_SIDM build keeps the separate searches */
+#endif
 /* CBE collision operators: each can be given a different numerical code to check against in the subroutines employing them */
 #define CBE_COLLISION_MODEL_BGK_ISOTROPIC 1 /* isotropic elastic hard-sphere relaxation to Maxwellian (BGK) */
 #ifdef CBE_INTEGRATOR_COLLISIONS
