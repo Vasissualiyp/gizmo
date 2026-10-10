@@ -221,12 +221,19 @@ struct GradientsSpec
     using IterControl    = NotIterative;
     using DeviceContext  = GradientsDeviceContext;
 
-    /* Per-active host hook: pre-arena search radius from P[i].KernelRadius. */
+    /* Per-active host hook: pre-arena search radius. P[i].KernelRadius, widened
+     * under TURB_DIFF_DYNAMIC to the Velocity_hat filter's support (gradients_loop.cc). */
+#ifdef TURB_DIFF_DYNAMIC
+    static double search_radius(const neighbor_loop_args& args, int active_slot, int i);
+    /* The filter also admits pairs inside the neighbour's widened radius. */
+    static double symmetric_neighbor_radius_scale();
+#else
     static double search_radius(const neighbor_loop_args& /*args*/,
                                  int /*active_slot*/, int i)
     {
         return (double)P[i].KernelRadius;
     }
+#endif
 
     /* Per-call scalars: only the common cosmology block. The pair body reads
      * All.* directly (bare `All.*` is fine under the All-mirror refactor —
@@ -607,8 +614,10 @@ struct GradientsIterSpec
 
     /* ----- Aliased host hooks (SSOT = GradientsSpec) ----- */
     static bool is_active(int i) { return GradientsSpec::is_active(i); }
-    static double search_radius(const neighbor_loop_args& args, int active_slot, int i) {
-        return GradientsSpec::search_radius(args, active_slot, i);
+    /* Ordinary kernel support only: the iteration pass has no Velocity_hat filter,
+     * so it never needs GradientsSpec's widened search. */
+    static double search_radius(const neighbor_loop_args& /*args*/, int /*active_slot*/, int i) {
+        return (double)P[i].KernelRadius;
     }
     static CallScalars populate_call_scalars(const neighbor_loop_args& args) {
         return GradientsSpec::populate_call_scalars(args);

@@ -41,6 +41,9 @@
 #include "hydro_corridor.h"                   /* mode + external_csr accessors */
 #include "compute_finitevol_faces_functions.h"
 #include "gradients_loop.h"
+#ifdef TURB_DIFF_DYNAMIC
+#include "../mesh/ghost_symlist_lifecycle.h"  /* gizmo_ghost_safety_factor */
+#endif
 
 /* MAX/MIN macros mirroring the legacy preset versions from
  * hydro/gradients.cc (mode parameter ignored — these are the symmetric
@@ -98,6 +101,26 @@ void construct_gradient(Vec3<MyDouble>& grad, int i)
         grad = CellP[i].NV_T.matvec(grad);
     }
 }
+
+#ifdef TURB_DIFF_DYNAMIC
+/* ============================================================================
+ * Search reach under TURB_DIFF_DYNAMIC. The pair body accumulates Velocity_hat
+ * over every pair inside either particle's widened radius
+ * (TurbDynamicDiffFac * h, gradient_functions.h), before its ordinary
+ * max(h_i, h_j) test, so the search must reach that far on both sides. The
+ * factor is never below 1: the ordinary gradients still need support to h. It
+ * is the same factor the shared gas neighbour list is built with.
+ * ========================================================================== */
+double GradientsSpec::search_radius(const neighbor_loop_args& /*args*/, int /*active_slot*/, int i)
+{
+    return gizmo_ghost_safety_factor() * (double)P[i].KernelRadius;
+}
+
+double GradientsSpec::symmetric_neighbor_radius_scale()
+{
+    return gizmo_ghost_safety_factor();
+}
+#endif
 
 /* ============================================================================
  * DeviceContext extension: grad_iter ferry. Reads aux->grad_iter set by
@@ -365,6 +388,8 @@ void GradientsIterSpec::apply_active_writeback(const neighbor_loop_args& args,
  * Toplevel: hydro_gradient_calc — replaces the legacy walker in the retired
  * hydro/gradients.cc. Structure:
  *
+ *   0. TURB_DIFF_DYNAMIC: smooth Velocity_bar on its owners, so the refresh
+ *      below ships the value the pair term reads on neighbours.
  *   1. Corridor ghost-value refresh (Mode A; topology was built once at
  *      gizmo_hydro_corridor_begin — this function builds nothing).
  *   2. Allocate GasGradDataPasser off the mymalloc LIFO stack (local
@@ -388,6 +413,17 @@ void hydro_gradient_calc(void)
 {
     CPU_Step[CPU_DENSMISC] += measure_time();
     double t0 = my_second();
+
+#ifdef TURB_DIFF_DYNAMIC
+    /* (0) Velocity_bar takes its smoothing once, on its owner, before anything
+     * reads it on a neighbour: the Velocity_hat pair term differences the
+     * neighbour's Velocity_bar against the particle's own, so the ghost refresh
+     * below must ship the scaled value. Done in either corridor mode, never
+     * inside the refresh (whose fallback can rebuild and repeat). */
+    for(int i : ActiveParticleList) {
+        if(P[i].Type == 0) {CellP[i].Velocity_bar *= All.TurbDynamicDiffSmoothing;}
+    }
+#endif
 
     /* (1) Corridor topology. The shared active list (and, in Mode A, the
      * ghost pool + CSR) was built ONCE at gizmo_hydro_corridor_begin(); this
@@ -445,8 +481,7 @@ void hydro_gradient_calc(void)
 #endif
 #endif
 #ifdef TURB_DIFF_DYNAMIC
-        CellP[i].Velocity_bar *= All.TurbDynamicDiffSmoothing;
-        CellP[i].Velocity_hat = CellP[i].Velocity_bar * smoothInv;
+        CellP[i].Velocity_hat = CellP[i].Velocity_bar * smoothInv;   /* Velocity_bar already smoothed in (0) */
 #endif
 #if defined(ADAPTIVE_GRAVSOFT_FORGAS) || (ADAPTIVE_GRAVSOFT_FORALL & 1)
         P[i].AGS_zeta = 0;
