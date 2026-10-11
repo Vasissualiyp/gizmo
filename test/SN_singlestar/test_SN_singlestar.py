@@ -226,10 +226,9 @@ def test_SN_thermo_fidelity_jaco():
     snapshot:
       1. every cell's T and P on jaco's EOS at its own composition (jaco_eos_violations): u(T), where the shell's H2
          makes it most curved, and P = n k T, which an ideal-gas (gamma - 1) rho u breaks in molecular gas. Full
-         inversion at every call (edcdadd8) and the anchored EOS alike: 0.02% of cells off by more than 1e-3 (48 hot,
-         He- and metal-rich ejecta cells, P up to 11% under n k T at their written Ne), none of the molecular ones.
-         A chord T = u/c_v0, the cached form that took the standard module's remnant energy +64%, puts 42% of the
-         molecular cells off (u(T)); an ideal-gas pressure, 43% (nkT).
+         inversion at every call (edcdadd8) and the anchored EOS alike: no cell off by more than 1e-3 (largest 3e-4,
+         CO). A chord T = u/c_v0, the cached form that took the standard module's remnant energy +64%, puts 41% of the
+         molecular cells off (u(T)); an ideal-gas pressure 2/3 rho u, 28% (nkT).
       2. the remnant's thermal energy, against the full-inversion runs. It guards cooling through the remnant, not
          this EOS: in jaco's frozen-composition EOS the chord is exact in ionized gas, and left it unchanged (1e-4).
     Reads the jaco variant's output; skips if that variant has not run.
@@ -239,9 +238,9 @@ def test_SN_thermo_fidelity_jaco():
     if not snaps:
         pytest.skip("jaco variant output not present")
     v = jaco_eos_violations(str(snaps[-1]))
-    print(f"jaco EOS violations (fraction of cells off by > 1e-3; all, MolecularMassFraction > 0.3 of {v['N'][1]}): "
+    print(f"jaco EOS violations (fraction of cells off by > 1e-3; all, H more than 30% molecular of {v['N'][1]}): "
           f"u(T) {v['u(T)'][0]:.2e}, {v['u(T)'][1]:.2e}; nkT {v['nkT'][0]:.2e}, {v['nkT'][1]:.2e}")
-    assert v["N"][1] >= 500, f"only {v['N'][1]} cells with MolecularMassFraction > 0.3: the shell's H2 regime is not exercised"
+    assert v["N"][1] >= 500, f"only {v['N'][1]} cells with H more than 30% molecular: the shell's H2 regime is not exercised"
     for check in ("u(T)", "nkT"):
         assert max(v[check]) < 0.01, f"{check}: {max(v[check]):.2%} of cells off jaco's EOS by more than 1e-3"
 

@@ -485,8 +485,8 @@ def test_wind_thermo_fidelity_jaco():
     (spawn) jaco variant's final snapshot:
       1. the swept shell's warm molecular gas and every other cell on jaco's EOS at its own composition
          (jaco_eos_violations): u(T) and P = n k T. Full inversion at every call (edcdadd8) and the anchored EOS
-         alike: <= 0.005% of all cells and 0.02% of the molecular ones off by more than 1e-3. A chord T = u/c_v0
-         puts 36% of the molecular cells off.
+         alike: at most 3 of 267k cells off by more than 1e-3, none of the molecular ones. A chord T = u/c_v0 puts 35%
+         of the molecular cells off.
       2. the hot shocked-wind bubble's T/u, set by the ionization the solves left there, against the full-inversion
          runs. Like the original's, it guards the hot gas's composition; the chord, linear there, leaves it unchanged.
     Reads the mode-1 jaco variant's output; skips if absent.
@@ -497,9 +497,9 @@ def test_wind_thermo_fidelity_jaco():
     if not snaps:
         pytest.skip("mode-1 jaco variant output not present")
     v = jaco_eos_violations(str(snaps[-1]))
-    print(f"jaco EOS violations (fraction of cells off by > 1e-3; all, MolecularMassFraction > 0.3 of {v['N'][1]}): "
+    print(f"jaco EOS violations (fraction of cells off by > 1e-3; all, H more than 30% molecular of {v['N'][1]}): "
           f"u(T) {v['u(T)'][0]:.2e}, {v['u(T)'][1]:.2e}; nkT {v['nkT'][0]:.2e}, {v['nkT'][1]:.2e}")
-    assert v["N"][1] >= 5000, f"only {v['N'][1]} cells with MolecularMassFraction > 0.3: the shell has not formed"
+    assert v["N"][1] >= 5000, f"only {v['N'][1]} cells with H more than 30% molecular: the shell has not formed"
     for check in ("u(T)", "nkT"):
         assert max(v[check]) < 0.01, f"{check}: {max(v[check]):.2%} of cells off jaco's EOS by more than 1e-3"
 

@@ -572,17 +572,24 @@ def assert_final_time(snapshot_file: str, test_name: str, rtol: float = 1e-6, ti
     ), f"Snapshot time {time} does not match TimeMax {time_max} (rtol={rtol})"
 
 
-def jaco_eos_violations(snapshot_file: str, tol: float = 1e-3) -> dict:
+def jaco_eos_violations(snapshot_file: str, tol: float = 1e-3, h2_per_neutral_H: bool = True) -> dict:
     """Consistency of a JACO run's gas with jaco's EOS (jaco/eos/eos.py), each cell at its own composition: the
-    species carry 3/2 kT each, H_2 its fitted f_H2(T) kT, and P = n k T. With the composition from the snapshot
-    (ElectronAbundance, MolecularMassFraction, Metallicity, as cooling/jaco.cc packs them; n per H nucleus
-    1 - x_H2 + y + x_metals + x_e):
-      'u(T)': u = (P/rho) [3/2 + (n_H2/n)(f_H2(T) - 3/2)], the temperature's consistency with u at that composition
-      'nkT':  P m_p/(rho k T) proportional to n/n_H X, the pressure's (the constant is the mass per H, here m_p/X)
-    Returns the fraction of cells off by more than tol in each, over all gas and over gas with
-    MolecularMassFraction > 0.3, where H2's rotational levels make u(T) curved; and the cell counts."""
+    species carry 3/2 kT each, H_2 its fitted f_H2(T) kT, P = n k T, and the mass density is the species' masses.
+    The composition is the snapshot's, as cooling/jaco.cc packs it: per H nucleus, x_H2 from MolecularMassFraction,
+    He and metals from Metallicity, and n = 1 - x_H2 + y + x_metals + x_e with x_e = ElectronAbundance (CO, which
+    takes one particle from C and O, is not counted: <= 3e-4 in solar-metallicity molecular gas).
+      'u(T)': u = (k T / m_H) [3/2 (n - x_H2) + x_H2 f_H2(T)], the temperature's consistency with u
+      'nkT':  P / rho = n k T / m_H, the pressure's
+    with m_H the mass per H nucleus. h2_per_neutral_H: MolecularMassFraction is H2 per neutral H nucleus,
+    2 x_H2 / (1 - x_H+), as GIZMO writes it under COOL_MOLECFRAC_NONEQM (on with STARFORGE defaults and COOLING);
+    x_H+ is HII, or ElectronAbundance (capped at 1) where the snapshot has no HII. Otherwise it is 2 x_H2.
+    A cell whose u was raised directly since its last solve, with stale ions, takes CIE ions in place of its
+    ElectronAbundance (jaco_stale_ions), so it shows as off.
+    Returns the fraction of cells off by more than tol in each, over all gas and over gas whose H is more than 30%
+    molecular by mass, where H2's rotational levels make u(T) curved; and the cell counts."""
     import sympy as sp
     from jaco.eos.H2_partition_function import H2_energy_over_kbT
+    from jaco.species_strings import species_mass
 
     T_sym = sp.Symbol("T")
     f_H2 = sp.lambdify(T_sym, H2_energy_over_kbT(T_sym), "numpy")
@@ -592,23 +599,26 @@ def jaco_eos_violations(snapshot_file: str, tol: float = 1e-3) -> dict:
                                                                  "Pressure", "ElectronAbundance",
                                                                  "MolecularMassFraction"))
         Z = g["Metallicity"][:].astype(float).reshape(len(T), -1)
+        x_Hp = g["HII"][:].astype(float) if "HII" in g else np.clip(ne, 0, 1)
         unit_specegy = float(F["Header"].attrs.get("UnitVelocity_In_CGS", 1e5)) ** 2
     Zm = np.minimum(Z[:, 0], 0.25)
-    if Z.shape[1] >= 11:
+    if Z.shape[1] >= 11:  # He, C, N, O, Ne, Mg, Si, S, Ca, Fe tracked; abundances from the mass numbers
         Y = np.minimum(Z[:, 1], 0.35)
         X = 1 - Y - Zm
-        x_metals = (Z[:, 2:11] / np.array([12, 14, 16, 20, 24, 28, 32, 40, 56.])).sum(1) / X
-    else:  # helium untracked, metals at solar ratios scaled by Z (Z_sun = 0.0142, as cooling/jaco.cc packs them)
+        x_k = Z[:, 2:11] / np.array([12, 14, 16, 20, 24, 28, 32, 40, 56.]) / X[:, None]
+    else:  # helium untracked, metals at solar ratios scaled by Z (Z_sun = 0.0142)
         Y = np.full_like(Zm, 1 - 0.76)
         X = 1 - Y - Zm
-        x_metals = 9.77e-4 * Zm / 0.0142
-    x_H2 = 0.5 * fmol
-    n = 1 - x_H2 + 0.25 * Y / X + x_metals + ne
-    P_over_rho = P / rho * unit_specegy
-    off_u = np.abs(u * unit_specegy / (P_over_rho * (1.5 + x_H2 / n * (f_H2(T) - 1.5))) - 1)
-    q = P_over_rho * 1.67262192e-24 / (1.380649e-16 * T) / (n * X)
-    off_p = np.abs(q / np.median(q) - 1)
-    mol = fmol > 0.3
+        x_k = np.outer(Zm / 0.0142, [2.1e-4, 6.8e-5, 4.9e-4, 8.5e-5, 3.2e-5, 3.2e-5, 1.3e-5, 2.2e-6, 2.5e-5])
+    y = 0.25 * Y / X
+    m_H = species_mass("H") + y * species_mass("He") + x_k @ np.array(
+        [species_mass(s) for s in ("C", "N", "O", "Ne", "Mg", "Si", "S", "Ca", "Fe")])
+    x_H2 = 0.5 * fmol * (np.clip(1 - x_Hp, 0, 1) if h2_per_neutral_H else 1)
+    n = 1 - x_H2 + y + x_k.sum(1) + ne
+    kT_over_m = 1.380649e-16 * T / m_H
+    off_u = np.abs(u * unit_specegy / (kT_over_m * (1.5 * (n - x_H2) + x_H2 * f_H2(T))) - 1)
+    off_p = np.abs(P / rho * unit_specegy / (n * kT_over_m) - 1)
+    mol = 2 * x_H2 > 0.3
     return {"u(T)": (np.mean(off_u > tol), np.mean(off_u[mol] > tol) if mol.any() else 0.0),
             "nkT": (np.mean(off_p > tol), np.mean(off_p[mol] > tol) if mol.any() else 0.0),
             "N": (len(T), int(mol.sum()))}
