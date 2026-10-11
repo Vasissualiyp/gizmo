@@ -50,6 +50,22 @@ static const double EQ_TOL = 0.03;      /* ... and then T must be within 3% of a
    IR band; 2 a dark protostellar core, the IR band at 100 K blackbody */
 static int g_rt_field = 0;
 
+#ifdef JACO_HAS_PARAM_A_dust
+/* The dust's absorption of the background radiation as GIZMO's non-RT estimate takes it (RT_ISRF_BACKGROUND, z = 0) at
+   the column N_H: c rho [kappa(2.73 K) e_CMB + kappa_opt e_opt e^-tau + kappa(20 K) ((1 - e^-tau)/2 e_opt + e_IR)], energy
+   densities in eV cm^-3, kappa_opt = 180 Z cm^2/g, the IR opacities the Semenov table's at T_rad = T_dust */
+static double background_dust_absorption(const Params *pr) {
+    const double Z = pr->Z_d, rho = pr->n_Htot * 1.6735575e-24 / pr->X, kappa_opt = 180. * Z;
+    const double e_cmb = 0.262, e_ir = 0.31 * pr->ISRF, e_opt = 0.66 * pr->ISRF + 7.8e-3;
+    const double tau = fmin(kappa_opt * pr->N_H * 1.67262178e-24, 100.);
+    return 2.9979e10 * rho * 1.60217733e-12 *
+           (0.0422 * Z * e_cmb + kappa_opt * e_opt * exp(-tau) + 0.331 * Z * (-0.5 * expm1(-tau) * e_opt + e_ir));
+}
+#endif
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+static void seed_dust_temperature(SolveVars *s, const Params *pr);
+#endif
+
 static void starforge_params(Params *pr, double n, double dt) {
     memset(pr, 0, sizeof(*pr));
 #ifdef JACO_HAS_PARAM_rsol
@@ -100,6 +116,15 @@ static void starforge_params(Params *pr, double n, double dt) {
     pr->x_Fe = 2.5e-5;
     pr->x_O_tot = 4.9e-4;
     pr->z = 0;
+#if defined(JACO_HAS_PARAM_rho) && !defined(JACO_HAS_PARAM_T_rad)
+    pr->rho = n * 1.6735575e-24 / pr->X;
+#endif
+#ifdef JACO_HAS_PARAM_N_H_cool
+    pr->N_H_cool = pr->N_H;
+#endif
+#ifdef JACO_HAS_PARAM_A_dust
+    pr->A_dust = background_dust_absorption(pr);
+#endif
 }
 
 /* Start-of-step values of the time-dependent species from a seed, as gizmo_to_jaco makes them: the H+ seed within
@@ -117,6 +142,9 @@ static void set_initial(SolveVars *s, Params *pr) {
     s->x_photon_IR = (lit * 1. + core * 7.5657e-15 * 1e8 / 1.60217733e-12 + (1 - lit - core) * 0.65) / n;
     if (!(s->Td > 0)) s->Td = 10.;
 #endif
+#endif
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+    if (!(s->Td > 0)) seed_dust_temperature(s, pr);
 #endif
 #ifdef JACO_HAS_PARAM_Td_initial
     pr->Td_initial = s->Td;
@@ -211,6 +239,38 @@ static double diag_derivative(const SolveVars *sv, const Params *pr, const Solve
 
 static const double var_floor[N_VARS] = JACO_VAR_FLOOR_INIT, var_ceiling[N_VARS] = JACO_VAR_CEILING_INIT;
 static const double var_scale[N_VARS] = JACO_VAR_SCALE_INIT;
+
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+/* The dust temperature as the host seeds it: the root of the dust balance at the seed's gas temperature and composition
+   (GIZMO's estimate at the cached temperature), from a walk away from T in the direction the balance points */
+static void seed_dust_temperature(SolveVars *s, const Params *pr) {
+    const double lo = var_floor[IDX_Td], hi = var_ceiling[IDX_Td];
+    SolveVars x = *s, F;
+    static double J[N_VARS][N_VARS];
+    auto row = [&](double Td) {
+        x.Td = Td;
+        microphysics_func_jac(&x, pr, &F, J);
+        return F.Td;
+    };
+    double a = fmin(fmax(s->T, lo), hi), fa = row(a), b = a, fb = fa, fac = 1.1;
+    while (fa != 0 && (fb > 0) == (fa > 0) && b > lo && b < hi) {
+        a = b, fa = fb;
+        b = fa > 0 ? fmin(hi, a * fac) : fmax(lo, a / fac);
+        fb = row(b);
+        fac *= 1.1;
+    }
+    if (fa == 0 || (fb > 0) == (fa > 0)) {
+        s->Td = fa == 0 ? a : b; /* a root, or the bound the balance points past */
+        return;
+    }
+    for (int it = 0; it < 80; it++) {
+        double m = sqrt(a * b), fm = row(m);
+        if ((fm > 0) == (fa > 0)) a = m, fa = fm;
+        else b = m;
+    }
+    s->Td = sqrt(a * b);
+}
+#endif
 static const int var_kind[N_VARS] = JACO_VAR_KIND_INIT;
 static const int var_time_dependent[N_VARS] = JACO_VAR_TIME_DEPENDENT_INIT;
 /* a tier-3 answer solves the sub-steps' backward-Euler equations, not the full step's: only its steady-state rows can be
@@ -602,15 +662,35 @@ static int run_replays(const JacoSolverSettings *set) {
    given, else the case no longer matches the model and fails */
 static int params_by_name(const char *text, Params *pr) {
     static const char *names[N_PARAMS] = JACO_PARAM_NAMES;
+    /* the dust balance's inputs, for cells recorded before it: GIZMO's density, the shielding column, the background */
+    static const char *derived[] = {"rho", "N_H_cool", "A_dust"};
+    int missing_derived = 0;
     for (int k = 0; k < N_PARAMS; k++) {
         char key[64];
         snprintf(key, sizeof(key), " %s=", names[k]);
         const char *q = strstr(text, key);
         if (!q) {
+            int d = 0;
+            for (const char *name : derived) d |= !strcmp(name, names[k]);
+            if (d) {
+                missing_derived = 1;
+                continue;
+            }
             printf("recorded cell: no value for Params.%s\n", names[k]);
             return 1;
         }
         pr->data[k] = strtod(q + strlen(key), NULL);
+    }
+    if (missing_derived) {
+#if defined(JACO_HAS_PARAM_rho) && !defined(JACO_HAS_PARAM_T_rad)
+        if (!strstr(text, " rho=")) pr->rho = pr->n_Htot * 1.6735575e-24 / pr->X;
+#endif
+#ifdef JACO_HAS_PARAM_N_H_cool
+        if (!strstr(text, " N_H_cool=")) pr->N_H_cool = pr->N_H;
+#endif
+#ifdef JACO_HAS_PARAM_A_dust
+        if (!strstr(text, " A_dust=")) pr->A_dust = background_dust_absorption(pr);
+#endif
     }
     return 0;
 }
@@ -627,17 +707,72 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
     const Recorded cells[] = {
 #ifdef JACO_MODEL_STARFORGE
         /* shu_jets[jaco] (MinGasTemp 0, so T_min = 1 K and u_min = 0): dense molecular gas cooled below the CMB by
-           expansion, its energy root near 1.6 K, where the H2 cooling's Jacobian was not finite; every tier failed */
+           expansion, its energy root near 1.6 K, where the H2 cooling's Jacobian was not finite; every tier failed.
+           Recorded before the optically-thick limit: kappa_thick is GIZMO's opacity floor, its value at this T */
         {"shu_jets 1.8K molecular", 96026865.17575416, 1.8327357182447774, 1e-20, 1e-20, 1e-20, 0.49999999987066052,
          " Delta_t=18833483.88671875 Delta_x=1665022286145074 G_0=6.536608459132372e-28 G_LW=1 ISRF=1"
          " N_H=7.5481994987645799e+22 Td=2.8020555354610974 X=0.71550000000000002 Z_d=1 f_d=1 f_metal=0 f_neb=0"
-         " grad_v=2.3111437077742243e-10 grad_v_tf=8.6221397732264687e-11 n_Htot=1430418.353342931"
+         " grad_v=2.3111437077742243e-10 grad_v_tf=8.6221397732264687e-11 kappa_thick=0.1 n_Htot=1430418.353342931"
          " pdv_work=-5.1417100242972378e-18 u_initial=96026865.17575416 x_C_tot=0.00029466573491730724"
          " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.49999999987066052"
          " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
          " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05"
          " y=0.094444444444444442 z=0",
          1.0, 0.0},
+#endif
+        /* second_collapse first cores (MinGasTemp 2.73: T_min 2.73 K, u_min = MinEgySpec), every tier failed: the
+           optically-thick limit's sum held the gas-dust exchange at a dust temperature fixed at the start of the step,
+           so the capped heat swung from +L to -L within ~1e-4 K, below tier 2's resolution in T, and the energy root lay
+           inside that swing. Recorded with jaco models that gave the gas all the formation energy where collisions
+           de-excite H2 (as starforge does where its limit binds) and without chemical heat, before the dust temperature
+           was solved (its inputs derived: params_by_name) */
+#ifdef JACO_MODEL_STARFORGE
+        {"first-core 1503K", 121395656386.58861, 1502.6913751144459, 2.6583749289755265e-10, 9.9999999999999995e-21, 9.9999999999999995e-21,
+         0.49976333392480921,
+         " Delta_t=9416741.943359375 Delta_x=5342715284255.708 G_0=1e-56 G_LW=1 ISRF=1 N_H=1.7071697376831721e+27"
+         " Td=1502.6913751183192 X=0.71550000000000002 Z_d=1 f_d=1 f_metal=0 f_neb=0 grad_v=3.7297954479421038e-08"
+         " grad_v_tf=3.710957580303564e-08 kappa_thick=0.10142043361851594 n_Htot=55417520671203.992"
+         " pdv_work=-4.0607759935402228e-08 u_initial=121395656386.58861 x_C_tot=0.00029466573491730724"
+         " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.49976333392480921"
+         " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
+         " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05 y=0.094444444444444442"
+         " z=0",
+         2.73, 160803223.3050341},
+        {"first-core 1560K", 126848143385.8636, 1560.0406810550498, 1.0152424951204672e-09, 9.9999999999999995e-21, 9.9999999999999995e-21,
+         0.49435455247069165,
+         " Delta_t=4708370.9716796875 Delta_x=4849021243044.3115 G_0=1e-56 G_LW=1 ISRF=1 N_H=1.5664002354632944e+27"
+         " Td=1560.0406810579086 X=0.71550000000000002 Z_d=1 f_d=1 f_metal=0 f_neb=0 grad_v=3.682738719009536e-08"
+         " grad_v_tf=3.5376771531895884e-08 kappa_thick=0.10142066914299352 n_Htot=74126061386718.734"
+         " pdv_work=1.5381703708575156e-07 u_initial=126848143385.8636 x_C_tot=0.00029466573491730724"
+         " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.49435455247069165"
+         " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
+         " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05 y=0.094444444444444442"
+         " z=0",
+         2.73, 160803223.3050341},
+        {"first-core 1545K", 125505333440.98076, 1545.3738582429171, 7.8461893018545112e-11, 9.9999999999999995e-21, 9.9999999999999995e-21,
+         0.49455937852986848,
+         " Delta_t=9416741.943359375 Delta_x=4988611289949.9717 G_0=1e-56 G_LW=1 ISRF=1 N_H=2.4643763253261002e+27"
+         " Td=1545.3738582460401 X=0.71550000000000002 Z_d=1 f_d=1 f_metal=0 f_neb=0 grad_v=1.6663859089143204e-08"
+         " grad_v_tf=1.6646775224486218e-08 kappa_thick=0.10142059626920231 n_Htot=68076025036018.234"
+         " pdv_work=7.1301492360397882e-09 u_initial=125505333440.98076 x_C_tot=0.00029466573491730724"
+         " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.49455937852986848"
+         " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
+         " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05 y=0.094444444444444442"
+         " z=0",
+         2.73, 160803223.3050341},
+#endif
+#ifdef JACO_MODEL_STARFORGE_LEDGER_NOCHEMHEAT
+        {"first-core 2357K", 224846258325.71915, 2356.729456984202, 9.9999999999999995e-21, 9.9999999999999995e-21, 9.9999999999999995e-21,
+         0.047480308298565768,
+         " Delta_t=2354185.4858398438 Delta_x=4138172191422.4985 G_0=1e-56 G_LW=1 ISRF=1 N_H=2.2226915267654074e+27"
+         " Td=2356.7294569857277 X=0.71550000000000002 Z_d=1 f_d=1 f_metal=0 f_neb=0 grad_v=3.2671795155385872e-08"
+         " grad_v_tf=3.2453549794235623e-08 kappa_thick=0.10144034349283229 n_Htot=119263489288751.3"
+         " pdv_work=-4.8308249402629834e-08 u_initial=224846258325.71915 x_C_tot=0.00029466573491730724"
+         " x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05 x_H_2_initial=0.047480308298565768"
+         " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
+         " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05 y=0.094444444444444442"
+         " z=0",
+         2.73, 160803223.3050341},
 #endif
 #ifdef JACO_MODEL_STARFORGE_LEGACY
         /* SN_singlestar with JACO=starforge_legacy: He++ decays onto its floor from the ionized seed, and the line search
@@ -692,6 +827,9 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
         sv.x_H_2 = cells[c].x_H_2;
         char why[256] = "ok";
         int bad = params_by_name(cells[c].params, &pr);
+#if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
+        if (!bad) seed_dust_temperature(&sv, &pr); /* as the host seeds it */
+#endif
         JacoSolveInfo info = {};
         SolveVars in = sv;
         JacoSolverSettings cs = *set;
@@ -900,9 +1038,10 @@ static void run_sweep(const JacoSolverSettings *set, int full, Stats &sweep, Sta
         if (pr.Delta_t >= 1e13 && !info.pinned && st.fail + st.check_fail == fails_before) {
             double shift, dist;
             int r = near_root(&sv, &pr, set, &shift, &dist);
-            if (r == 2)
+            if (r == 2) {
                 st.eq_ref_fail++;
-            else if (shift < EQ_GATE) {
+                printf("REFERENCE FAILURE (%s): the equilibrium reference's chemistry failed\n", c.what);
+            } else if (shift < EQ_GATE) {
                 st.eq_gated++;
                 if (r == 0)
                     st.eq_match++;
@@ -1158,6 +1297,9 @@ int main(int argc, char **argv) {
         int do_warm = argc > 10 ? atoi(argv[10]) : 0;
         Params pr;
         starforge_params(&pr, n, dt);
+#ifdef JACO_HAS_PARAM_rsol
+        if (dt >= DT_EQ) pr.rsol = 0; /* as the sweep's equilibrium set */
+#endif
         pr.pdv_work = pdv;
         SolveVars sv = {};
         seed_variant(&sv, T0, variant, pr.y);
@@ -1178,6 +1320,12 @@ int main(int argc, char **argv) {
         char why[256] = "ok";
         double worst = 0;
         if (!rc) check_answer(&sv, &pr, &set, why, &worst);
+        if (!rc && getenv("JACO_NEAR_ROOT")) { /* the equilibrium reference at the answer, its chemistry traced */
+            double shift, dist;
+            JacoSolverSettings v = set;
+            v.verbose = atoi(getenv("JACO_NEAR_ROOT"));
+            printf("near_root: %d\n", near_root(&sv, &pr, &v, &shift, &dist));
+        }
         printf("rc=%d tier=%d nfeval=%d nonfinite_jac=%d pinned=%d T=%.9g xHp=%.4g xHep=%.4g xHepp=%.4g xH2=%.4g", rc, info.tier,
                info.nfeval, info.n_nonfinite_jac, info.pinned, sv.T, sv.x_Hplus, sv.x_Heplus, sv.x_Heplusplus, sv.x_H_2);
 #ifdef JACO_HAS_VAR_Td

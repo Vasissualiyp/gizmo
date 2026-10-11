@@ -1051,6 +1051,7 @@ void read_file(char *fname, int readTask, int lastTask)
 #if defined(IO_MOLECFRAC_NOT_IN_ICFILE)
             if(RestartFlag == 2 && blocknr == IO_MOLECULARFRACTION) {continue;}
 #endif
+            if(blocknr == IO_JACO_LEDGER) {continue;} /* the ledger restarts from zero */
 
 #if defined(IO_DUST_NOT_IN_ICFILE)
 #if defined(GALSF_ISMDUSTCHEM_MODEL)

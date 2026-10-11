@@ -1600,6 +1600,18 @@ case IO_DUSTCHEM_SHAT_MASSRATE:    /* shattering rate for each grain size bin fo
 #endif
             break;
 
+        case IO_JACO_LEDGER:
+#ifdef JACO_LEDGER
+            for(n = 0; n < pc; pindex++)
+                if(P[pindex].Type == type)
+                {
+                    for(k=0;k<JACO_LEDGER_N;k++) {fp[k] = (MyOutputFloat) CellP[pindex].JacoLedger[k];}
+                    fp += JACO_LEDGER_N;
+                    n++;
+                }
+#endif
+            break;
+
         case IO_RADGAMMA:
 #if defined(RADTRANSFER) || defined(RT_USE_GRAVTREE_SAVE_RAD_ENERGY)
             for(n = 0; n < pc; pindex++)
@@ -2104,6 +2116,15 @@ int get_bytes_per_blockelement(enum iofields blocknr, int mode)
 #endif
             break;
 
+        case IO_JACO_LEDGER:
+#ifdef JACO_LEDGER
+            if(mode)
+                bytes_per_blockelement = (JACO_LEDGER_N) * sizeof(MyInputFloat);
+            else
+                bytes_per_blockelement = (JACO_LEDGER_N) * sizeof(MyOutputFloat);
+#endif
+            break;
+
         case IO_RADGAMMA:
 #if defined(RADTRANSFER) || defined(RT_USE_GRAVTREE_SAVE_RAD_ENERGY)
             if(mode)
@@ -2448,6 +2469,12 @@ int get_values_per_blockelement(enum iofields blocknr)
 #endif
             break;
 
+        case IO_JACO_LEDGER:
+#ifdef JACO_LEDGER
+            values = JACO_LEDGER_N;
+#endif
+            break;
+
         case IO_RADGAMMA:
 #if defined(RADTRANSFER) || defined(RT_USE_GRAVTREE_SAVE_RAD_ENERGY)
             values = N_RT_FREQ_BINS;
@@ -2611,6 +2638,7 @@ long get_particles_in_block(enum iofields blocknr, int *typelist)
 
         case IO_PARTVEL:
         case IO_RAD_ACCEL:
+        case IO_JACO_LEDGER:
         case IO_HYDROACCEL:
         case IO_RADGAMMA:
         case IO_RAD_OPACITY:
@@ -2804,6 +2832,12 @@ int blockpresent(enum iofields blocknr)
         case IO_NE:
         case IO_NH:
 #if (defined(COOLING) || defined(RADTRANSFER)) && !defined(CHIMES)
+            return 1;
+#endif
+            break;
+
+        case IO_JACO_LEDGER:
+#ifdef JACO_LEDGER
             return 1;
 #endif
             break;
@@ -3774,6 +3808,9 @@ void get_Tab_IO_Label(enum iofields blocknr, char *label)
         case IO_PRESSURE:
             strncpy(label, "P   ", 4);
             break;
+        case IO_JACO_LEDGER:
+            strncpy(label, "JLDG", 4);
+            break;
         case IO_RADGAMMA:
             strncpy(label, "RADG", 4);
             break;
@@ -3910,6 +3947,9 @@ void get_dataset_name(enum iofields blocknr, char *buf)
             break;
         case IO_NH:
             strcpy(buf, "NeutralHydrogenAbundance");
+            break;
+        case IO_JACO_LEDGER:
+            strcpy(buf, "JacoLedger");
             break;
         case IO_RADGAMMA:
             strcpy(buf, "PhotonEnergy");
