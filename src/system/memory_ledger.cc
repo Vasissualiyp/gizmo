@@ -624,6 +624,12 @@ int gizmo_memory_preflight(void)
 #ifdef CHIMES
                        + (long long) All.MaxPartGas * (long long) sizeof(struct gasVariables)    /* ChimesGasVars (host, outside the Base arena) */
 #endif
+#ifdef NEIGHBOR_LOOP_MODE_D
+                       + (long long) All.MaxPart    * (long long) (sizeof(unsigned int) + sizeof(int))  /* the fused walk's touched set: stamps + list */
+#endif
+#if defined(GALSF_FB_FIRE_RT_LOCALRP) || defined(GRAIN_BACKREACTION)
+                       + (long long) All.MaxPart    * (long long) (sizeof(unsigned int) + sizeof(int))  /* the motion-target set of a loop that kicks its neighbours: stamps + list */
+#endif
                        ;
     /* The gravity tree built over them: the node arrays, and the mirror of those nodes the
      * gravity walk reads. Both are sized from the same node count. The foreign nodes imported
