@@ -128,8 +128,9 @@ static void starforge_params(Params *pr, double n, double dt) {
 }
 
 /* Start-of-step values of the time-dependent species from a seed, as gizmo_to_jaco makes them: the H+ seed within
-   what H2 leaves. Matters only where H+ is time-dependent (TD=...): the sweep's seeds overfill the H budget on purpose,
-   which the solver clamps, but start-of-step values that overfill it define a different problem than the one checked. */
+   what H2 leaves, less the solver's budget margin (sanitize). Matters only where H+ is time-dependent: the sweep's seeds
+   overfill the H budget on purpose, which the solver clamps, but start-of-step values that the solver rescales define a
+   different problem than the one checked (the H2 row of the legacy RT models reads x_H+'s start-of-step value). */
 static void set_initial(SolveVars *s, Params *pr) {
 #ifdef JACO_HAS_VAR_x_photon_EUV
     /* the bands start the step, and the solve, at the field's energies (per H nucleus; photons for the ionizing band) */
@@ -150,7 +151,7 @@ static void set_initial(SolveVars *s, Params *pr) {
     pr->Td_initial = s->Td;
 #endif
     SolveVars c = *s;
-    c.x_Hplus = fmin(c.x_Hplus, 1 - 2 * c.x_H_2);
+    c.x_Hplus = fmin(c.x_Hplus, (1 - 1e-10) - 2 * c.x_H_2);
     jaco_initial_from_state(&c, pr);
 }
 
@@ -273,6 +274,7 @@ static void seed_dust_temperature(SolveVars *s, const Params *pr) {
 #endif
 static const int var_kind[N_VARS] = JACO_VAR_KIND_INIT;
 static const int var_time_dependent[N_VARS] = JACO_VAR_TIME_DEPENDENT_INIT;
+static const int var_initial_param[N_VARS] = JACO_VAR_INITIAL_PARAM_INIT;
 /* a tier-3 answer solves the sub-steps' backward-Euler equations, not the full step's: only its steady-state rows can be
    checked against the full step */
 static int g_check_subcycled = 0;
@@ -813,6 +815,27 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
          " x_O_tot=0.00053546485225023515 x_S=1.4456674591489198e-05 x_Si=3.5539584271264792e-05 y=0.094444446740143573"
          " z=0"},
 #endif
+#ifdef JACO_MODEL_STARFORGE_LEGACY_RT
+        /* fullphysics_mini[jaco_rt] (MinGasTemp 2.73): dense molecular gas with x_H at round-off holding ionizing
+           photons, which the model absorbed on atomic H only; every tier failed. The bands and Td start from their
+           start-of-step values, as the host seeds them */
+        {"mini 58K molecular EUV", 3069644260.9614263, 58.423456183514133, 3.1383129126688671e-07, 1.0533169437492183e-12,
+         9.9999999999999995e-21, 0.49999984308435091,
+         " Delta_t=678955078.125 Delta_x=7339929347548434 G_LW_bg=0 ISRF=1 N_H=2.2891081539155263e+24"
+         " T_CMB=2.73 T_rad=57.38516032925645 Td_initial=57.984197285085685 X=0.71550000000000002 Z_d=1"
+         " Z_metals=0.014200000000000001 eps_H0_UVB=0 eps_HI=4.7958698381434364e-12 f_metal=0 f_neb=1"
+         " gamma_12_UVB=0 gamma_eos=1.6569543735110932 grad_v=3.3218626108924024e-12"
+         " hnu_EUV=18.612753515255079 n_Htot=10691826.828142313 pdv_work=1.4957947846746285e-19"
+         " rho=2.5162393192435296e-17 rsol=0.0001 sigma_HI=3.3683402547443736e-18 u_initial=3069644260.9614263"
+         " x_C_tot=0.00029466573491730724 x_Ca=2.4004192872117401e-06 x_Fe=3.4441449535789159e-05"
+         " x_H_2_initial=0.49999984308435091 x_Hplus_initial=3.1383129126688671e-07"
+         " x_Mg=4.4083391567668295e-05 x_N=7.3974243785564537e-05 x_Ne=9.3640810621942704e-05"
+         " x_O_tot=0.0005354647099930119 x_S=1.4456673654786863e-05 x_Si=3.5539582709394029e-05"
+         " x_photon_EUV_initial=0.0018110775290275654 x_photon_FUV_initial=4.1463150299754921e-10"
+         " x_photon_IR_initial=0.0047440329191881445 x_photon_NUV_initial=3.5045818035298207e-10"
+         " x_photon_ONIR_initial=1.9716085063116887e-09 y=0.094444444444444442 z=0",
+         2.73, 160803223.3050341},
+#endif
     };
     int nfail = 0, ncells = sizeof(cells) / sizeof(cells[0]);
     if (ncells) printf("\n== recorded cells ==\n");
@@ -827,8 +850,12 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
         sv.x_H_2 = cells[c].x_H_2;
         char why[256] = "ok";
         int bad = params_by_name(cells[c].params, &pr);
+        for (int k = IDX_x_H_2 + 1; k < N_VARS && !bad; k++) /* the bands, from their start-of-step values */
+            if (var_initial_param[k] >= 0) sv.data[k] = pr.data[var_initial_param[k]];
 #if defined(JACO_HAS_VAR_Td) && !defined(JACO_HAS_VAR_x_photon_IR)
         if (!bad) seed_dust_temperature(&sv, &pr); /* as the host seeds it */
+#elif defined(JACO_HAS_VAR_Td)
+        sv.Td = pr.Td_initial;
 #endif
         JacoSolveInfo info = {};
         SolveVars in = sv;
