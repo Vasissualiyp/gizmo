@@ -80,22 +80,15 @@ void gizmo_hydro_corridor_decide_mode(void)
     g_corridor_mode = GizmoHydroCorridorMode::MODE_A;
     return;
 #endif
-    /* Adaptive dispatch, mirroring the runner's per-loop policy:
-       Mode B iff sum > 0 && sum <= threshold_sum && max <= threshold_max.
-       Thresholds from the optional NeighborLoopModeBThreshold{Sum,Max} params
-       (-1 = unset -> corridor default; any set value overrides, <= 0 disables
-       Mode B). TRANSPORT_SUBCYCLE has already forced Mode A above. */
+    /* Adaptive dispatch: the runner's Mode-B rule (nlr_mode_b_rule), with the
+       corridor's own defaults standing in where the optional
+       NeighborLoopModeBThreshold{Sum,Max} params are unset. TRANSPORT_SUBCYCLE
+       has already forced Mode A above. */
     int sum_active_gas = 0, max_active_gas = 0;
     global_active_gas_counts(&sum_active_gas, &max_active_gas);
-    const struct global_data_all_processes *host_all = nlr_host_all_ptr();
-    int threshold_sum = (host_all->NeighborLoopModeBThresholdSum != -1)
-                            ? host_all->NeighborLoopModeBThresholdSum
-                            : CORRIDOR_DEFAULT_MODEB_THRESHOLD_SUM;
-    int threshold_max = (host_all->NeighborLoopModeBThresholdMax != -1)
-                            ? host_all->NeighborLoopModeBThresholdMax
-                            : CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX;
-    bool select_mode_b = (sum_active_gas > 0) && (sum_active_gas <= threshold_sum)
-                                             && (max_active_gas <= threshold_max);
+    bool select_mode_b = nlr_mode_b_rule(sum_active_gas, max_active_gas,
+                                         CORRIDOR_DEFAULT_MODEB_THRESHOLD_SUM,
+                                         CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX);
     GizmoHydroCorridorMode mode = select_mode_b ? GizmoHydroCorridorMode::MODE_B
                                                 : GizmoHydroCorridorMode::MODE_A;
     g_corridor_mode = mode;

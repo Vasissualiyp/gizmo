@@ -1468,7 +1468,7 @@ struct NeighborLoopPlan {
         ModeD_DeviceFused /* the request/reply transport with the owner's walk
                           * and evaluation fused on the device; reads the
                           * arena, drifts only what the walk touches, imports
-                          * nothing. Chosen only in builds with NEIGHBOR_LOOP_MODE_D. */
+                          * nothing. Chosen by nlr_select_mode. */
         /* Future paths: add cases here AND to nlr_path_*() predicates below. */
     };
     Path path;
@@ -1509,9 +1509,10 @@ const char *nlr_path_label(NeighborLoopPlan::Path path);
  *                                     Hard-corridor invariant enforcement
  *
  * Execution path is chosen by the runner from a small enum (Mode A GPU NGL,
- * Mode B local, Mode B remote, future paths). Selection precedence:
+ * Mode B local, Mode B remote, Mode D, future paths). Selection precedence:
  * args.dispatch_override > threshold dispatch on num_active_global vs the
- * parameterfile NeighborLoopModeBThreshold pair > Spec::modeb_threshold_*.
+ * parameterfile NeighborLoopModeBThreshold pair > Spec::modeb_threshold_*,
+ * then Mode D against the NeighborLoopModeDThreshold pair (nlr_select_mode).
  * Future paths add a case to the dispatch + the path-predicate helpers
  * (nlr_path_uses_imported_ghosts, nlr_path_uses_gpu_arena, etc.) and never
  * add fields to the plan struct itself — path is the single-source-of-truth.
@@ -2023,10 +2024,10 @@ constexpr bool nlr_spec_has_reset_per_iter_device_context_v =
  * code-level dispatch policy constants for the loop, decided alongside the
  * physics. They are NOT user-tunable runtime parameters.
  *
- * The only runtime override is the parameterfile pair
- * NeighborLoopModeBThreshold{Sum,Max}, so the value a run used is recorded in
- * its parameter log. See the dispatch-policy block in
- * mesh/neighbor_loop_runner.cc.
+ * The runtime overrides are the parameterfile pairs
+ * NeighborLoopModeBThreshold{Sum,Max} and NeighborLoopModeDThreshold{Sum,Max},
+ * so the values a run used are recorded in its parameter log. See the
+ * dispatch-policy block in mesh/neighbor_loop_runner.cc.
  *
  * Resolution precedence (parameterfile > Spec constexpr) is applied by the
  * _for() lookups.
@@ -2034,13 +2035,29 @@ constexpr bool nlr_spec_has_reset_per_iter_device_context_v =
 
 int  gizmo_nlr_modeb_threshold_sum_for(const char *loop_name, int spec_default);
 int  gizmo_nlr_modeb_threshold_max_for(const char *loop_name, int spec_default);
-/* The runner's adaptive A/B choice for Spec at these GLOBAL active counts
- * (summed, per-rank max): true = Mode B.  The one rule both runner entries
- * use; a caller deciding for a span of loops at once (a corridor) asks it
- * for the loop whose choice it stands in for.  Instantiated in
- * neighbor_loop_runner.cc for the Specs a caller asks about. */
+/* The Mode-B rule at these GLOBAL active counts (summed, per-rank max), with
+ * the given defaults standing in where the parameterfile pair is unset: Mode B
+ * iff any rank has work and both counts are within the thresholds.  Shared by
+ * the runner and the hydro corridor, which has its own defaults. */
+bool nlr_mode_b_rule(int sum_active, int max_active, int default_sum, int default_max);
+/* The Mode-D lower bounds (summed, per-rank max) from the parameterfile pair
+ * NeighborLoopModeDThreshold{Sum,Max}.  Returns false when Mode D is off for
+ * the run: both parameters unset in a build without NEIGHBOR_LOOP_MODE_D.  Both
+ * unset with it = 0/0; one unset beside a set one = 0 for that bound. */
+bool gizmo_nlr_moded_thresholds(int *threshold_sum, int *threshold_max);
+
+/* The three ways the runner answers a neighbour query. */
+enum class NlrMode { A, B, D };
+/* The runner's adaptive mode for Spec at these GLOBAL active counts (summed,
+ * per-rank max): B by the Mode-B rule; else D when the loop can be answered by
+ * the fused device walk and both Mode-D lower bounds are met; else A.  D is a
+ * request: the caller still needs every rank able to walk on the device, and
+ * answers A otherwise.  The one rule both runner entries use; a caller
+ * deciding for a span of loops at once (a corridor) asks it for the loop whose
+ * choice it stands in for.  Instantiated in neighbor_loop_runner.cc for the
+ * Specs a caller asks about. */
 template <typename Spec>
-bool nlr_threshold_selects_mode_b(int sum_active, int max_active);
+NlrMode nlr_select_mode(int sum_active, int max_active);
 /* The union ghost import a subgrouped Mode-A call of Spec makes (actives and
  * their unpadded search radii, the OR of the subgroup masks); collective.  The
  * iterative driver's recipe, for a caller importing in Spec's place.

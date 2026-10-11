@@ -212,7 +212,7 @@ void nlr_free_active_list(int *active_list)
 }
 
 /* ============================================================================
- * Mode-A/B dispatch thresholds
+ * Mode-A/B/D dispatch thresholds
  *
  * Production dispatch policy is the constexpr Spec::modeb_threshold_sum and
  * Spec::modeb_threshold_max in each NeighborLoopSpec — those are code-level
@@ -223,8 +223,12 @@ void nlr_free_active_list(int *active_list)
  *      any other value overrides, <= 0 disables Mode B)
  *   2. Spec::modeb_threshold_{sum,max} constexpr (code default)
  *
- * The threshold is settable ONLY from the parameterfile, so the value a run
- * used is recorded in its parameter log.
+ * Mode D, on the calls Mode B does not take, needs both counts at or above the
+ * parameterfile pair NeighborLoopModeDThreshold{Sum,Max} (see
+ * gizmo_nlr_moded_thresholds for the unset defaults).
+ *
+ * The thresholds are settable ONLY from the parameterfile, so the values a run
+ * used are recorded in its parameter log.
  * ========================================================================== */
 
 int gizmo_nlr_modeb_threshold_sum_for(const char *loop_name, int spec_default)
@@ -242,6 +246,32 @@ int gizmo_nlr_modeb_threshold_max_for(const char *loop_name, int spec_default)
        Spec default; any other value overrides it (<= 0 disables Mode B). */
     { int p = nlr_host_all_ptr()->NeighborLoopModeBThresholdMax; if(p != -1) return p; }
     return spec_default;
+}
+
+bool nlr_mode_b_rule(int sum_active, int max_active, int default_sum, int default_max)
+{
+    const int TS = gizmo_nlr_modeb_threshold_sum_for(nullptr, default_sum);
+    const int TM = gizmo_nlr_modeb_threshold_max_for(nullptr, default_max);
+    return (sum_active > 0) && (sum_active <= TS) && (max_active <= TM);
+}
+
+bool gizmo_nlr_moded_thresholds(int *threshold_sum, int *threshold_max)
+{
+    const int p_sum = nlr_host_all_ptr()->NeighborLoopModeDThresholdSum;
+    const int p_max = nlr_host_all_ptr()->NeighborLoopModeDThresholdMax;
+    if(p_sum == -1 && p_max == -1) {
+        /* Unset: the build's default.  NEIGHBOR_LOOP_MODE_D builds have always
+         * taken Mode D wherever Mode B was not chosen; other builds never did. */
+#ifdef NEIGHBOR_LOOP_MODE_D
+        *threshold_sum = 0; *threshold_max = 0;
+        return true;
+#else
+        return false;
+#endif
+    }
+    *threshold_sum = (p_sum == -1) ? 0 : p_sum;
+    *threshold_max = (p_max == -1) ? 0 : p_max;
+    return true;
 }
 
 
@@ -1893,7 +1923,6 @@ static void run_mode_b_remote(const neighbor_loop_args& args, const double *radi
     run_mode_b_remote_impl<Spec>(args, radii);
 }
 
-#ifdef NEIGHBOR_LOOP_MODE_D
 /* Whether a loop can be answered by the fused device walk at all: a one-way
  * search whose pair kernel may run concurrently, and whose active rebinding
  * the device evaluation does not perform.  Compile-time, so the machinery is
@@ -1981,7 +2010,6 @@ static void run_mode_d(const neighbor_loop_args& args, const double *radii,
      * the change of backend is invisible to every other rank. */
     if(!evaluated) {run_mode_b_local<Spec>(args, radii);}
 }
-#endif
 
 /* ============================================================================
  * Caller-built list helpers (corridor support; see struct nlr_external_csr).
@@ -2674,17 +2702,27 @@ static int nlr_spec_threshold_max(int fallback) {
     }
 }
 
-/* The adaptive A/B rule, one definition: Mode B iff any rank has work and the
- * summed and per-rank-max active counts are both within the thresholds
+/* The adaptive A/B/D rule, one definition.  Mode B by the Mode-B rule
  * (parameterfile NeighborLoopModeBThreshold{Sum,Max}, else the Spec's
- * modeb_threshold_{sum,max}, else 64/64).  Collective inputs, so every rank
- * answers alike. */
+ * modeb_threshold_{sum,max}, else 64/64).  Otherwise Mode D when the loop can
+ * be answered by the fused device walk, some rank has work, and both counts
+ * meet the Mode-D lower bounds; otherwise Mode A.  Collective inputs, so every
+ * rank answers alike.  Nothing here touches Mode D's state: a call answered by
+ * A or B pays nothing for D. */
 template <typename Spec>
-bool nlr_threshold_selects_mode_b(int sum_active, int max_active)
+NlrMode nlr_select_mode(int sum_active, int max_active)
 {
-    const int TS = gizmo_nlr_modeb_threshold_sum_for(Spec::loop_name, nlr_spec_threshold_sum<Spec>(64));
-    const int TM = gizmo_nlr_modeb_threshold_max_for(Spec::loop_name, nlr_spec_threshold_max<Spec>(64));
-    return (sum_active > 0) && (sum_active <= TS) && (max_active <= TM);
+    if(nlr_mode_b_rule(sum_active, max_active, nlr_spec_threshold_sum<Spec>(64), nlr_spec_threshold_max<Spec>(64))) {
+        return NlrMode::B;
+    }
+    if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
+        int TDS = 0, TDM = 0;
+        if(sum_active > 0 && gizmo_nlr_moded_thresholds(&TDS, &TDM) &&
+           sum_active >= TDS && max_active >= TDM) {
+            return NlrMode::D;
+        }
+    }
+    return NlrMode::A;
 }
 
 /* ============================================================================
@@ -2936,6 +2974,9 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
      * only where something needs it — the threshold decision itself, and the
      * forced-Mode-B size guard. It is never computed merely to report it. */
     bool select_mode_b = force_b;
+    /* Mode D is asked for only on the threshold path: an override is honoured
+     * as given. */
+    NlrMode selected_mode = force_b ? NlrMode::B : NlrMode::A;
     int global_num_active = -1;       /* -1 = not computed on this path */
     if(!force_a && !force_b) {
         int local_act = args.num_active;
@@ -2943,7 +2984,8 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
         MPI_Allreduce(&local_act, &sum_act, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         MPI_Allreduce(&local_act, &max_act, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
         global_num_active = sum_act;
-        select_mode_b = nlr_threshold_selects_mode_b<Spec>(sum_act, max_act);
+        selected_mode = nlr_select_mode<Spec>(sum_act, max_act);
+        select_mode_b = (selected_mode == NlrMode::B);
     } else if(force_b) {
         /* Forced Mode B skipped the dispatch Allreduce, but its size guard
          * needs the global count, so it is done here. */
@@ -2994,17 +3036,13 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
      * own note.  Declared here so it outlives the decision below and the execution further
      * down, both of which can route away from Mode D after the epoch is already open. */
     GxTouchedEpochGuard touched_epoch{0};
-#ifdef NEIGHBOR_LOOP_MODE_D
-    /* Mode D takes the calls Mode A would have taken, for every loop it can
-     * serve, when every rank can describe its tree to the device -- the same
-     * decision the iterative driver makes, and for the same reasons (stated
-     * there).  A caller-owned neighbour list is Mode A by construction, and an
-     * explicit override is honoured as given.  The vote is collective; the
-     * label was chosen from a collective too, so every rank reaches it. */
+    /* Mode D takes the calls nlr_select_mode gives it, when every rank can
+     * describe its tree to the device -- the same decision the iterative driver
+     * makes, and for the same reasons (stated there).  A caller-owned neighbour
+     * list is Mode A by construction.  The vote is collective; the mode was
+     * chosen from a collective too, so every rank reaches it. */
     if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
-        if((plan.path == NeighborLoopPlan::Path::ModeA_GpuNgl ||
-            (nlr_spec_needs_live_neighbours_v<Spec> && !select_mode_b)) && !force_a &&
-           args.external_csr == nullptr) {
+        if(selected_mode == NlrMode::D && args.external_csr == nullptr) {
             const int ready_local = (gx_device_fused_walk_prepare(&mode_d_tree, Spec::loop_name) == 0) ? 1 : 0;
             /* This rank's epoch is open exactly when its own preparation succeeded, whatever
              * the vote below decides for the call. */
@@ -3014,7 +3052,6 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
             if(ready) {plan.path = NeighborLoopPlan::Path::ModeD_DeviceFused;}
         }
     }
-#endif
 
 
     /* ---- Stage radii once ---- */
@@ -3113,13 +3150,11 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
             run_mode_b_remote<Spec>(args, radii.data());
             break;
         case NeighborLoopPlan::Path::ModeD_DeviceFused:
-#ifdef NEIGHBOR_LOOP_MODE_D
             if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
                 run_mode_d<Spec>(args, radii.data(), mode_d_tree);
                 break;
             }
-#endif
-            /* Never chosen without the build flag and the eligibility above. */
+            /* Never chosen without the eligibility above. */
             endrun(90001032);
             break;
     }
@@ -5150,16 +5185,15 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
         MPI_Allreduce(&local_act, &sum_act, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         MPI_Allreduce(&local_act, &max_act, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
         global_active_sum = sum_act;
-        bool select_mode_b = nlr_threshold_selects_mode_b<Spec>(sum_act, max_act);
-        path = select_mode_b ? DispatchPath::ModeB_HostWalker : DispatchPath::ModeA_GPU_NGL;
+        const NlrMode mode = nlr_select_mode<Spec>(sum_act, max_act);
+        path = (mode == NlrMode::B) ? DispatchPath::ModeB_HostWalker : DispatchPath::ModeA_GPU_NGL;
         /* Answered where its neighbours live, never on ghost copies (stated at
          * the single-pass entry, nlr_spec_needs_live_neighbours). */
         if constexpr (nlr_spec_needs_live_neighbours_v<Spec>) {
             path = DispatchPath::ModeB_HostWalker;
         }
-#ifdef NEIGHBOR_LOOP_MODE_D
-        /* Mode D takes the calls Mode A would have taken, when the loop is one
-         * it can serve and every rank can actually answer on the device.  It
+        /* Mode D takes the calls nlr_select_mode gives it, for a loop it can
+         * serve and every rank can actually answer on the device.  It
          * serves every one-way search whose pair kernel may run concurrently:
          * the neighbours are always the evaluating rank's own particles, so a
          * kernel's neighbour-side writes are local atomics, exactly as they are
@@ -5182,21 +5216,11 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
          * its tree to the device pulls the WHOLE call back to Mode A, because the
          * alternative is one rank walking while its peers wait for queries that
          * never arrive. */
-        /* sum_act > 0 FIRST, and it is not a shortcut: preparing mirrors and
-         * sweeps the whole tree, and a call with no actives anywhere has no work
-         * to justify that.  Without this test such a call reaches here because
-         * select_mode_b is false when sum_act == 0, takes the Mode-A label, and
-         * pays that sweep on the way to the globally-zero-active no-op that was
-         * going to return without computing anything.  That is O(Nnodes) on a
-         * call that should cost nothing, appearing only in builds carrying the
-         * flag.  It used to also pay a full-rank particle drift here; that is
-         * what the touched-set discovery removed, and the node half is what
-         * still justifies the gate. */
-        if(sum_act > 0 &&
-           (path == DispatchPath::ModeA_GPU_NGL ||
-            (nlr_spec_needs_live_neighbours_v<Spec> && !select_mode_b)) &&
-           nlr_spec_modeb_eval_omp<Spec>() != ModeBEvalOMP::SerialOnly &&
-           Spec::search_mode == MODE_B_SEARCH_ONEWAY) {
+        /* nlr_select_mode never asks for Mode D on a call with no actives
+         * anywhere, and that is not a shortcut: preparing mirrors and sweeps the
+         * whole tree, and such a call has no work to justify that -- it is
+         * O(Nnodes) on the way to the globally-zero-active no-op below. */
+        if(mode == NlrMode::D) {
             const int ready_local = (gx_device_fused_walk_prepare(&mode_d_tree, Spec::loop_name) == 0) ? 1 : 0;
             /* Open exactly when this rank's own preparation succeeded, whatever the vote decides. */
             touched_epoch.held = ready_local;
@@ -5204,7 +5228,6 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
             MPI_Allreduce(&ready_local, &ready, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
             if(ready) {path = DispatchPath::ModeD_DeviceFused;}
         }
-#endif
     }
 
     /* Globally-zero-active call: do NO neighbor work. global_active_sum comes
@@ -5475,8 +5498,7 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
                     nlr_iter_dispatch_subgroup_mode_a<Spec>(drv, sg);
                     break;
                 case DispatchPath::ModeD_DeviceFused:
-                    if constexpr (nlr_spec_modeb_eval_omp<Spec>() != ModeBEvalOMP::SerialOnly &&
-                                  Spec::search_mode == MODE_B_SEARCH_ONEWAY) {
+                    if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
                         nlr_iter_dispatch_subgroup_mode_d<Spec>(drv, sg);
                     }
                     break;
@@ -5693,7 +5715,7 @@ template void run_neighbor_loop_iterative<AgsDensitySpec>(const neighbor_loop_ar
  * gravity/ags_force_loop.{h,cc}. */
 template void run_neighbor_loop_iterative<AgsForceSpec>(const neighbor_loop_args_iterative&);
 /* The CBE corridor decides A/B for CBEGrad + AGSForce together, as AGSForce would. */
-template bool nlr_threshold_selects_mode_b<AgsForceSpec>(int, int);
+template NlrMode nlr_select_mode<AgsForceSpec>(int, int);
 template void nlr_import_union_ghosts<AgsForceSpec>(unsigned int, const std::vector<int>&,
                                                      const std::vector<double>&, double);
 #endif

@@ -336,7 +336,11 @@ void cbe_corridor_begin(void)
         MPI_Allreduce(&local_n, &sum_n, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         MPI_Allreduce(&local_n, &max_n, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     }
-    c.mode   = nlr_threshold_selects_mode_b<AgsForceSpec>(sum_n, max_n) ? NlrForceMode::B : NlrForceMode::A;
+    /* If this selector ever returns Mode D, that answer needs no list and no
+     * import, so the corridor stands aside and each loop decides alone. */
+    const NlrMode mode = nlr_select_mode<AgsForceSpec>(sum_n, max_n);
+    if(mode == NlrMode::D) {return;}
+    c.mode   = (mode == NlrMode::B) ? NlrForceMode::B : NlrForceMode::A;
     c.serves = true;
     if(c.mode != NlrForceMode::A) {return;}
 
