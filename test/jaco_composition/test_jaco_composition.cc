@@ -54,12 +54,19 @@ int main() {
     X = jaco_mass_fractions(0.4, 0.5, 1, HYDROGEN_MASSFRAC, &Y, &Z);
     check("capped Z = 0.25, Y = 0.35: X", X, 0.4, 1e-14);
     /* stale-ion check: a fully ionized cell at its own y (He less than the CIE table's 0.0994) is not stale */
-    double xHp, xHep, xHepp, y_cell = 0.0805, y_table = 0.0994;
+    double xHp, xHep, xHepp, y_cell = 0.0805, y_table = JACO_CIE_TABLE_Y;
     double ne_cie = jaco_cie_ions_for_cell(1.0, 1e-6, y_table - 1e-6, 1.0, y_cell, 1e-20, &xHp, &xHep, &xHepp);
-    check("CIE ions at the cell's y: electrons", ne_cie, 1.0 + 2.0 * y_cell, 1e-12);
+    check("CIE ions at the cell's y: electrons", ne_cie, 1.0 + y_cell * (1e-6 + 2.0 * (y_table - 1e-6)) / y_table, 1e-12);
     check("fully ionized cell at its own y flagged stale", jaco_ions_stale(1.0 + 2.0 * y_cell, ne_cie), 0., 0.);
     check("... against the table's y it would be", jaco_ions_stale(1.0 + 2.0 * y_cell, 1.0 + 2.0 * y_table), 1., 0.);
     check("a neutral cell under collisional CIE is stale", jaco_ions_stale(1e-4, ne_cie), 1., 0.);
+    /* He-rich gas (SN ejecta) at 1e6 K: the table's He ions, at its own y, scale to the cell's He; capping them at the
+       cell's y instead leaves the He beyond the table's neutral */
+    double y_rich = 0.18, hep_tab = 2e-3 * y_table, hepp_tab = y_table - hep_tab;
+    ne_cie = jaco_cie_ions_for_cell(1.0, hep_tab, hepp_tab, 1.0, y_rich, 1e-20, &xHp, &xHep, &xHepp);
+    check("He-rich cell, 1e6 K: He++ at the table's share of the cell's He", xHepp, y_rich * hepp_tab / y_table, 1e-12);
+    check("He-rich cell, 1e6 K: He+ at the table's share of the cell's He", xHep, y_rich * hep_tab / y_table, 1e-12);
+    check("He-rich cell, 1e6 K: electrons", ne_cie, 1.0 + y_rich * (hep_tab + 2.0 * hepp_tab) / y_table, 1e-12);
     std::printf("%s\n", failures ? "FAILED" : "all passed");
     return failures ? 1 : 0;
 }

@@ -164,7 +164,7 @@ void jaco_build_cie_table(void) {
     pr.Delta_t = 1e15;
 #endif
 #ifdef JACO_HAS_PARAM_y
-    pr.y = 0.0994;
+    pr.y = JACO_CIE_TABLE_Y;
 #endif
 #ifdef JACO_HAS_PARAM_ISRF
     pr.ISRF = 1.0;

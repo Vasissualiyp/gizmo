@@ -13,13 +13,19 @@ static inline double jaco_mass_fractions(double Z_metals, double Y_tracked, int 
     return 1.0 - *Y - *Z;
 }
 
-/* CIE ions for a cell from the CIE table's x_H+, x_He+ and x_He++ (tabulated at the table's own He abundance): He++ capped
-   at the cell's y, x_H+ at the H not in H2 (xHp_max), He+ at the He left, each floored at x_floor. Returns the ions'
-   free electrons. */
+/* He abundance n_He/n_H at which jaco builds its CIE table */
+#define JACO_CIE_TABLE_Y 0.0994
+
+/* CIE ions for a cell from the CIE table's x_H+, x_He+ and x_He++ (tabulated at JACO_CIE_TABLE_Y): the He ions as the
+   table's shares of its He, applied to the cell's y; x_H+ capped at the H not in H2 (xHp_max); each floored at x_floor.
+   Returns the ions' free electrons. */
 static inline double jaco_cie_ions_for_cell(double xHp_tab, double xHep_tab, double xHepp_tab, double xHp_max, double y,
                                             double x_floor, double *xHp, double *xHep, double *xHepp) {
-    double hepp = (xHepp_tab < y) ? xHepp_tab : y, hp = (xHp_tab < xHp_max) ? xHp_tab : xHp_max;
-    double hep = (xHep_tab < y - hepp) ? xHep_tab : y - hepp;
+    const double r = y / JACO_CIE_TABLE_Y;
+    double hepp = r * xHepp_tab, hp = (xHp_tab < xHp_max) ? xHp_tab : xHp_max;
+    hepp = (hepp < y) ? hepp : y;
+    double hep = r * xHep_tab;
+    hep = (hep < y - hepp) ? hep : y - hepp;
     *xHp = (hp > x_floor) ? hp : x_floor;
     *xHep = (hep > x_floor) ? hep : x_floor;
     *xHepp = (hepp > x_floor) ? hepp : x_floor;
