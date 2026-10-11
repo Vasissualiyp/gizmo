@@ -574,7 +574,7 @@ void init(void)
             CellP[i].Temperature = 1.22 * (GAMMA_DEFAULT-1.) * U_TO_TEMP_UNITS * CellP[i].InternalEnergy;
         }
 #ifdef JACO
-        if(RestartFlag != 1) {CellP[i].Gamma = GAMMA_DEFAULT; CellP[i].JacoReheated = 0;} /* gamma_eos_value() returns this until the first set_eos_pressure(); snapshots do not carry it */
+        if(RestartFlag != 1) {CellP[i].Gamma = GAMMA_DEFAULT; CellP[i].JacoReheated = 0; CellP[i].JacoEos.u = 0;} /* gamma_eos_value() returns this until the first set_eos_pressure(); snapshots do not carry it, nor the EOS anchor */
 #ifdef JACO_LEDGER
         if(RestartFlag != 1) {for(int k=0;k<JACO_LEDGER_N;k++) {CellP[i].JacoLedger[k] = 0;}}
 #endif

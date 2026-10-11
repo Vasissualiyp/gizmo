@@ -31,6 +31,7 @@ from gizmo.test import (
     flush_colorbar,
     assert_final_time,
     get_final_snapshot,
+    jaco_eos_violations,
     variant_output_dir,
 )
 from pathlib import Path
@@ -475,3 +476,42 @@ def test_wind_singlestar(request, num_mpi_ranks, num_omp_threads, Mdot_vw, res, 
             f"Shell-radius mismatch: peak at {r_peak:.3f} pc vs Weaver {R_weaver:.3f} pc "
             f"(relative error {rel_err:.4f})"
         )
+
+
+def test_wind_thermo_fidelity_jaco():
+    """Guard jaco's EOS between cooling solves (cooling/jaco_eos_anchor.h) in the wind bubble's two regimes.
+
+    The jaco variant's assertion (completion) is blind to the EOS cells carry between solves. From the mode-1
+    (spawn) jaco variant's final snapshot:
+      1. the swept shell's warm molecular gas and every other cell on jaco's EOS at its own composition
+         (jaco_eos_violations): u(T) and P = n k T. Full inversion at every call (edcdadd8) and the anchored EOS
+         alike: <= 0.005% of all cells and 0.02% of the molecular ones off by more than 1e-3. A chord T = u/c_v0
+         puts 36% of the molecular cells off.
+      2. the hot shocked-wind bubble's T/u, set by the ionization the solves left there, against the full-inversion
+         runs. Like the original's, it guards the hot gas's composition; the chord, linear there, leaves it unchanged.
+    Reads the mode-1 jaco variant's output; skips if absent.
+    """
+    pytest.importorskip("jaco.eos.H2_partition_function")
+    flags = make_wind_config_flags(1e-4, 3000.0, wind_mode=1) + ("WIND_TEST_NRES=64", "COOLING", "JACO=starforge")
+    snaps = sorted(Path(variant_output_dir(TEST_NAME, flags)).glob("snapshot_*.hdf5"))
+    if not snaps:
+        pytest.skip("mode-1 jaco variant output not present")
+    v = jaco_eos_violations(str(snaps[-1]))
+    print(f"jaco EOS violations (fraction of cells off by > 1e-3; all, MolecularMassFraction > 0.3 of {v['N'][1]}): "
+          f"u(T) {v['u(T)'][0]:.2e}, {v['u(T)'][1]:.2e}; nkT {v['nkT'][0]:.2e}, {v['nkT'][1]:.2e}")
+    assert v["N"][1] >= 5000, f"only {v['N'][1]} cells with MolecularMassFraction > 0.3: the shell has not formed"
+    for check in ("u(T)", "nkT"):
+        assert max(v[check]) < 0.01, f"{check}: {max(v[check]):.2%} of cells off jaco's EOS by more than 1e-3"
+
+    with h5py.File(snaps[-1], "r") as F:
+        T = F["PartType0/Temperature"][:].astype(float)
+        u = F["PartType0/InternalEnergy"][:].astype(float)
+    bub = u > 2.7e5
+    assert bub.sum() >= 100, f"only {bub.sum()} hot-bubble cells"
+    tu_hot = float(np.median((T / u)[bub]))
+    assert JACO_HOT_TU_RANGE[0] < tu_hot < JACO_HOT_TU_RANGE[1], (
+        f"hot-bubble median T/u = {tu_hot:.4f} outside {JACO_HOT_TU_RANGE}: its ionization state is off")
+
+
+# hot-bubble median T/u at t = 0.1 under full inversion at every EOS call (edcdadd8): 49.7305 at 4 ranks, 49.7306 at 16
+JACO_HOT_TU_RANGE = (49.2, 50.3)

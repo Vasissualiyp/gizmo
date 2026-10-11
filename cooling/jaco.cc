@@ -361,8 +361,8 @@ static double jaco_tracefree_gradient_norm(const struct gas_cell_data *c) {
 #endif
 
 /* Fill the cell-dependent Params: everything the generated EOS (jaco_eos.cc) reads, including the column that
-   shields C+ and so sets the free electrons, plus the other cell properties the rates need, except the radiation
-   inputs only the rates read (G_LW, Td: gizmo_to_jaco). The solver and jaco_cell_eos both pack
+   shields C+ and so sets the free electrons, plus the other cell properties the rates need, except the inputs only
+   the rates read (G_LW, Td, the bands, kappa_thick, N_H_cool, A_dust, rho: gizmo_to_jaco). The solver and jaco_cell_eos both pack
    through here, so they evaluate the same EOS. rho_cgs is the physical gas density; returns jaco's mass
    density for these Params. */
 static double jaco_pack_params(int i, Params *pr, struct particle_data *pp, struct gas_cell_data *cell, double rho_cgs) {
@@ -640,12 +640,32 @@ static int jaco_stale_ions(int i, double u, struct gas_cell_data *cell, const Pa
 }
 #endif
 
+/* Key of the composition inputs jaco_cell_eos_full reads from cell i (its anchor applies while this is unchanged) */
+static uint64_t jaco_cell_eos_key(int i, struct particle_data *pp, struct gas_cell_data *cell) {
+    uint64_t key = 0;
+#ifdef JACO_SOLVES_IONS
+    key = jaco_eos_key_add(key, cell[i].Ne);
+#endif
+#ifdef JACO_HAS_VAR_x_H_2
+    key = jaco_eos_key_add(key, cell[i].MolecularMassFraction);
+#endif
+#ifdef JACO_TRACKS_HII
+    key = jaco_eos_key_add(key, cell[i].HII);
+#endif
+#ifdef METALS
+    const int n_read = (NUM_METAL_SPECIES < 10) ? 1 : (NUM_METAL_SPECIES < 11 ? NUM_METAL_SPECIES : 11); /* Z; He, C..Fe (jaco_pack_params) */
+    for (int k = 0; k < n_read; k++)
+        key = jaco_eos_key_add(key, pp[i].Metallicity[k]);
+#endif
+    return key;
+}
+
 /* jaco's EOS on the cell's cached state: composition from Ne, MolecularMassFraction and metallicity, at
    specific energy u and physical density rho (both code units), seeded with the cached Temperature. In a cell
    heated directly since its last solve, stale ions are replaced by CIE as the solver's seed replaces them
-   (jaco_stale_ions). Uses only (i, pp, cell), so it is safe on the packed copies cooling works on. */
-void jaco_cell_eos(int i, struct particle_data *pp, struct gas_cell_data *cell, double u, double rho,
-                   struct jaco_eos_state *eos) {
+   (jaco_stale_ions). *cv is du/dT (erg/g/K) at the composition used. */
+static void jaco_cell_eos_full(int i, struct particle_data *pp, struct gas_cell_data *cell, double u, double rho,
+                               struct jaco_eos_state *eos, double *cv_out) {
     SolveVars sv = {};
     Params pr = {};
 #ifdef JACO_DEBUG_PARAMS
@@ -682,6 +702,84 @@ void jaco_cell_eos(int i, struct particle_data *pp, struct gas_cell_data *cell, 
     eos->x_Hplus = eos->x_Heplus = eos->x_Heplusplus = eos->y = 0;
 #endif
     eos->x_e = jaco_electron_abundance(&sv, &pr);
+    *cv_out = cv;
+}
+
+#ifdef JACO_EOS_PREDICT_AUDIT
+#include "jaco_eos_audit.h"
+#endif
+
+/* jaco's EOS on cell i at specific energy u and physical density rho (code units): its anchor continued to u where it
+   applies (same composition, not heated directly since its solve, |u - u0| within JACO_EOS_PREDICT_MAX_DU u0), else
+   jaco_cell_eos_full, which with set_anchor becomes the cell's anchor. Uses only (i, pp, cell), so it is safe on the
+   packed copies cooling works on. */
+void jaco_cell_eos(int i, struct particle_data *pp, struct gas_cell_data *cell, double u, double rho,
+                   struct jaco_eos_state *eos, int set_anchor) {
+    struct jaco_eos_anchor *a = &cell[i].JacoEos;
+    const uint64_t key = jaco_cell_eos_key(i, pp, cell);
+    if (!cell[i].JacoReheated &&
+        jaco_eos_anchor_predict(a, key, u * UNIT_SPECEGY_IN_CGS, JACO_EOS_PREDICT_MAX_DU, &eos->T, &eos->P_over_rho)) {
+        eos->gamma = a->gamma;
+        eos->x_e = a->x_e;
+        eos->x_Hplus = a->x_Hplus;
+        eos->x_Heplus = a->x_Heplus;
+        eos->x_Heplusplus = a->x_Heplusplus;
+        eos->y = a->y;
+#ifdef JACO_EOS_PREDICT_AUDIT
+        if (set_anchor) jaco_eos_audit_add(i, pp, cell, u, rho, eos);
+#endif
+        return;
+    }
+#ifdef JACO_EOS_PREDICT_AUDIT
+    if (set_anchor) jaco_eos_audit_miss(i, pp, cell, u, key, a);
+#endif
+    double cv;
+    jaco_cell_eos_full(i, pp, cell, u, rho, eos, &cv);
+    if (set_anchor && !cell[i].JacoReheated) {
+        a->u = u * UNIT_SPECEGY_IN_CGS;
+        a->T = eos->T;
+        a->dTdu = 1.0 / cv;
+        a->P_over_rho = eos->P_over_rho;
+        a->gamma = eos->gamma;
+        a->x_e = eos->x_e;
+        a->x_Hplus = eos->x_Hplus;
+        a->x_Heplus = eos->x_Heplus;
+        a->x_Heplusplus = eos->x_Heplusplus;
+        a->y = eos->y;
+        a->key = key;
+    }
+}
+
+/* The solve's state as cell i's EOS anchor, at the composition and Params of the solve, with T refined onto jaco's
+   u(T) at the u the cell now carries (the solver's u and T agree to its tolerance), as a full evaluation would place
+   it. Call once the solved u and species are in the cell. */
+static void jaco_anchor_at_solve(int i, const SolveVars *sv_in, const Params *pr, struct particle_data *pp,
+                                 struct gas_cell_data *cell) {
+    struct jaco_eos_anchor *a = &cell[i].JacoEos;
+    SolveVars sv = *sv_in;
+    double cv, u = cell[i].InternalEnergy * UNIT_SPECEGY_IN_CGS;
+    sv.T = jaco_T_from_u(u, sv.T, &sv, pr, &cv);
+#ifdef JACO_FAMILY_STARFORGE
+    const double rho = cell[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS; /* jaco_pack_params matched n_Htot to it */
+#else
+    const double rho = pr->n_Htot * jaco_mass_per_H(pr);
+#endif
+    a->u = u;
+    a->T = sv.T;
+    a->dTdu = 1.0 / cv;
+    a->P_over_rho = jaco_eos_pressure(&sv, pr) / rho;
+    a->gamma = 1.0 + a->P_over_rho / (cv * sv.T);
+#ifdef JACO_SOLVES_IONS
+    a->x_e = cell[i].Ne;
+    a->x_Hplus = sv.x_Hplus;
+    a->x_Heplus = sv.x_Heplus;
+    a->x_Heplusplus = sv.x_Heplusplus;
+    a->y = pr->y;
+#else
+    a->x_e = jaco_electron_abundance(&sv, pr);
+    a->x_Hplus = a->x_Heplus = a->x_Heplusplus = a->y = 0;
+#endif
+    a->key = jaco_cell_eos_key(i, pp, cell);
 }
 
 #ifdef JACO_HAS_VAR_Td
@@ -975,8 +1073,9 @@ void jaco_to_gizmo(int i, const SolveVars *sv, const Params *pr, struct particle
     cell[i].Dust_Temperature = sv->Td;
 #endif
     cell[i].JacoReheated = 0;
+    jaco_anchor_at_solve(i, sv, pr, pp, cell);
 
-    set_eos_pressure(i, pp, cell); /* P, Gamma and sound speed from jaco's EOS; T moves only by the solver's u(T) residual */
+    set_eos_pressure(i, pp, cell); /* P, Gamma and sound speed from jaco's EOS at the anchor; T moves only by the solver's u(T) residual */
 #ifndef COOLING_OPERATOR_SPLIT
     if (cell[i].CoolingIsOperatorSplitThisTimestep == 0) {
         cell[i].DtInternalEnergy = 0;
@@ -1038,6 +1137,7 @@ void jaco_seed_spawned_cell(int i, double T, struct particle_data *pp, struct ga
     cell[i].HI = DMAX(1.0 - sv.x_Hplus, 0);
 #endif
     cell[i].JacoReheated = 0;
+    cell[i].JacoEos.u = 0;
     set_eos_pressure(i, pp, cell);
 }
 

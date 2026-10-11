@@ -29,6 +29,7 @@ from gizmo.test import (
     flush_colorbar,
     assert_final_time,
     get_final_snapshot,
+    jaco_eos_violations,
     variant_output_dir,
 )
 from pathlib import Path
@@ -215,3 +216,40 @@ def test_SN_singlestar(num_mpi_ranks, num_omp_threads, extra_config_flags):
 
     # Outflow at the shock
     assert vr_binned[i_peak] > 0, f"No outflow at shock: vr = {vr_binned[i_peak]}"
+
+
+def test_SN_thermo_fidelity_jaco():
+    """Guard jaco's EOS between cooling solves (cooling/jaco_eos_anchor.h) in the regimes the remnant exercises.
+
+    Between solves a cell's T, P and sound speed are continued from its last solve with the heat capacity there,
+    not re-inverted. The jaco variant's assertion (completion) is blind to that EOS, so these checks read its final
+    snapshot:
+      1. every cell's T and P on jaco's EOS at its own composition (jaco_eos_violations): u(T), where the shell's H2
+         makes it most curved, and P = n k T, which an ideal-gas (gamma - 1) rho u breaks in molecular gas. Full
+         inversion at every call (edcdadd8) and the anchored EOS alike: 0.02% of cells off by more than 1e-3 (48 hot,
+         He- and metal-rich ejecta cells, P up to 11% under n k T at their written Ne), none of the molecular ones.
+         A chord T = u/c_v0, the cached form that took the standard module's remnant energy +64%, puts 42% of the
+         molecular cells off (u(T)); an ideal-gas pressure, 43% (nkT).
+      2. the remnant's thermal energy, against the full-inversion runs. It guards cooling through the remnant, not
+         this EOS: in jaco's frozen-composition EOS the chord is exact in ionized gas, and left it unchanged (1e-4).
+    Reads the jaco variant's output; skips if that variant has not run.
+    """
+    pytest.importorskip("jaco.eos.H2_partition_function")
+    snaps = sorted(Path(variant_output_dir(TEST_NAME, ("COOLING", "JACO=starforge"))).glob("snapshot_*.hdf5"))
+    if not snaps:
+        pytest.skip("jaco variant output not present")
+    v = jaco_eos_violations(str(snaps[-1]))
+    print(f"jaco EOS violations (fraction of cells off by > 1e-3; all, MolecularMassFraction > 0.3 of {v['N'][1]}): "
+          f"u(T) {v['u(T)'][0]:.2e}, {v['u(T)'][1]:.2e}; nkT {v['nkT'][0]:.2e}, {v['nkT'][1]:.2e}")
+    assert v["N"][1] >= 500, f"only {v['N'][1]} cells with MolecularMassFraction > 0.3: the shell's H2 regime is not exercised"
+    for check in ("u(T)", "nkT"):
+        assert max(v[check]) < 0.01, f"{check}: {max(v[check]):.2%} of cells off jaco's EOS by more than 1e-3"
+
+    with h5py.File(snaps[-1], "r") as F:
+        E_therm = float((F["PartType0/Masses"][:].astype(float) * F["PartType0/InternalEnergy"][:]).sum())
+    assert JACO_ETH_RANGE[0] < E_therm < JACO_ETH_RANGE[1], (
+        f"remnant thermal energy {E_therm:.4e} outside {JACO_ETH_RANGE}: cooling through the remnant is off")
+
+
+# remnant thermal energy at t = 0.05 under full inversion at every EOS call (edcdadd8): 1.180e6 at 4 ranks, 1.158e6 at 16
+JACO_ETH_RANGE = (1.05e6, 1.30e6)

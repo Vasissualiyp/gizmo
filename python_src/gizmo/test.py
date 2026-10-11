@@ -572,6 +572,48 @@ def assert_final_time(snapshot_file: str, test_name: str, rtol: float = 1e-6, ti
     ), f"Snapshot time {time} does not match TimeMax {time_max} (rtol={rtol})"
 
 
+def jaco_eos_violations(snapshot_file: str, tol: float = 1e-3) -> dict:
+    """Consistency of a JACO run's gas with jaco's EOS (jaco/eos/eos.py), each cell at its own composition: the
+    species carry 3/2 kT each, H_2 its fitted f_H2(T) kT, and P = n k T. With the composition from the snapshot
+    (ElectronAbundance, MolecularMassFraction, Metallicity, as cooling/jaco.cc packs them; n per H nucleus
+    1 - x_H2 + y + x_metals + x_e):
+      'u(T)': u = (P/rho) [3/2 + (n_H2/n)(f_H2(T) - 3/2)], the temperature's consistency with u at that composition
+      'nkT':  P m_p/(rho k T) proportional to n/n_H X, the pressure's (the constant is the mass per H, here m_p/X)
+    Returns the fraction of cells off by more than tol in each, over all gas and over gas with
+    MolecularMassFraction > 0.3, where H2's rotational levels make u(T) curved; and the cell counts."""
+    import sympy as sp
+    from jaco.eos.H2_partition_function import H2_energy_over_kbT
+
+    T_sym = sp.Symbol("T")
+    f_H2 = sp.lambdify(T_sym, H2_energy_over_kbT(T_sym), "numpy")
+    with h5py.File(snapshot_file, "r") as F:
+        g = F["PartType0"]
+        T, u, rho, P, ne, fmol = (g[k][:].astype(float) for k in ("Temperature", "InternalEnergy", "Density",
+                                                                 "Pressure", "ElectronAbundance",
+                                                                 "MolecularMassFraction"))
+        Z = g["Metallicity"][:].astype(float).reshape(len(T), -1)
+        unit_specegy = float(F["Header"].attrs.get("UnitVelocity_In_CGS", 1e5)) ** 2
+    Zm = np.minimum(Z[:, 0], 0.25)
+    if Z.shape[1] >= 11:
+        Y = np.minimum(Z[:, 1], 0.35)
+        X = 1 - Y - Zm
+        x_metals = (Z[:, 2:11] / np.array([12, 14, 16, 20, 24, 28, 32, 40, 56.])).sum(1) / X
+    else:  # helium untracked, metals at solar ratios scaled by Z (Z_sun = 0.0142, as cooling/jaco.cc packs them)
+        Y = np.full_like(Zm, 1 - 0.76)
+        X = 1 - Y - Zm
+        x_metals = 9.77e-4 * Zm / 0.0142
+    x_H2 = 0.5 * fmol
+    n = 1 - x_H2 + 0.25 * Y / X + x_metals + ne
+    P_over_rho = P / rho * unit_specegy
+    off_u = np.abs(u * unit_specegy / (P_over_rho * (1.5 + x_H2 / n * (f_H2(T) - 1.5))) - 1)
+    q = P_over_rho * 1.67262192e-24 / (1.380649e-16 * T) / (n * X)
+    off_p = np.abs(q / np.median(q) - 1)
+    mol = fmol > 0.3
+    return {"u(T)": (np.mean(off_u > tol), np.mean(off_u[mol] > tol) if mol.any() else 0.0),
+            "nkT": (np.mean(off_p > tol), np.mean(off_p[mol] > tol) if mol.any() else 0.0),
+            "N": (len(T), int(mol.sum()))}
+
+
 def gas_energy(snapshot_file: str, include_magnetic: bool = False,
                include_potential: bool = False) -> float:
     """Total gas energy from a snapshot: thermal + kinetic, optionally magnetic and gravitational.
