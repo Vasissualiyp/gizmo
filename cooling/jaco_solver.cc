@@ -997,9 +997,17 @@ static int ions_at_fixed(SolveVars *sv, const Params *pr, const struct JacoSolve
     return newton(sv, pr, set, mask, JACO_CHEM_MAXITER, NULL, c, F_out) == NEWTON_OK ? 0 : -1;
 }
 
-/* Largest abundance of time-dependent species k: its ceiling and its budgets, the other species fixed */
-static double td_upper(const SolveVars *x, const Params *pr, int k) {
-    return fmin(var_ceiling[k], budget_cap(x, pr, k)) * (1 - 1e-9);
+/* Largest abundance of the time-dependent species bracketed at `level`: its ceiling and its budgets, with the species
+   held while it is searched (bracketed outside it, steady state) at their values and those bracketed inside it, which
+   are re-solved at each trial, at their floors */
+static double td_upper(const SolveVars *x, const Params *pr, int level) {
+    SolveVars s = *x;
+    for (int l = level + 1; l < N_BRACKET; l++) {
+        const int j = td_species[bracketed.t[l]].k;
+        s.data[j] = var_floor[j];
+    }
+    const int k = td_species[bracketed.t[level]].k;
+    return fmin(var_ceiling[k], budget_cap(&s, pr, k)) * (1 - 1e-9);
 }
 
 static int td_bracketed(SolveVars *sv, const Params *pr, const struct JacoSolverSettings *set, struct Counters *c, int level);
@@ -1020,7 +1028,7 @@ static int td_inner(SolveVars *x, const Params *pr, const struct JacoSolverSetti
 /* residual of the time-dependent species ctx->level at abundance exp(y), the species after it solved there */
 static int td_eval(double y, SolveVars *x, struct RootCtx *ctx, double *val) {
     const int k = td_species[bracketed.t[ctx->level]].k;
-    x->data[k] = fmax(var_floor[k], fmin(exp(y), td_upper(x, ctx->pr, k)));
+    x->data[k] = fmax(var_floor[k], fmin(exp(y), td_upper(x, ctx->pr, ctx->level)));
     SolveVars F;
     if (td_inner(x, ctx->pr, ctx->set, ctx->c, ctx->level + 1, &F)) return -1;
     *val = F.data[k];
@@ -1039,13 +1047,13 @@ static int td_bracketed(SolveVars *sv, const Params *pr, const struct JacoSolver
     ctx.level = level;
     const double y_floor = log(var_floor[k]);
     SolveVars xa = *sv;
-    double ya = log(fmax(var_floor[k], fmin(pr->data[param], td_upper(sv, pr, k)))), Ga;
+    double ya = log(fmax(var_floor[k], fmin(pr->data[param], td_upper(sv, pr, level)))), Ga;
     if (root_eval(&ctx, ya, &xa, &Ga)) return -1;
     int up = Ga > 0;
     double fac = log(2.0), yb = ya, Gb = Ga;
     SolveVars xb = xa;
     for (int it = 0; it < JACO_BRACKET_MAXITER && Ga != 0; it++) {
-        double y_hi = log(td_upper(&xa, pr, k));
+        double y_hi = log(td_upper(&xa, pr, level));
         if ((up && ya >= y_hi) || (!up && ya <= y_floor)) {
             *sv = xa; /* the net rate keeps its sign to the bound: the bound is the answer */
             return 0;
