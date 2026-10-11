@@ -652,6 +652,28 @@ struct nlr_spec_writes_neighbour_motion<Spec, std::void_t<decltype(Spec::writes_
 template <typename Spec>
 constexpr bool nlr_spec_writes_neighbour_motion_v = nlr_spec_writes_neighbour_motion<Spec>::value;
 
+/* Whether the pair kernel never moves a neighbour, never changes its type, and
+ * never takes its mass to zero or below.  Those are the fields the fused device
+ * walk tests a candidate on, so when this holds the walk may keep a copy of them
+ * per reached particle for the rest of the call (GxScreenRecord) instead of
+ * re-reading the particle record on every visit.
+ *
+ * A BitwiseReadonly loop writes no neighbour at all, so it holds by definition.
+ * A loop that does write its neighbours declares it with
+ * Spec::keeps_neighbour_screen_fields, after checking each of its neighbour
+ * writes: one that only ADDS mass keeps it, since that cannot change whether the
+ * mass is positive, and so does one that changes only velocities.  Otherwise the
+ * walk reads every candidate from the particle record. */
+template <typename Spec, typename = void>
+struct nlr_spec_keeps_neighbour_screen_fields : std::false_type {};
+template <typename Spec>
+struct nlr_spec_keeps_neighbour_screen_fields<Spec, std::void_t<decltype(Spec::keeps_neighbour_screen_fields)>>
+    : std::integral_constant<bool, Spec::keeps_neighbour_screen_fields> {};
+template <typename Spec>
+constexpr bool nlr_spec_keeps_neighbour_screen_fields_v =
+    nlr_spec_keeps_neighbour_screen_fields<Spec>::value ||
+    (nlr_spec_modeb_eval_omp<Spec>() == ModeBEvalOMP::BitwiseReadonly);
+
 /* SFINAE detection of optional Spec::bind_active_to_eval_context.
  *
  * A Spec whose ActiveData carries rank-local context fields (rank-local

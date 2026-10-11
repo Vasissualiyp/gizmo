@@ -262,6 +262,7 @@ struct ThermalFBSpec {
     /* Identity. loop_name labels this loop in runner diagnostics and the
      * generic _end_bundle print. */
     static constexpr const char *loop_name = "thermalfb";
+    static constexpr bool keeps_neighbour_screen_fields = true;   /* its only neighbour mass write adds dM > 0 (thermal_fb_pair_kernel); never moves a neighbour */
     static constexpr ModeBEvalOMP modeb_eval_omp = ModeBEvalOMP::EpsilonAtomic; /* several sources may deposit into one cell; each reads the live mass, density and metallicity before its atomic add, so the result depends on their order -- small where a cell takes O(1) small deposits per step, and accepted at that level */
     /* Each deposit's specific energy is the source's share of its energy over the
        cell's mass at that moment, so the cell's live mass is what the kernel must

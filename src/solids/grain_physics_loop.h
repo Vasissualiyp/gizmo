@@ -82,6 +82,7 @@ struct GrainBackrxNeighborData {
 
 struct GrainBackrxSpec {
     static constexpr const char *loop_name = "grain_backrx";
+    static constexpr bool keeps_neighbour_screen_fields = true;   /* its neighbour writes are the drag back-reaction on velocity/momentum only */
     static constexpr ModeBEvalOMP modeb_eval_omp = ModeBEvalOMP::EpsilonAtomic; /* EpsilonAtomic: drag back-reaction atomic_add(Pj.Vel/dp)+atomic_min(AccelTimeMin), stable Pj snapshot, no read-back -> ulp */
 
     static constexpr int                    search_mode        = MODE_B_SEARCH_ONEWAY;

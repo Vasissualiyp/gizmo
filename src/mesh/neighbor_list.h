@@ -189,6 +189,26 @@ enum gx_touched_owner_t {
     GX_TOUCHED_OWNER_FUSED_WALK = 1    /* the Mode-D fused walk's discovery passes */
 };
 
+/* What a fused walk's leaf tests before it takes a particle as a neighbour: its type, whether it
+ * has mass, and where it is.  Most particles a walk reaches fail one of these, so on a GPU that
+ * reaches the particle records across a host link (PCIe), reading the full record for each of
+ * them costs a round trip per rejected candidate.  The screen keeps a copy of just these fields in
+ * device memory, filled from the particle record the first time a call reaches each particle;
+ * every later visit in the same call reads the copy.  The copy decides which candidates are
+ * accepted as well as which are rejected, so it must be exact: it is kept only for loops that
+ * cannot change these fields, and is invalidated for every particle a discovery pass drifts.  The
+ * physics of an accepted neighbour is still read from the particle record itself.
+ *
+ * A stamp equal to the generation means the copy is complete; the generation with
+ * GX_SCREEN_BEING_WRITTEN set means one work item is writing it; any other value means it has not
+ * been read in this generation.  The generation therefore stays below that bit. */
+#define GX_SCREEN_BEING_WRITTEN 0x80000000u
+struct GxScreenRecord {
+    MyDouble      Pos[3];
+    short int     Type;
+    unsigned char has_mass;   /* Mass > 0 when it was read */
+};
+
 struct GxTouchedSet {
     unsigned int *seen     = nullptr;  /* [capacity] generation stamps, never cleared */
     int          *list     = nullptr;  /* [capacity] compacted distinct local indices */
@@ -196,6 +216,8 @@ struct GxTouchedSet {
     int           capacity = 0;        /* owned local particle slots at the last ensure */
     unsigned int  gen      = 0;        /* this call's generation */
     int           owner    = GX_TOUCHED_OWNER_NONE;  /* constant within an epoch, like gen */
+    struct GxScreenRecord *screen       = nullptr;  /* [capacity] device memory; absent = read every candidate from the particle record */
+    unsigned int          *screen_stamp = nullptr;  /* [capacity] device memory, see GX_SCREEN_BEING_WRITTEN */
 };
 
 

@@ -58,4 +58,40 @@ gx_touched_set_claim_in(const struct GxTouchedSet &ts, int j, int owner, int *an
     else if(anomaly)       {Kokkos::atomic_store(anomaly, GX_WALK_ANOMALY_TOUCHED_SET_FULL);}
 }
 
+/* The fields a fused walk's leaf tests a candidate on (GxScreenRecord), for local particle j.
+ *
+ * The first work item of a generation to reach j reads them from the particle record and publishes
+ * a copy: it claims the stamp, writes the copy, fences, and only then marks it complete, so a
+ * reader that sees it complete sees all of it.  A work item that finds the copy being written, or
+ * loses the claim, reads the particle record itself this once rather than waiting.  Without the
+ * screen storage, or with use_screen 0 (a walk running on the host, which cannot read device
+ * memory), every candidate is read from the particle record, which is the same answer.
+ *
+ * The copy is exact for as long as nothing changes these fields of a reached particle, which is
+ * why a loop must declare that its pair kernel does not (Spec::keeps_neighbour_screen_fields) and
+ * why the fused walk invalidates the copies of the particles each discovery pass drifts.  Mass is
+ * read atomically because a pair kernel that deposits mass into its neighbours may be adding to
+ * this one from another lane at this moment; such a deposit is positive, so it cannot change
+ * whether the mass is positive. */
+KOKKOS_INLINE_FUNCTION void
+gx_screen_candidate(const struct GxTouchedSet &ts, int use_screen, const struct particle_data *P, int j, struct GxScreenRecord &rec)
+{
+    const int cached = (use_screen && ts.screen && ts.screen_stamp && j >= 0 && j < ts.capacity);
+    const unsigned int stamp = cached ? Kokkos::atomic_load(&ts.screen_stamp[j]) : 0u;
+    if(cached && stamp == ts.gen) {
+        Kokkos::memory_fence();   /* the copy was complete before its stamp said so */
+        rec = ts.screen[j];
+        return;
+    }
+    const struct particle_data &Pj = P[j];
+    rec.Pos[0] = Pj.Pos[0]; rec.Pos[1] = Pj.Pos[1]; rec.Pos[2] = Pj.Pos[2];
+    rec.Type = Pj.Type;
+    rec.has_mass = (Kokkos::atomic_load(&Pj.Mass) > 0) ? 1 : 0;
+    if(!cached || stamp == (ts.gen | GX_SCREEN_BEING_WRITTEN)) {return;}
+    if(Kokkos::atomic_compare_exchange(&ts.screen_stamp[j], stamp, ts.gen | GX_SCREEN_BEING_WRITTEN) != stamp) {return;}
+    ts.screen[j] = rec;
+    Kokkos::memory_fence();       /* the whole copy is written before the stamp says it is */
+    Kokkos::atomic_store(&ts.screen_stamp[j], ts.gen);
+}
+
 #endif /* GPU_RECORDER_CLAIM_H */

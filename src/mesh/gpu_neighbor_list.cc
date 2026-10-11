@@ -2704,6 +2704,26 @@ int gx_device_tree_view_build(struct GxDeviceTreeView *out, int local_particle_s
  * handful of active particles does no work proportional to the rank. */
 static struct GxTouchedSet g_touched_set;
 
+/* The candidate screen (GxScreenRecord) lives in device memory, beside the touched set and with
+ * its lifetime, because every visit of a fused walk reads it.  Its stamps are cleared only when it
+ * is allocated and when the generation wraps; a new generation invalidates every copy in O(1). */
+static void touched_screen_clear_stamps(void)
+{
+    if(!g_touched_set.screen_stamp) {return;}
+    unsigned int *stamp = g_touched_set.screen_stamp;
+    Kokkos::parallel_for("touched_screen_clear", Kokkos::RangePolicy<>(0, g_touched_set.capacity),
+                         KOKKOS_LAMBDA(int k) {stamp[k] = 0u;});
+    Kokkos::fence();
+}
+
+static void touched_screen_free(void)
+{
+    if(g_touched_set.screen)       {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_touched_set.screen);}
+    if(g_touched_set.screen_stamp) {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_touched_set.screen_stamp);}
+    g_touched_set.screen = nullptr;
+    g_touched_set.screen_stamp = nullptr;
+}
+
 int gx_touched_set_ensure(int local_particle_slots)
 {
     if(local_particle_slots <= 0) {return 1;}
@@ -2720,10 +2740,11 @@ int gx_touched_set_ensure(int local_particle_slots)
        drift_and_mark before this is ever reached, but the fence belongs WITH the
        release so no future caller has to know that. Skipped when there is
        nothing to release. */
-    if(g_touched_set.seen || g_touched_set.list || g_touched_set.counter) {Kokkos::fence();}
+    if(g_touched_set.seen || g_touched_set.list || g_touched_set.counter || g_touched_set.screen) {Kokkos::fence();}
     if(g_touched_set.seen)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.seen);}
     if(g_touched_set.list)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.list);}
     if(g_touched_set.counter) {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.counter);}
+    touched_screen_free();
     g_touched_set = GxTouchedSet{};
 
     unsigned int *seen    = (unsigned int *) ngl_alloc_shared((size_t)local_particle_slots * sizeof(unsigned int), "touched_set_seen");
@@ -2743,6 +2764,22 @@ int gx_touched_set_ensure(int local_particle_slots)
     g_touched_set.counter  = counter;
     g_touched_set.capacity = local_particle_slots;
     g_touched_set.gen      = 0u;
+
+    /* The screen only saves reads, so a rank that cannot hold it answers the same without it and
+     * nothing needs to decline.  Said once, because the walk is then slower on a host-linked GPU. */
+    g_touched_set.screen       = (struct GxScreenRecord *) ngl_alloc_device((size_t)local_particle_slots * sizeof(struct GxScreenRecord), "ngl_screen_record");
+    g_touched_set.screen_stamp = (unsigned int *)          ngl_alloc_device((size_t)local_particle_slots * sizeof(unsigned int),          "ngl_screen_stamp");
+    if(!g_touched_set.screen || !g_touched_set.screen_stamp) {
+        touched_screen_free();
+        static int reported = 0;
+        if(!reported) {
+            reported = 1;
+            printf("touched set: task %d could not hold the candidate screen for %d local particles; fused walks read every candidate from the particle records\n",
+                   ThisTask, local_particle_slots);
+            fflush(stdout);
+        }
+    }
+    touched_screen_clear_stamps();
     return 0;
 }
 
@@ -2799,9 +2836,12 @@ int gx_touched_set_begin_epoch_owned(int owner)
     /* Zero is the never-claimed value, so a wrap has to skip it AND clear the
      * stamps -- otherwise a slot still carrying the old maximum would read as
      * claimed by the new generation and its particle would silently go
-     * undrifted. */
-    if(++g_touched_set.gen == 0u) {
+     * undrifted.  The generation wraps below GX_SCREEN_BEING_WRITTEN, the bit the
+     * candidate screen's stamps use to mark a copy being written, and the
+     * screen's stamps are cleared with the rest for the same reason. */
+    if(++g_touched_set.gen >= GX_SCREEN_BEING_WRITTEN) {
         for(int k = 0; k < g_touched_set.capacity; k++) {g_touched_set.seen[k] = 0u;}
+        touched_screen_clear_stamps();
         g_touched_set.gen = 1u;
     }
     *g_touched_set.counter = 0;
@@ -2874,10 +2914,11 @@ void gx_touched_set_release(void)
        does not synchronize. This runs on the controlled-stop path as well as the
        normal one, where a kernel may well still be in flight, so incidental
        completion is not an ownership contract. Fence once if anything is held. */
-    if(g_touched_set.seen || g_touched_set.list || g_touched_set.counter) {Kokkos::fence();}
+    if(g_touched_set.seen || g_touched_set.list || g_touched_set.counter || g_touched_set.screen) {Kokkos::fence();}
     if(g_touched_set.seen)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.seen);}
     if(g_touched_set.list)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.list);}
     if(g_touched_set.counter) {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.counter);}
+    touched_screen_free();
     g_touched_set = GxTouchedSet{};
 }
 
@@ -3005,6 +3046,20 @@ void gx_touched_set_drift_and_mark(integertime time1)
      * cache invalidation the work actually justifies, and it can push the dirty
      * tracker over its promote-to-all threshold for nothing. */
     if(n_drifted > 0) {gizmo_mark_kernel_radius_dirty_indices(g_touched_set.list, n_drifted);}
+
+    /* The recording walk screened these particles at their old positions, and the copies it left
+     * would be read by the evaluation that follows.  Only the advanced ones moved, so only theirs
+     * are marked unread; the next visit re-reads them from the particle records. */
+    if(n_drifted > 0 && g_touched_set.screen_stamp) {
+        unsigned int *stamp = g_touched_set.screen_stamp;
+        const int *advanced = g_touched_set.list;
+        const int capacity = g_touched_set.capacity;
+        Kokkos::parallel_for("touched_screen_invalidate", Kokkos::RangePolicy<>(0, n_drifted),
+                             KOKKOS_LAMBDA(int k) {const int j = advanced[k]; if(j >= 0 && j < capacity) {stamp[j] = 0u;}});
+        /* Finished before anything else runs: the next pass may walk on the host, which would
+         * otherwise rewrite the list this kernel reads. */
+        Kokkos::fence();
+    }
 
     *g_touched_set.counter = 0;
 }

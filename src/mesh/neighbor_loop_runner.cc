@@ -437,11 +437,14 @@ static inline bool nlr_modeb_use_omp(long long n_items, int nthreads)
  * Two preconditions, both true at present call sites: any device work this batch
  * reads from has already completed (each producer fences at its own launch), and no
  * caller is already inside a parallel region. */
+/* Whether nlr_walk_for_sources runs a batch of n on the device; smaller batches run on the host. */
+static inline bool nlr_walk_runs_on_device(int n) {return n >= GPU_MIN_SOURCES_FOR_WALK_OFFLOAD;}
+
 template <class F>
 static inline void nlr_walk_for_sources(const char *tag, int n, F &&body)
 {
     if(n <= 0) {return;}
-    if(n >= GPU_MIN_SOURCES_FOR_WALK_OFFLOAD) {
+    if(nlr_walk_runs_on_device(n)) {
         gizmo_gpu_kernel_launch(tag, n, std::forward<F>(body));
         return;
     }
@@ -3810,6 +3813,17 @@ static void nlr_iter_dispatch_subgroup_mode_b_remote(NlrIterDriver<Spec>& drv, i
  * asserted, and no loop is named here.
  * ========================================================================== */
 
+/* Whether a fused walk of this loop over n queries screens its candidates (GxScreenRecord): only
+ * when the loop's pair kernel cannot change the fields the screen holds
+ * (nlr_spec_keeps_neighbour_screen_fields_v), and only when the walk runs on the device, because
+ * the screen lives in device memory and a small batch walks on the host.  Otherwise every
+ * candidate is read from the particle record. */
+template <typename Spec>
+static bool nlr_mode_d_uses_screen(int n)
+{
+    return nlr_spec_keeps_neighbour_screen_fields_v<Spec> && nlr_walk_runs_on_device(n);
+}
+
 /* What happens when the walk reaches a particle this rank owns.
  *
  * The traversal decides which indices are reachable and which are ghosts; this
@@ -3835,18 +3849,18 @@ struct NlrModeDReduceLeaf {
      * pointing at a host stack object and fault on device. */
     const typename Spec::CallScalars   *cs;
     struct GxMotionTargetSet            motion_targets{};   /* for a loop that writes neighbour motion */
+    struct GxTouchedSet                 screen{};           /* the touched set when nlr_mode_d_uses_screen; empty = read the particle records */
 
     KOKKOS_INLINE_FUNCTION
     void visit(int j, double qx, double qy, double qz, double reach)
     {
-        const struct particle_data &Pj = ctx->P[j];
-        if(!(supply_mask & (1u << (unsigned int)Pj.Type))) {return;}
-        /* Read atomically: a pair kernel that deposits mass into its neighbours
-         * may be adding to this one from another lane at this moment. */
-        if(Kokkos::atomic_load(&Pj.Mass) <= 0) {return;}
-        if(!gx_pair_accept_wrap_and_test(qx - (double)Pj.Pos[0],
-                                         qy - (double)Pj.Pos[1],
-                                         qz - (double)Pj.Pos[2],
+        struct GxScreenRecord c;
+        gx_screen_candidate(screen, 1, ctx->P, j, c);
+        if(!(supply_mask & (1u << (unsigned int)c.Type))) {return;}
+        if(!c.has_mass) {return;}
+        if(!gx_pair_accept_wrap_and_test(qx - (double)c.Pos[0],
+                                         qy - (double)c.Pos[1],
+                                         qz - (double)c.Pos[2],
                                          reach, 0.0, NGB_SEARCH_ONEWAY)) {return;}
         if constexpr (nlr_spec_writes_neighbour_motion_v<Spec>) {gx_motion_target_mark(motion_targets, j);}
         IdentitySidecar id{};
@@ -3899,13 +3913,15 @@ struct NlrRecordLeaf {
     struct GxTouchedSet         ts;
     unsigned int                supply_mask;
     int                        *anomaly;
+    int                         use_screen = 0;   /* nlr_mode_d_uses_screen; 0 = read the particle records */
 
     KOKKOS_INLINE_FUNCTION
     void visit(int j, double, double, double, double) const
     {
-        const struct particle_data &Pj = P[j];
-        if(!(supply_mask & (1u << (unsigned int)Pj.Type))) {return;}
-        if(Pj.Mass <= 0) {return;}
+        struct GxScreenRecord c;
+        gx_screen_candidate(ts, use_screen, P, j, c);
+        if(!(supply_mask & (1u << (unsigned int)c.Type))) {return;}
+        if(!c.has_mass) {return;}
         /* The one claim.  A full list or an
          * out-of-phase claim is reported rather than dropped, because a dropped index is a
          * particle silently evaluated at a stale position -- the one failure this design
@@ -3943,6 +3959,7 @@ struct NlrRecordLeaf {
 template <class QueryFn>
 static void nlr_record_and_drift(const struct particle_data *P,
                                  unsigned int supply_mask,
+                                 int use_screen,
                                  const GxDeviceTreeView &tree,
                                  int n, int *anomaly,
                                  const char *label,
@@ -3983,6 +4000,7 @@ static void nlr_record_and_drift(const struct particle_data *P,
         int n_start = -1;                 /* negative: this one walks from the root */
         query(kk, qx, qy, qz, reach, start_nodes, n_start);
         NlrRecordLeaf leaf{P, ts, supply_mask, anomaly};
+        leaf.use_screen = use_screen;
         if(n_start < 0) {
             gx_device_tree_walk_from_root(qx, qy, qz, reach, tree, leaf, anomaly, supply_mask);
         } else if(n_start > 0) {
@@ -4076,8 +4094,9 @@ static void nlr_mode_d_local_reduce(const typename Spec::DeviceContext &ctx,
 
     /* Record what this walk will reach and bring just those current, before it
      * runs for real.  Same tree, same queries, so the same leaves. */
+    const int use_screen = nlr_mode_d_uses_screen<Spec>(n) ? 1 : 0;
     nlr_record_and_drift(
-        ctx.P, supply_mask, tree, n, anomaly, "nlr_mode_d_self_record",
+        ctx.P, supply_mask, use_screen, tree, n, anomaly, "nlr_mode_d_self_record",
         KOKKOS_LAMBDA(int kk, double &qx, double &qy, double &qz, double &reach,
                       const int *&start_nodes, int &n_start) {
             const ActiveData a_rec = Spec::load_active(ctx, active_slot[kk], active_idx[kk], radii[kk], cs);
@@ -4088,6 +4107,7 @@ static void nlr_mode_d_local_reduce(const typename Spec::DeviceContext &ctx,
         });
 
     const struct GxMotionTargetSet motion_targets = gx_motion_target_view();
+    const struct GxTouchedSet screen = use_screen ? gx_touched_set_view() : GxTouchedSet{};
     nlr_walk_for_sources(Spec::loop_name, n, KOKKOS_LAMBDA(int kk) {
         Spec::zero_accum(accums_out[kk]);
         const int i = active_idx[kk];
@@ -4095,6 +4115,7 @@ static void nlr_mode_d_local_reduce(const typename Spec::DeviceContext &ctx,
         ScatterData s{};
         NlrModeDReduceLeaf<Spec> leaf{&ctx, &a, &accums_out[kk], &s, supply_mask, &cs};
         leaf.motion_targets = motion_targets;
+        leaf.screen = screen;
         gx_device_tree_walk_from_root((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
                                       radii[kk], tree, leaf, anomaly, supply_mask);
     });
@@ -4321,8 +4342,9 @@ struct NlrPeerAnswerDeviceFused {
          * no more current for a local query than for a received one.  One
          * record-then-drift over the whole batch, each work item entering the
          * traversal the way its own kind does. */
+        const int use_screen = nlr_mode_d_uses_screen<Spec>(M) ? 1 : 0;
         nlr_record_and_drift(
-            ctx.P, neighbor_type_mask, tree, M, anomaly_d, "nlr_mode_d_record",
+            ctx.P, neighbor_type_mask, use_screen, tree, M, anomaly_d, "nlr_mode_d_record",
             KOKKOS_LAMBDA(int kk, double &qx, double &qy, double &qz, double &reach,
                           const int *&start_nodes, int &n_start) {
                 const ActiveData& a = (kk < n_local) ? ql[kk] : q_d[kk - n_local];
@@ -4338,12 +4360,14 @@ struct NlrPeerAnswerDeviceFused {
             });
 
         const struct GxMotionTargetSet motion_targets = gx_motion_target_view();
+        const struct GxTouchedSet screen = use_screen ? gx_touched_set_view() : GxTouchedSet{};
         nlr_walk_for_sources(Spec::loop_name, M, KOKKOS_LAMBDA(int kk) {
             Spec::zero_accum(acc_d[kk]);
             const ActiveData& a = (kk < n_local) ? ql[kk] : q_d[kk - n_local];
             ScatterData s{};
             NlrModeDReduceLeaf<Spec> leaf{&ctx, &a, &acc_d[kk], &s, neighbor_type_mask, &cs};
             leaf.motion_targets = motion_targets;
+            leaf.screen = screen;
             if(kk < n_local) {
                 gx_device_tree_walk_from_root((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
                                               (double)a.h_search, tree, leaf, anomaly_d, neighbor_type_mask);
