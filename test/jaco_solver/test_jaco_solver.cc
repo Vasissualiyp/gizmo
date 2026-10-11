@@ -275,12 +275,10 @@ static void seed_dust_temperature(SolveVars *s, const Params *pr) {
 static const int var_kind[N_VARS] = JACO_VAR_KIND_INIT;
 static const int var_time_dependent[N_VARS] = JACO_VAR_TIME_DEPENDENT_INIT;
 static const int var_initial_param[N_VARS] = JACO_VAR_INITIAL_PARAM_INIT;
-/* a tier-3 answer solves the sub-steps' backward-Euler equations, not the full step's: only its steady-state rows can be
-   checked against the full step */
-static int g_check_subcycled = 0;
-
-/* 0 if OK; otherwise writes the reason. *worst gets the largest residual / (CHECK_TOL * scale). */
-static int check_answer(const SolveVars *sv, const Params *pr, const JacoSolverSettings *set, char *why, double *worst) {
+/* 0 if OK; otherwise writes the reason. *worst gets the largest residual / (CHECK_TOL * scale). steady_only: only the
+   steady-state rows (a tier-3 answer whose last substep is unknown). */
+static int check_answer(const SolveVars *sv, const Params *pr, const JacoSolverSettings *set, char *why, double *worst,
+                        int steady_only = 0) {
     SolveVars F;
     double J[N_VARS][N_VARS];
     microphysics_func_jac(sv, pr, &F, J);
@@ -325,7 +323,7 @@ static int check_answer(const SolveVars *sv, const Params *pr, const JacoSolverS
     int at_floor = sv->T <= T_floor_of(sv, pr, set) * (1 + 1e-4) || sv->u <= set->u_min * (1 + 1e-4);
     int at_ceiling = sv->T >= set->T_max * (1 - 1e-9);
     double rT = at_floor ? fmax(r, 0) : at_ceiling ? fmax(-r, 0) : fabs(r);
-    if (g_check_subcycled) rT = 0;
+    if (steady_only) rT = 0;
     *worst = rT;
     if (rT > 1) {
         sprintf(why, "energy residual %.3g x tolerance (F_T=%g scale=%g%s)", rT, F.T, sT, at_floor ? ", at floor" : "");
@@ -334,7 +332,7 @@ static int check_answer(const SolveVars *sv, const Params *pr, const JacoSolverS
     for (int k = 2; k < N_VARS; k++) {
         /* subcycled: the last substep's rows, not the full step's; a balance temperature's row also reads the bands'
            absorption over the step */
-        if (g_check_subcycled && (var_time_dependent[k] || var_kind[k] == JACO_KIND_TEMPERATURE)) continue;
+        if (steady_only && (var_time_dependent[k] || var_kind[k] == JACO_KIND_TEMPERATURE)) continue;
         double sk = fabs(J[k][k]) * (sv->data[k] + X_ATOL * var_scale[k]) + 1e-300;
         double rk = F.data[k] / (CHECK_TOL * sk);
         if (sv->data[k] <= var_floor[k] * (1 + 1e-9)) rk = fmax(rk, 0); /* floored: must not want to grow */
@@ -348,6 +346,16 @@ static int check_answer(const SolveVars *sv, const Params *pr, const JacoSolverS
         }
     }
     return 0;
+}
+
+/* The check of a solver's answer against the system it solves: the full step's, or for a tier-3 answer its last substep's
+   (JacoSolveInfo.substep_params), as the full step's backward-Euler system is not what subcycling solves. A reference
+   solver that does not record the substep (compare mode) has its tier-3 answers checked on the steady-state rows. */
+static int check_solved(const SolveVars *sv, const Params *pr, const JacoSolverSettings *set, const JacoSolveInfo *info,
+                        char *why, double *worst) {
+    if (info->tier != JACO_TIER_SUBCYCLE) return check_answer(sv, pr, set, why, worst);
+    if (info->substep_params.Delta_t > 0) return check_answer(sv, &info->substep_params, set, why, worst);
+    return check_answer(sv, pr, set, why, worst, 1);
 }
 
 /* ---- reference equilibrium: roots of G(T) = heat(T) + pdv_work with steady-state ions ---- */
@@ -517,9 +525,7 @@ static int solve_checked(SolveVars *sv, const Params *pr, const JacoSolverSettin
         return rc;
     }
     double worst;
-    g_check_subcycled = info->tier == JACO_TIER_SUBCYCLE;
-    int bad = check_answer(sv, pr, set, why, &worst);
-    g_check_subcycled = 0;
+    int bad = check_solved(sv, pr, set, info, why, &worst);
     if (bad) {
         st.check_fail++;
         if (!strncmp(why, "energy", 6))
@@ -602,7 +608,7 @@ static int run_replays(const JacoSolverSettings *set) {
             int rc = jaco_solve(&sv, &pr, set, &info);
             char why[256] = "ok";
             double worst = 0;
-            int bad = rc ? 1 : check_answer(&sv, &pr, set, why, &worst);
+            int bad = rc ? 1 : check_solved(&sv, &pr, set, &info, why, &worst);
             printf("T0=%g u(T0,x_CIE)/u0=%.3f: tier %d nfeval %d T=%.5g x_H+=%.3g %s\n", T0, jaco_T_to_u(T0, &in, &pr, NULL) / pr.u_initial,
                    info.tier, info.nfeval, sv.T, sv.x_Hplus, bad ? why : "ok");
             if (bad) {
@@ -646,7 +652,7 @@ static int run_replays(const JacoSolverSettings *set) {
         int rc = jaco_solve(&sv, &pr, set, &info);
         char why[256] = "ok";
         double worst = 0;
-        int bad = rc ? 1 : check_answer(&sv, &pr, set, why, &worst);
+        int bad = rc ? 1 : check_solved(&sv, &pr, set, &info, why, &worst);
         if (rc) strcpy(why, "every tier failed");
         printf("%-20s %9.4g %9.4g %10.4g | %4d %6d %10.5g %9.3g %9.3g %5d %5d %s%s (nan J evals %d)\n", c.name, c.T0, c.n, c.dt,
                info.tier, info.nfeval, sv.T, sv.x_H_2, sv.x_Hplus, nan_j, nan_f, bad ? "FAIL: " : "", why, info.n_nonfinite_jac);
@@ -835,6 +841,20 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
          " x_photon_IR_initial=0.0047440329191881445 x_photon_NUV_initial=3.5045818035298207e-10"
          " x_photon_ONIR_initial=1.9716085063116887e-09 y=0.094444444444444442 z=0",
          2.73, 160803223.3050341},
+        /* a sweep cell answered by tier 3, whose answer solves its last substep's backward-Euler system, not the full
+           step's (residual 4e9 x tolerance in x_H+): the check must take the substep's */
+        {"sweep 3e5K tier 3", 63230935467638.977, 316227.76601683791, 1, 9.9999999999999995e-21, 0.099400000000000002,
+         9.9999999999999995e-21,
+         " Delta_t=10000000000000 Delta_x=3e+18 G_LW_bg=0 ISRF=1 N_H=3e+26 T_CMB=2.73 T_rad=30 Td_initial=10"
+         " X=0.71550000000000002 Z_d=1 Z_metals=0.014 eps_H0_UVB=0 eps_HI=4.7999999999999997e-12 f_metal=1 f_neb=0"
+         " gamma_12_UVB=0 gamma_eos=1.6666666666666667 grad_v=1e-14 hnu_EUV=20 n_Htot=100000000"
+         " pdv_work=-3.2920361862837901e-06 rho=2.3400000000000001e-16 rsol=0.0001 sigma_HI=2.9999999999999998e-18"
+         " u_initial=63230935467638.977 x_C_tot=0.00021000000000000001 x_Ca=2.2000000000000001e-06"
+         " x_Fe=2.5000000000000001e-05 x_H_2_initial=9.9999999999999995e-21 x_Hplus_initial=0.99999999989999999"
+         " x_Mg=3.1999999999999999e-05 x_N=6.7999999999999999e-05 x_Ne=8.5000000000000006e-05"
+         " x_O_tot=0.00048999999999999998 x_S=1.2999999999999999e-05 x_Si=3.1999999999999999e-05"
+         " x_photon_EUV_initial=0 x_photon_FUV_initial=0 x_photon_IR_initial=6.5000000000000003e-09"
+         " x_photon_NUV_initial=0 x_photon_ONIR_initial=0 y=0.099400000000000002 z=0"},
 #endif
     };
     int nfail = 0, ncells = sizeof(cells) / sizeof(cells[0]);
@@ -868,7 +888,7 @@ static int run_recorded_cells(const JacoSolverSettings *set) {
             double worst;
             int rc = jaco_solve(&sv, &pr, &cs, &info);
             if (rc) strcpy(why, "every tier failed");
-            bad = rc || check_answer(&sv, &pr, &cs, why, &worst);
+            bad = rc || check_solved(&sv, &pr, &cs, &info, why, &worst);
         } else
             strcpy(why, "stale recorded parameters");
         printf("%-24s tier %d (tier-1 status %d) nfeval %d T=%.6g x_H+=%.4g %s%s (nan J evals %d)\n", cells[c].name, info.tier,
@@ -902,7 +922,7 @@ static int print_outputs(const JacoSolverSettings *set) {
         JacoSolveInfo info;
         char why[256] = "ok";
         double worst;
-        int bad = jaco_solve(&sv, &pr, set, &info) || check_answer(&sv, &pr, set, why, &worst);
+        int bad = jaco_solve(&sv, &pr, set, &info) || check_solved(&sv, &pr, set, &info, why, &worst);
         Outputs out;
         microphysics_outputs(&sv, &pr, &out);
         char label[160];
@@ -940,7 +960,7 @@ static int run_stall_cases(const JacoSolverSettings *set) {
         int rc = jaco_solve(&sv, &pr, set, &info);
         char why[256] = "ok";
         double worst = 0;
-        int bad = rc ? 1 : check_answer(&sv, &pr, set, why, &worst);
+        int bad = rc ? 1 : check_solved(&sv, &pr, set, &info, why, &worst);
         if (rc) strcpy(why, "every tier failed");
         if (!bad && c.ionized && sv.x_Hplus <= 1e-10) {
             bad = 1;
@@ -1166,8 +1186,8 @@ static int compare_case(const SolveVars &in, const Params &pr, const JacoSolverS
     cmp.tier_differ += ia.tier != ib.tier;
     char why_ref[256] = "ok", why_new[256] = "ok";
     double w;
-    int bad_ref = !ra && check_answer(&a, &pr, set, why_ref, &w);
-    int bad_new = !rb && check_answer(&b, &pr, set, why_new, &w);
+    int bad_ref = !ra && check_solved(&a, &pr, set, &ia, why_ref, &w);
+    int bad_new = !rb && check_solved(&b, &pr, set, &ib, why_new, &w);
     cmp.check_fail_ref += bad_ref;
     cmp.check_fail_new += bad_new;
     double d = 0;
@@ -1285,7 +1305,7 @@ int main(int argc, char **argv) {
             int rc = jaco_solve(&x, &pr, &set, &info);
             char why[256] = "ok";
             double worst = 0;
-            if (!rc) check_answer(&x, &pr, &set, why, &worst);
+            if (!rc) check_solved(&x, &pr, &set, &info, why, &worst);
             printf("replay n=%.4g T0=%.6g dt=%.4g pdv=%.3g: rc=%d tier=%d nfeval=%d (tier-1 status %d) T=%.8g xHp=%.4g xH2=%.4g check %s\n",
                    pr.n_Htot, sv.T, pr.Delta_t, pr.pdv_work, rc, info.tier, info.nfeval, info.tier1_status, x.T, x.x_Hplus, x.x_H_2, why);
         }
@@ -1346,7 +1366,7 @@ int main(int argc, char **argv) {
         }
         char why[256] = "ok";
         double worst = 0;
-        if (!rc) check_answer(&sv, &pr, &set, why, &worst);
+        if (!rc) check_solved(&sv, &pr, &set, &info, why, &worst);
         if (!rc && getenv("JACO_NEAR_ROOT")) { /* the equilibrium reference at the answer, its chemistry traced */
             double shift, dist;
             JacoSolverSettings v = set;

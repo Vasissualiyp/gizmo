@@ -43,6 +43,8 @@ struct JacoSolveInfo {
     int resynced_T0;   /* tier 0 re-derived the starting T from u_initial */
     int pinned;        /* the temperature is pinned at its floor or ceiling */
     int n_substeps;    /* tier-3 substeps taken */
+    Params substep_params; /* tier 3: the last substep's parameters (its Delta_t, start energy and time-dependent start
+                              values); the answer solves that substep's backward-Euler system, not the full step's */
 };
 
 void jaco_solver_default_settings(struct JacoSolverSettings *set);

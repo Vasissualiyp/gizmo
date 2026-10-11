@@ -1378,6 +1378,7 @@ int jaco_solve(SolveVars *sv, const Params *pr_in, const struct JacoSolverSettin
         int t2;
         enum Outcome o2 = solve_step(&trial, &ps, set, &c, &t2, NULL, NULL);
         if (o2 != OUTCOME_FAILED) {
+            info->substep_params = ps;
             cur = trial;
             t_done += ps.Delta_t;
             nsub++;
