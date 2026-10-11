@@ -65,6 +65,9 @@ void restart(int modus)
 #ifdef CHIMES 
     int partIndex, abunIndex; 
 #endif 
+#ifdef JACO
+    if(modus == 0) {jaco_report_solve_stats(1);} /* the solver statistics accumulated since the last step report, as the run may end here */
+#endif
     
     if(ThisTask == 0 && modus == 0) // writing re-start files: move old files to .bak
     {

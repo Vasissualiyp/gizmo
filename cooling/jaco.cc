@@ -1141,9 +1141,9 @@ void jaco_seed_spawned_cell(int i, double T, struct particle_data *pp, struct ga
     set_eos_pressure(i, pp, cell);
 }
 
-/* ---- Per-step solver statistics ----
-   Accumulated over the cells call_jaco() solves in one cooling pass; reported and reset by
-   jaco_report_solve_stats(), which every rank must call (MPI collective) once per pass. */
+/* ---- Solver statistics ----
+   Accumulated over the cells call_jaco() solves; reported and reset by jaco_report_solve_stats(), which every rank
+   must call (MPI collective) at the end of each cooling pass. */
 enum { JS_CELLS, JS_TIER1, JS_TIER2, JS_TIER3, JS_FAILED, JS_FEVALS, JS_RESYNC, JS_PINNED, JS_NANJ, JS_NANF,
        JS_T1_1, JS_T1_2, JS_T1_3, JS_T1_4, JS_T1_MORE, JS_NANOUT, JS_NONCONS,
        JS_T1F_NONFINITE, JS_T1F_SINGULAR, JS_T1F_LINESEARCH, JS_T1F_BUDGET, JS_T1F_FLOOR, JS_T1F_UNSTABLE, JS_T1F_STALL,
@@ -1186,9 +1186,17 @@ static void jaco_stats_add(const struct JacoSolveInfo *info, const struct jaco_s
     }
 }
 
-/* Called at the end of each cooling pass on every rank: prints the MPI-reduced statistics on
-   rank 0 and resets the counters. */
-void jaco_report_solve_stats(void) {
+/* Called at the end of each cooling pass on every rank. Prints the MPI-reduced statistics on rank 0 and resets the
+   counters only on a step GIZMO prints its own step report on (IO_SUPPRESS_TIMEBIN_STDOUT), once per step, or when
+   flush is set (before a restartfile is written, where the run may end), so that the printed totals stay exact. */
+void jaco_report_solve_stats(int flush) {
+    static long long reported_step = -1;
+    int report_step = All.NumCurrentTiStep != reported_step;
+#ifdef IO_SUPPRESS_TIMEBIN_STDOUT
+    report_step = report_step && All.HighestActiveTimeBin >= TIMEBINS - IO_SUPPRESS_TIMEBIN_STDOUT;
+#endif
+    if (!flush && !report_step) return;
+    if (report_step) reported_step = All.NumCurrentTiStep;
     long global[JS_N];
     int global_max = 0;
     double energy[JE_N];

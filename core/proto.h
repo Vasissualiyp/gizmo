@@ -32,7 +32,7 @@ double jaco_electron_abundance(const SolveVars *sv, const Params *pr);
 double jaco_fixed_electron_abundance(const SolveVars *sv, const Params *pr);
 void jaco_build_cie_table(void);
 double jaco_cie_electron_abundance(double T);
-void jaco_report_solve_stats(void);
+void jaco_report_solve_stats(int flush);
 void jaco_radiation_inputs(int i, double T, double *G0, double *G_LW, double *Tdust, struct particle_data *pp, struct gas_cell_data *cell);
 double jaco_metal_line_switch(void);
 void jaco_uvb_inputs(int i, double T, double *G_LW_bg, double *gamma_12, double *eps_H0, struct gas_cell_data *cell);

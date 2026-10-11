@@ -95,7 +95,7 @@ void cooling_parent_routine(void)
     int N_active = (int) cool_indices.size();
     if(N_active == 0) {
 #ifdef JACO
-        jaco_report_solve_stats(); /* collective: ranks with nothing to cool must still take part */
+        jaco_report_solve_stats(0); /* collective: ranks with nothing to cool must still take part */
 #endif
 #ifdef DENSEST_CELL_TRACK
         track_densest_cell();
@@ -133,7 +133,7 @@ void cooling_parent_routine(void)
     myfree(compact_P);
 
 #ifdef JACO
-    jaco_report_solve_stats();
+    jaco_report_solve_stats(0);
 #endif
 #ifdef DENSEST_CELL_TRACK
     track_densest_cell();
@@ -221,6 +221,9 @@ void track_densest_cell(void)
             printf("DENSEST_CELL_TRACK_STOP: densest cell at %g g/cm^3 > DENSEST_CELL_TRACK_STOP_DENSITY at Time=%.10g; writing a snapshot and stopping\n",
                    rec[1], All.Time);
         savepositions(All.SnapshotFileCount++);
+#ifdef JACO
+        jaco_report_solve_stats(1); /* the solver statistics since the last step report */
+#endif
         endrun(0);
     }
 #endif
