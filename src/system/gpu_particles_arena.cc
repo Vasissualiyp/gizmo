@@ -14,6 +14,8 @@
 #include <exception>
 #if defined(KOKKOS_ENABLE_HIP)
 #include <hip/hip_runtime.h>   /* hipMemAdvise, for the particle-storage placement policy below */
+#elif defined(KOKKOS_ENABLE_CUDA)
+#include <cuda_runtime.h>      /* cudaMemAdvise, for the particle-storage placement policy below */
 #endif
 
 /* GPU All mirror: must precede allvars.h so nvc++ sees `All` (=All_dev) when it
@@ -264,6 +266,17 @@ extern "C" void gpu_particles_arena_release(void)
  * accessor. It is a placement bias, not a prohibition on migrating, and it does not change
  * what any code may read or write. Correctness never depends on it: if the runtime declines
  * the hint the run is slower, and nothing else changes.
+ *
+ * NVIDIA GPUs split by memory model. A PCIe-attached GPU (A100, H100 PCIe) demand-pages managed
+ * memory between host and device as above, but measured there the device side should own it: on
+ * a 12M-particle cosmological zoom on Lonestar6 A100 nodes (6 ranks, ~7 GB of particle storage
+ * per rank) device-preferred placement ran 5% faster than no hint, while host-preferred gained in
+ * the tree build and the gradient and force loops and gave all of it back in the density walk,
+ * the kicks and the sinks, finishing level with no hint. So a PCIe-attached GPU prefers the
+ * device at any footprint. A Grace-Hopper node reads managed memory coherently from both sides;
+ * there the default is no hint, since a host preference would hold the arrays in the Grace
+ * memory, which the GPU reaches at a fraction of its own memory's bandwidth. An explicit
+ * override applies on both.
  * -------------------------------------------------------------------------------------- */
 
 /*! Footprint above which host-preferred placement is chosen, as total per-rank bytes of P
@@ -303,6 +316,24 @@ extern "C" void gpu_particles_arena_release(void)
 #define PARTICLE_STORAGE_PLACEMENT_HOST   1   /* prefer host, map the device in as an accessor */
 #define PARTICLE_STORAGE_PLACEMENT_DEVICE 2   /* prefer device, map the host in as an accessor */
 
+#if defined(KOKKOS_ENABLE_CUDA)
+/*! Whether the host reads and writes CUDA managed memory in place (Grace-Hopper) rather than through page
+ *  migration (a PCIe-attached GPU). Storage outside CUDA managed memory is not paged at all and counts as
+ *  coherent; an attribute that cannot be read counts as not coherent. */
+static int cuda_managed_memory_is_host_coherent(void)
+{
+    static int coherent = -1;
+    if(coherent < 0) {
+        int attr = 0, dev = 0;
+        if(!std::is_same<GIZMO_KOKKOS_SHARED_SPACE, Kokkos::CudaUVMSpace>::value) {coherent = 1;}
+        else if(cudaGetDevice(&dev) == cudaSuccess &&
+                cudaDeviceGetAttribute(&attr, cudaDevAttrDirectManagedMemAccessFromHost, dev) == cudaSuccess) {coherent = attr ? 1 : 0;}
+        else {coherent = 0;}
+    }
+    return coherent;
+}
+#endif
+
 static int particle_storage_placement(size_t particle_arena_bytes)
 {
 #if defined(GPU_PARTICLE_STORAGE_PLACEMENT)
@@ -315,8 +346,44 @@ static int particle_storage_placement(size_t particle_arena_bytes)
              ? PARTICLE_STORAGE_PLACEMENT_DEVICE
              : PARTICLE_STORAGE_PLACEMENT_HOST;
 #else
+#if defined(KOKKOS_ENABLE_CUDA)
+    (void) particle_arena_bytes;
+    return cuda_managed_memory_is_host_coherent() ? PARTICLE_STORAGE_PLACEMENT_NONE : PARTICLE_STORAGE_PLACEMENT_DEVICE;
+#else
     return (particle_arena_bytes >= PARTICLE_STORAGE_HOST_PREFERRED_MIN_BYTES)
              ? PARTICLE_STORAGE_PLACEMENT_HOST : PARTICLE_STORAGE_PLACEMENT_NONE;
+#endif
+#endif
+}
+
+/*! Ask the driver for one placement on one managed buffer: a preferred location on one side and
+ *  in-place access from the other, so whichever side is preferred, the other reaches the pages
+ *  without moving them. The two requests are independent and either can be refused alone, so each
+ *  outcome is returned as text for the caller's report. Returns 1 if both were accepted, 0 if
+ *  either was refused, and -1 where nothing was asked of the driver (no GPU, no current device,
+ *  or storage that is not managed memory), so the caller reports neither a hint nor a refusal. */
+static int managed_memory_advise(void *p, size_t nbytes, int placement, const char **pref_result, const char **access_result)
+{
+    *pref_result = *access_result = "not applicable";
+    const int on_device = (placement == PARTICLE_STORAGE_PLACEMENT_DEVICE);
+#if defined(KOKKOS_ENABLE_HIP)
+    int dev = 0;
+    if(hipGetDevice(&dev) != hipSuccess) {return -1;}   /* nothing was asked of the driver */
+    hipError_t rc_pref = hipMemAdvise(p, nbytes, hipMemAdviseSetPreferredLocation, on_device ? dev : hipCpuDeviceId);
+    hipError_t rc_acc  = hipMemAdvise(p, nbytes, hipMemAdviseSetAccessedBy, on_device ? hipCpuDeviceId : dev);
+    *pref_result = hipGetErrorString(rc_pref); *access_result = hipGetErrorString(rc_acc);
+    return (rc_pref == hipSuccess && rc_acc == hipSuccess);
+#elif defined(KOKKOS_ENABLE_CUDA)
+    if(!std::is_same<GIZMO_KOKKOS_SHARED_SPACE, Kokkos::CudaUVMSpace>::value) {return -1;}
+    int dev = 0;
+    if(cudaGetDevice(&dev) != cudaSuccess) {return -1;}   /* nothing was asked of the driver */
+    cudaError_t rc_pref = cudaMemAdvise(p, nbytes, cudaMemAdviseSetPreferredLocation, on_device ? dev : cudaCpuDeviceId);
+    cudaError_t rc_acc  = cudaMemAdvise(p, nbytes, cudaMemAdviseSetAccessedBy, on_device ? cudaCpuDeviceId : dev);
+    *pref_result = cudaGetErrorString(rc_pref); *access_result = cudaGetErrorString(rc_acc);
+    return (rc_pref == cudaSuccess && rc_acc == cudaSuccess);
+#else
+    (void) p; (void) nbytes; (void) on_device;
+    return -1;
 #endif
 }
 
@@ -330,18 +397,11 @@ static void particle_storage_apply_placement(void *p, size_t nbytes, size_t part
     if(!p || nbytes == 0 || particle_arena_bytes == 0) {return;}
     const int placement = particle_storage_placement(particle_arena_bytes);
     if(placement == PARTICLE_STORAGE_PLACEMENT_NONE) {return;}
-#if defined(KOKKOS_ENABLE_HIP)
-    int dev = 0;
-    if(hipGetDevice(&dev) != hipSuccess) {return;}
-    /* One pair of calls serves both directions: whichever side is preferred, the other is
-     * mapped in as an accessor so it reaches the pages without moving them. */
-    const int on_device   = (placement == PARTICLE_STORAGE_PLACEMENT_DEVICE);
-    const int prefer_id   = on_device ? dev : hipCpuDeviceId;
-    const int accessor_id = on_device ? hipCpuDeviceId : dev;
-    const char *where     = on_device ? "device" : "host";
-    hipError_t rc_pref = hipMemAdvise(p, nbytes, hipMemAdviseSetPreferredLocation, prefer_id);
-    hipError_t rc_acc  = hipMemAdvise(p, nbytes, hipMemAdviseSetAccessedBy, accessor_id);
-    if(rc_pref != hipSuccess || rc_acc != hipSuccess)
+    const char *where = (placement == PARTICLE_STORAGE_PLACEMENT_DEVICE) ? "device" : "host";
+    const char *pref_result, *access_result;
+    const int accepted = managed_memory_advise(p, nbytes, placement, &pref_result, &access_result);
+    if(accepted < 0) {return;}
+    if(!accepted)
     {
         /* The two calls are independent, so one of them can be refused on its own and leave
          * the other standing. Name which, rather than claim the default placement is back:
@@ -354,7 +414,7 @@ static void particle_storage_apply_placement(void *p, size_t nbytes, size_t part
             printf("Particle storage: the %s-preferred placement hint was not fully applied "
                    "(preferred location: %s; other-side access: %s). Whatever part of it was accepted "
                    "stands, and the run continues at whatever speed that gives.\n",
-                   where, hipGetErrorString(rc_pref), hipGetErrorString(rc_acc));
+                   where, pref_result, access_result);
             fflush(stdout);
         }
         return;
@@ -371,13 +431,6 @@ static void particle_storage_apply_placement(void *p, size_t nbytes, size_t part
                (double) particle_arena_bytes / (1024.0 * 1024.0));
         fflush(stdout);
     }
-#else
-    /* CUDA and the host-only backends apply nothing. The measurements behind this policy come
-     * from HIP managed memory; the corresponding cudaMemAdvise calls have never been run
-     * against a GH200, so there is no result to act on and a symmetry port would be a guess.
-     * The decision above is still compiled and evaluated here, so turning CUDA on later is one
-     * measurement and one branch rather than a rewrite. */
-#endif
 }
 
 extern "C" void *gpu_particles_uvm_alloc(size_t nbytes, const char *label, size_t particle_arena_bytes)
@@ -405,15 +458,7 @@ extern "C" void *gpu_particles_uvm_alloc(size_t nbytes, const char *label, size_
 extern "C" int gizmo_particle_storage_needs_staged_mpi_receive(void)
 {
 #if defined(KOKKOS_ENABLE_CUDA)
-    static int needs_staging = -1;
-    if(needs_staging < 0) {
-        int coherent = 0, dev = 0;
-        if(!std::is_same<GIZMO_KOKKOS_SHARED_SPACE, Kokkos::CudaUVMSpace>::value) {needs_staging = 0;}
-        else if(cudaGetDevice(&dev) == cudaSuccess &&
-                cudaDeviceGetAttribute(&coherent, cudaDevAttrDirectManagedMemAccessFromHost, dev) == cudaSuccess) {needs_staging = coherent ? 0 : 1;}
-        else {needs_staging = 1;}
-    }
-    return needs_staging;
+    return cuda_managed_memory_is_host_coherent() ? 0 : 1;
 #else
     return 0;
 #endif
@@ -448,26 +493,22 @@ extern "C" void *gizmo_gpu_alloc_shared(size_t nbytes, const char *label)
 extern "C" void gizmo_gpu_place_shared(void *p, size_t nbytes, int placement, const char *what)
 {
     if(!p || nbytes == 0 || placement == PARTICLE_STORAGE_PLACEMENT_NONE) {return;}
-#if defined(KOKKOS_ENABLE_HIP)
-    int dev = 0;
-    if(hipGetDevice(&dev) != hipSuccess) {return;}
-    const int on_device   = (placement == PARTICLE_STORAGE_PLACEMENT_DEVICE);
-    const int prefer_id   = on_device ? dev : hipCpuDeviceId;
-    const int accessor_id = on_device ? hipCpuDeviceId : dev;
-    hipError_t rc_pref = hipMemAdvise(p, nbytes, hipMemAdviseSetPreferredLocation, prefer_id);
-    hipError_t rc_acc  = hipMemAdvise(p, nbytes, hipMemAdviseSetAccessedBy, accessor_id);
+    const int on_device = (placement == PARTICLE_STORAGE_PLACEMENT_DEVICE);
+    const char *pref_result, *access_result;
+    const int accepted = managed_memory_advise(p, nbytes, placement, &pref_result, &access_result);
+    if(accepted < 0) {return;}
     /* Reported once per buffer kind rather than per allocation: the tree reallocates whenever it
      * grows, and a line each time would bury the one fact worth having, which is whether the hint
      * was accepted at all. A refusal is named because a later measurement taken against a
      * half-applied hint otherwise reads as a measurement of the default. */
     static int reported_ok = 0, reported_bad = 0;
-    if(rc_pref != hipSuccess || rc_acc != hipSuccess) {
+    if(!accepted) {
         if(!reported_bad && ThisTask == 0) {
             reported_bad = 1;
             printf("%s placement: the %s-preferred hint was not fully applied (preferred location: %s; "
                    "other-side access: %s). Whatever part of it was accepted stands.\n",
                    what ? what : "shared buffer", on_device ? "device" : "host",
-                   hipGetErrorString(rc_pref), hipGetErrorString(rc_acc));
+                   pref_result, access_result);
             fflush(stdout);
         }
         return;
@@ -479,9 +520,6 @@ extern "C" void gizmo_gpu_place_shared(void *p, size_t nbytes, int placement, co
                (double) nbytes / (1024.0 * 1024.0));
         fflush(stdout);
     }
-#else
-    (void) nbytes; (void) what;   /* see the note in particle_storage_apply_placement */
-#endif
 }
 
 extern "C" void *gizmo_gpu_alloc_device(size_t nbytes, const char *label)
