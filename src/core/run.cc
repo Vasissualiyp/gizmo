@@ -249,7 +249,7 @@ void run(void)
         if(add_elem_calls_global > (long long)(0.01 * All.TotNumPart))
         {
             if(ThisTask == 0)
-                printf("Phase 9.6 LET guardrail: %lld force_add_element_to_tree insertions since last build "
+                printf("Tree insertion limit: %lld force_add_element_to_tree insertions since last build "
                        "(> 1%% of TotNumPart=%lld) -- forcing tree rebuild this step.\n",
                        add_elem_calls_global, (long long) All.TotNumPart);
             TreeReconstructFlag_local = 1;

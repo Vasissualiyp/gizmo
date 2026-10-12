@@ -1657,7 +1657,7 @@ void force_flag_localnodes(void)
  *  because the Nextnode[] array essentially describes the full tree walk as a
  *  link list. Multipole moments of tree nodes need not be changed (the new
  *  particle inherits the parent's position so mass+CoM are preserved at the
- *  insertion site; the 9.6 ForceAddElementToTree_CallsSinceBuild guardrail
+ *  insertion site; the ForceAddElementToTree_CallsSinceBuild insertion limit
  *  bounds drift to ancestor nodes between full rebuilds).
  *
  *  Father/Nextnode/Extnodes are
