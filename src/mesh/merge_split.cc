@@ -902,7 +902,7 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
         double norm=0, dp[3]; int m; dp[0]=dp[1]=dp[2]=0;
 
         // get the eigenvector of NV_T that has the largest eigenvalue (= sparsest sampling direction, if assume equal-mass particles, for our definition of NV_T)
-        double nvt[NUMDIMS*NUMDIMS]={0}; for(k=0;k<NUMDIMS;k++) {for(m=0;m<NUMDIMS;m++) {nvt[NUMDIMS*k + m]=CellP[i].NV_T[k][m];}} // auxiliary array to store NV_T in for feeding to GSL eigen routine
+        double nvt[NUMDIMS*NUMDIMS]={0}; for(k=0;k<NUMDIMS;k++) {for(m=0;m<NUMDIMS;m++) {nvt[NUMDIMS*k + m]=CellP[i].NV_T[k][m];}} // auxiliary array to store NV_T in for feeding to the eigen routine
         double eigvals_loc[3]={0}, eigvecs_loc[9]={0};
         eigen_symmetric(nvt, eigvals_loc, eigvecs_loc, NUMDIMS);
         int min_eigvec_index = 0; double max_eigval = -MAX_REAL_NUMBER;

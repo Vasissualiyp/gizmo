@@ -67,6 +67,15 @@ void elastic_stress_tensor_force_compute_pair(
             norm_m += nvt[NUMDIMS*k_v + j_v] * nvt[NUMDIMS*k_v + j_v];
         }}
         if(norm_m > MIN_REAL_NUMBER) {
+#if defined(HYDRO_MESHLESS_FINITE_VOLUME) || defined(HYDRO_MESHLESS_FINITE_MASS)
+            /* no tensile correction: the sum over principal axes of lambda_k v_k (A.v_k) is exactly S.A */
+            for(int j_v=0; j_v<NUMDIMS; j_v++) {
+                double S_dot_A = 0;
+                for(int k_v=0; k_v<NUMDIMS; k_v++) { S_dot_A += nvt[NUMDIMS*j_v + k_v] * FVec[k_v]; }
+                cmag[j_v] += wtfac * S_dot_A * All.cf_a2inv;
+            }
+#else
+            /* tensile correction acts on the positive principal stresses only, so this path needs the eigenpairs */
             double eigvals_loc[3] = {0}, eigvecs_loc[9] = {0};
             eigen_symmetric(nvt, eigvals_loc, eigvecs_loc, NUMDIMS);
             for(int k_v=0; k_v<NUMDIMS; k_v++) {
@@ -76,13 +85,12 @@ void elastic_stress_tensor_force_compute_pair(
                     A_dot_v += FVec[j_v] * eigenvec_k[j_v];
                 }
                 double prefac = wtfac * eigenval_k * (A_dot_v * All.cf_a2inv);
-#if !defined(HYDRO_MESHLESS_FINITE_VOLUME) && !defined(HYDRO_MESHLESS_FINITE_MASS)
                 if(eigenval_k > 0) { prefac *= 1. - tensile_correction_factor; }
-#endif
                 if(!isnan(eigenval_k)) {
                     for(int j_v=0; j_v<NUMDIMS; j_v++) { cmag[j_v] += prefac * eigenvec_k[j_v]; }
                 }
             }
+#endif
         }
     }
     for(int j_v=0; j_v<3; j_v++) {

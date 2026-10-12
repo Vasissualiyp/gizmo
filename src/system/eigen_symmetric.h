@@ -1,15 +1,15 @@
 /* eigen_symmetric.h — GPU-callable eigendecomposition for small symmetric matrices.
  *
  * Replaces GSL gsl_eigen_symmv / gsl_eigen_symm for 1x1, 2x2, and 3x3 cases.
- * Uses the Cardano analytical method for eigenvalues (exact, no iteration)
- * and the cross-product method for eigenvectors (Kopp 2008).
+ * Uses cyclic Jacobi rotations. Every rotation is orthogonal, so the eigenvectors
+ * are orthonormal by construction, including repeated and nearly repeated
+ * eigenvalues, and eigenvalues are accurate to roundoff relative to the matrix
+ * norm (the same accuracy class as GSL). A 2x2 matrix is diagonalized exactly by
+ * its single rotation. The number of sweeps is bounded, so the cost on a device
+ * is predictable; no workspace is allocated.
  *
- * Accuracy: machine-precision for well-conditioned matrices (same as or better
- * than GSL's iterative QR for this matrix size).
- * Performance: ~3-5x faster than GSL for 3x3 (no workspace alloc, no iteration).
- *
- * Reference: J. Kopp, "Efficient numerical diagonalization of hermitian 3x3 matrices",
- *            Int. J. Mod. Phys. C 19 (2008) 523-548, arXiv:physics/0610206
+ * Reference: H. Rutishauser, "The Jacobi method for real symmetric matrices",
+ *            Numer. Math. 9 (1966) 1-10 (the rotation formulas used below).
  *
  * Written by Phil Hopkins (phopkins@caltech.edu) for GIZMO.
  */
@@ -18,199 +18,145 @@
 #define EIGEN_SYMMETRIC_H
 
 #include <math.h>
+#include <float.h>
+/* under a GPU compiler fall back to host+device, as macros.h does, never to host-only */
 #ifndef GIZMO_GPU_FUNCTION
+#if (defined(__CUDACC__) || defined(__HIPCC__))
+#define GIZMO_GPU_FUNCTION __device__ __host__
+#else
 #define GIZMO_GPU_FUNCTION
 #endif
+#endif
+
+#define EIGEN_SYMMETRIC_MAX_SWEEPS 16 /* finite 2x2 and 3x3 input converges within 4 sweeps (including repeated and widely scaled eigenvalues); this only bounds pathological input */
 
 /* ================================================================
-   eigen_symmetric_values: eigenvalues only (no eigenvectors)
-   A[n*n] is a symmetric matrix in row-major order (destroyed on output).
-   eval[n] receives the eigenvalues in ascending order.
-   n must be 1, 2, or 3.
+   eigen_symmetric_jacobi: shared core of the two entry points below.
+   A[n*n] is a symmetric matrix in row-major order; only its upper triangle is
+   read, and it is not modified. eval[n] receives the eigenvalues in ascending
+   order. If want_vectors, evec[n*k + j] receives component j of the unit
+   eigenvector belonging to eval[k] (each eigenvector stored contiguously);
+   otherwise evec is not touched and no vector work is compiled in.
+   n must be 1, 2, or 3. Returns 1 when the off-diagonal part reached roundoff
+   (relative to the matrix norm) within the sweep bound, 0 otherwise.
    ================================================================ */
+/* put d[i] <= d[j], swapping the matching eigenvector columns */
+template<bool want_vectors>
 GIZMO_GPU_FUNCTION
-static inline void eigen_symmetric_values(double *A, double *eval, int n)
+static inline void eigen_symmetric_order_pair(double d[3], double v[3][3], int i, int j)
 {
-    if(n == 1) {
-        eval[0] = A[0];
-        return;
+    if(!(d[i] > d[j])) {return;}
+    double t = d[i]; d[i] = d[j]; d[j] = t;
+    if constexpr(want_vectors) {for(int r = 0; r < 3; r++) {double s = v[r][i]; v[r][i] = v[r][j]; v[r][j] = s;}}
+}
+
+template<bool want_vectors>
+GIZMO_GPU_FUNCTION
+static inline int eigen_symmetric_jacobi(const double *A, double *eval, double *evec, int n)
+{
+    /* work on A with each entry divided by the largest |entry|, so no square or sum below can overflow or
+       underflow anywhere in the finite range (subnormal entries included) */
+    double scale = 0;
+    int finite = 1;
+    for(int i = 0; i < n; i++) {
+        for(int j = i; j < n; j++) {
+            double x = fabs(A[n*i + j]);
+            if(!(x <= DBL_MAX)) {finite = 0;} else if(x > scale) {scale = x;}
+        }
+    }
+    if(!finite) { /* a NaN or infinite entry has no eigensystem: NaN eigenvalues, unconverged */
+        for(int k = 0; k < n; k++) {
+            eval[k] = NAN;
+            if constexpr(want_vectors) {for(int j = 0; j < n; j++) {evec[n*k + j] = (j == k) ? 1.0 : 0.0;}}
+        }
+        return 0;
+    }
+    if(scale == 0) {scale = 1;} /* zero matrix */
+    double a[3][3], v[3][3];
+    for(int i = 0; i < n; i++) {
+        for(int j = 0; j < n; j++) {
+            a[i][j] = ((i <= j) ? A[n*i + j] : A[n*j + i]) / scale;
+            if constexpr(want_vectors) {v[i][j] = (i == j) ? 1.0 : 0.0;}
+        }
     }
 
-    if(n == 2) {
-        /* Analytical 2x2: eigenvalues of [[a,b],[b,d]] */
-        double a = A[0], b = A[1], d = A[3];
-        double tr = a + d;
-        double det = a * d - b * b;
-        double disc = tr * tr - 4.0 * det;
-        if(disc < 0) disc = 0;
-        disc = sqrt(disc);
-        eval[0] = 0.5 * (tr - disc);
-        eval[1] = 0.5 * (tr + disc);
-        return;
+    double norm2 = 0; /* squared Frobenius norm: invariant under the rotations */
+    for(int i = 0; i < n; i++) {for(int j = 0; j < n; j++) {norm2 += a[i][j] * a[i][j];}}
+    const double tolerance2 = DBL_EPSILON * DBL_EPSILON * norm2;
+
+    int converged = 0;
+    for(int sweep = 0; sweep <= EIGEN_SYMMETRIC_MAX_SWEEPS; sweep++) {
+        double off2 = 0;
+        for(int p = 0; p < n; p++) {for(int q = p+1; q < n; q++) {off2 += a[p][q] * a[p][q];}}
+        if(off2 <= tolerance2) {converged = 1; break;}
+        if(sweep == EIGEN_SYMMETRIC_MAX_SWEEPS) {break;}
+
+        for(int p = 0; p < n; p++) {
+            for(int q = p+1; q < n; q++) {
+                double apq = a[p][q];
+                if(apq == 0) {continue;}
+                /* rotation angle that zeroes a[p][q]; t = tan of it, the smaller root for stability */
+                double theta = (a[q][q] - a[p][p]) / (2.0 * apq);
+                double t = (fabs(theta) > 1.0e150) ? 0.5 / theta : ((theta >= 0) ? 1.0 : -1.0) / (fabs(theta) + sqrt(theta*theta + 1.0));
+                double c = 1.0 / sqrt(t*t + 1.0), s = t * c, tau = s / (1.0 + c);
+                a[p][p] -= t * apq;
+                a[q][q] += t * apq;
+                a[p][q] = a[q][p] = 0;
+                for(int r = 0; r < n; r++) {
+                    if(r == p || r == q) {continue;}
+                    double arp = a[r][p], arq = a[r][q];
+                    a[r][p] = a[p][r] = arp - s * (arq + tau * arp);
+                    a[r][q] = a[q][r] = arq + s * (arp - tau * arq);
+                }
+                if constexpr(want_vectors) {
+                    for(int r = 0; r < n; r++) {
+                        double vrp = v[r][p], vrq = v[r][q];
+                        v[r][p] = vrp - s * (vrq + tau * vrp);
+                        v[r][q] = vrq + s * (vrp - tau * vrq);
+                    }
+                }
+            }
+        }
     }
 
-    /* n == 3: Cardano's method for cubic characteristic polynomial.
-       For symmetric 3x3 matrix:
-         A = [[a00, a01, a02],
-              [a01, a11, a12],
-              [a02, a12, a22]]
-       Characteristic polynomial: lambda^3 - c2*lambda^2 + c1*lambda - c0 = 0
-       where c2 = tr(A), c1 = sum of 2x2 minors, c0 = det(A)
-    */
-    double a00 = A[0], a01 = A[1], a02 = A[2];
-    double a11 = A[4], a12 = A[5];
-    double a22 = A[8];
-
-    double c2 = a00 + a11 + a22;  /* trace */
-    double c1 = a00*a11 + a00*a22 + a11*a22 - a01*a01 - a02*a02 - a12*a12; /* sum of 2x2 minors */
-    double c0 = a00*a11*a22 + 2.0*a01*a12*a02 - a00*a12*a12 - a11*a02*a02 - a22*a01*a01; /* determinant */
-
-    /* Reduce to depressed cubic: t^3 + p*t + q = 0, where lambda = t + c2/3 */
-    double c2_3 = c2 / 3.0;
-    double p = c1 - c2 * c2_3;  /* = c1 - c2^2/3 */
-    double q = c0 - c1 * c2_3 + 2.0 * c2_3 * c2_3 * c2_3;  /* = c0 - c1*c2/3 + 2*c2^3/27 */
-
-    /* For real symmetric matrices, all roots are real.
-       Use trigonometric solution: t_k = 2*sqrt(-p/3) * cos(theta/3 - 2*pi*k/3) */
-    double p_3 = p / 3.0;
-    double r2 = -p_3 * p_3 * p_3;  /* = (-p/3)^3, should be >= 0 for real roots */
-    if(r2 < 0) r2 = 0;
-    double r = sqrt(r2);
-
-    double theta;
-    if(r > 0) {
-        double cos_theta = -0.5 * q / r;
-        if(cos_theta < -1.0) cos_theta = -1.0;
-        if(cos_theta >  1.0) cos_theta =  1.0;
-        theta = acos(cos_theta);
-    } else {
-        theta = 0;
+    /* ascending order by a fixed compare-swap network (constant indices keep everything in registers on a
+       device); column k of v is the eigenvector of d[k] */
+    double d[3] = {a[0][0], (n > 1) ? a[1][1] : 0.0, (n > 2) ? a[2][2] : 0.0};
+    if(n > 1) {eigen_symmetric_order_pair<want_vectors>(d, v, 0, 1);}
+    if(n > 2) {eigen_symmetric_order_pair<want_vectors>(d, v, 1, 2); eigen_symmetric_order_pair<want_vectors>(d, v, 0, 1);}
+    for(int k = 0; k < n; k++) {
+        eval[k] = d[k] * scale;
+        if constexpr(want_vectors) {for(int j = 0; j < n; j++) {evec[n*k + j] = v[j][k];}}
     }
-
-    double sqrt_p = sqrt(-p_3 > 0 ? -p_3 : 0);
-    double two_sqrt_p = 2.0 * sqrt_p;
-
-    /* Eigenvalues in ascending order */
-    eval[0] = c2_3 + two_sqrt_p * cos((theta + 4.0 * M_PI) / 3.0);
-    eval[1] = c2_3 + two_sqrt_p * cos((theta + 2.0 * M_PI) / 3.0);
-    eval[2] = c2_3 + two_sqrt_p * cos(theta / 3.0);
-
-    /* Sort ascending (the cos formulation usually gives descending, swap) */
-    if(eval[0] > eval[1]) { double t = eval[0]; eval[0] = eval[1]; eval[1] = t; }
-    if(eval[1] > eval[2]) { double t = eval[1]; eval[1] = eval[2]; eval[2] = t; }
-    if(eval[0] > eval[1]) { double t = eval[0]; eval[0] = eval[1]; eval[1] = t; }
+    return converged;
 }
 
 
 /* ================================================================
-   eigen_symmetric: eigenvalues AND eigenvectors
-   A[n*n] is a symmetric matrix in row-major order (destroyed on output).
-   eval[n] receives eigenvalues.
-   evec[n*n] receives eigenvectors as COLUMNS (evec[n*k + j] = j-th
-   component of k-th eigenvector), matching GSL's column-major convention.
-   n must be 1, 2, or 3.
+   eigen_symmetric_values: eigenvalues only (no eigenvector work).
+   A[n*n] is a symmetric matrix in row-major order (not modified).
+   eval[n] receives the eigenvalues in ascending order.
+   n must be 1, 2, or 3. Returns 1 on convergence (see above).
    ================================================================ */
 GIZMO_GPU_FUNCTION
-static inline void eigen_symmetric(double *A, double *eval, double *evec, int n)
+static inline int eigen_symmetric_values(const double *A, double *eval, int n)
 {
-    if(n == 1) {
-        eval[0] = A[0];
-        evec[0] = 1.0;
-        return;
-    }
+    return eigen_symmetric_jacobi<false>(A, eval, (double *)0, n);
+}
 
-    if(n == 2) {
-        double a = A[0], b = A[1], d = A[3];
-        double tr = a + d;
-        double det = a * d - b * b;
-        double disc = tr * tr - 4.0 * det;
-        if(disc < 0) disc = 0;
-        disc = sqrt(disc);
-        eval[0] = 0.5 * (tr - disc);
-        eval[1] = 0.5 * (tr + disc);
-        /* Eigenvectors */
-        for(int k = 0; k < 2; k++) {
-            double ex = b, ey = eval[k] - a;
-            double norm = sqrt(ex*ex + ey*ey);
-            if(norm > 0) { evec[2*k+0] = ex/norm; evec[2*k+1] = ey/norm; }
-            else { evec[2*k+0] = (k==0) ? 1.0 : 0.0; evec[2*k+1] = (k==0) ? 0.0 : 1.0; }
-        }
-        return;
-    }
 
-    /* n == 3: Cardano eigenvalues + cross-product eigenvectors */
-
-    /* Save original matrix (Cardano destroys nothing, but we need it for eigenvectors) */
-    double A_orig[9];
-    for(int i = 0; i < 9; i++) A_orig[i] = A[i];
-
-    /* Compute eigenvalues via Cardano */
-    eigen_symmetric_values(A, eval, 3);
-
-    /* Compute eigenvectors via cross-product method (Kopp 2008, Section 4).
-       For eigenvalue lambda_k, the eigenvector is the cross product of any two
-       linearly independent rows of (A - lambda_k * I). We pick the cross product
-       with the largest norm for numerical stability. */
-    for(int k = 0; k < 3; k++) {
-        /* Form B = A_orig - eval[k] * I */
-        double B[3][3];
-        for(int i = 0; i < 3; i++)
-            for(int j = 0; j < 3; j++)
-                B[i][j] = A_orig[3*i+j] - (i == j ? eval[k] : 0.0);
-
-        /* Cross products of row pairs: r0 x r1, r0 x r2, r1 x r2 */
-        double cross[3][3];
-        /* r0 x r1 */
-        cross[0][0] = B[0][1]*B[1][2] - B[0][2]*B[1][1];
-        cross[0][1] = B[0][2]*B[1][0] - B[0][0]*B[1][2];
-        cross[0][2] = B[0][0]*B[1][1] - B[0][1]*B[1][0];
-        /* r0 x r2 */
-        cross[1][0] = B[0][1]*B[2][2] - B[0][2]*B[2][1];
-        cross[1][1] = B[0][2]*B[2][0] - B[0][0]*B[2][2];
-        cross[1][2] = B[0][0]*B[2][1] - B[0][1]*B[2][0];
-        /* r1 x r2 */
-        cross[2][0] = B[1][1]*B[2][2] - B[1][2]*B[2][1];
-        cross[2][1] = B[1][2]*B[2][0] - B[1][0]*B[2][2];
-        cross[2][2] = B[1][0]*B[2][1] - B[1][1]*B[2][0];
-
-        /* Pick the cross product with largest norm */
-        int best = 0;
-        double best_norm2 = 0;
-        for(int c = 0; c < 3; c++) {
-            double n2 = cross[c][0]*cross[c][0] + cross[c][1]*cross[c][1] + cross[c][2]*cross[c][2];
-            if(n2 > best_norm2) { best_norm2 = n2; best = c; }
-        }
-
-        if(best_norm2 > 0) {
-            double inv_norm = 1.0 / sqrt(best_norm2);
-            evec[3*k+0] = cross[best][0] * inv_norm;
-            evec[3*k+1] = cross[best][1] * inv_norm;
-            evec[3*k+2] = cross[best][2] * inv_norm;
-        } else {
-            /* Degenerate case: eigenvalue has multiplicity > 1.
-               Use a fallback: pick a unit vector orthogonal to previously computed eigenvectors. */
-            if(k == 0) {
-                evec[0] = 1; evec[1] = 0; evec[2] = 0;
-            } else if(k == 1) {
-                /* Orthogonal to evec[0] */
-                double e0x = evec[0], e0y = evec[1], e0z = evec[2];
-                double ax = (fabs(e0x) < 0.9) ? 1 : 0, ay = (fabs(e0x) < 0.9) ? 0 : 1, az = 0;
-                /* Cross product a x evec[0] */
-                double cx = ay*e0z - az*e0y, cy = az*e0x - ax*e0z, cz = ax*e0y - ay*e0x;
-                double cn = sqrt(cx*cx + cy*cy + cz*cz);
-                if(cn > 0) { evec[3] = cx/cn; evec[4] = cy/cn; evec[5] = cz/cn; }
-                else { evec[3] = 0; evec[4] = 1; evec[5] = 0; }
-            } else {
-                /* Orthogonal to evec[0] and evec[1]: cross product */
-                double cx = evec[1]*evec[5] - evec[2]*evec[4];
-                double cy = evec[2]*evec[3] - evec[0]*evec[5];
-                double cz = evec[0]*evec[4] - evec[1]*evec[3];
-                double cn = sqrt(cx*cx + cy*cy + cz*cz);
-                if(cn > 0) { evec[6] = cx/cn; evec[7] = cy/cn; evec[8] = cz/cn; }
-                else { evec[6] = 0; evec[7] = 0; evec[8] = 1; }
-            }
-        }
-    }
+/* ================================================================
+   eigen_symmetric: eigenvalues AND eigenvectors.
+   A[n*n] is a symmetric matrix in row-major order (not modified).
+   eval[n] receives the eigenvalues in ascending order.
+   evec[n*n] receives the unit eigenvectors, each stored contiguously:
+   evec[n*k + j] = j-th component of the eigenvector of eval[k].
+   n must be 1, 2, or 3. Returns 1 on convergence (see above).
+   ================================================================ */
+GIZMO_GPU_FUNCTION
+static inline int eigen_symmetric(const double *A, double *eval, double *evec, int n)
+{
+    return eigen_symmetric_jacobi<true>(A, eval, evec, n);
 }
 
 
