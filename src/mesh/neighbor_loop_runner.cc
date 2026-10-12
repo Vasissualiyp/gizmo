@@ -3181,10 +3181,10 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
         case NeighborLoopPlan::Path::ModeD_DeviceFused:
             if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
                 run_mode_d<Spec>(args, radii.data(), mode_d_tree);
-                break;
+            } else {
+                /* Never chosen without the eligibility above. */
+                endrun(90001032);
             }
-            /* Never chosen without the eligibility above. */
-            endrun(90001032);
             break;
     }
 
