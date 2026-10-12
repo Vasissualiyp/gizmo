@@ -426,6 +426,9 @@ extern struct gas_cell_data
 #ifdef TRANSPORT_SUBCYCLE_COOLING
     MyFloat Dt_Transport_Subcycle_Saved; /*!< saved DtInternalEnergy (code units) before cooling, restored each sub-step */
 #endif
+#if defined(COSMIC_RAY_FLUID) && !defined(CRFLUID_EVOLVE_SCATTERINGWAVES) && !defined(CRFLUID_EVOLVE_SPECTRUM)
+    MyFloat DtCosmicRayEnergy_StreamingLoss[N_CR_PARTICLE_BINS]; /*!< hydro-pass streaming-loss contribution to DtCosmicRayEnergy (its gas-heating counterpart is applied once per hydro step), added back each sub-step */
+#endif
 #endif
 #if defined(RT_USE_GRAVTREE_SAVE_RAD_ENERGY) && !defined(RADTRANSFER)
     MyFloat Rad_E_gamma[N_RT_FREQ_BINS];

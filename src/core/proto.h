@@ -1263,7 +1263,7 @@ void rt_source_injection(void);
 GIZMO_GPU_FUNCTION MyFloat dust_planck_mean_opacity(MyFloat Trad, MyFloat Tdust);
 
 #ifdef TRANSPORT_SUBCYCLE
-void transport_subcycle_exchange_fluxes(void);
+void transport_subcycle_exchange_fluxes(int transport_sub);
 void transport_subcycle_kick(void);
 void transport_subcycle_prepare_topology(void);
 #endif

@@ -13,7 +13,7 @@
 #ifdef TRANSPORT_SUBCYCLE
 
 /* function declarations */
-void transport_subcycle_exchange_fluxes(void);  /* full code_block_xchange RT flux computation */
+void transport_subcycle_exchange_fluxes(int transport_sub);  /* recompute the RT + CR transport rates for sub-step transport_sub */
 void transport_subcycle_kick(void);
 void transport_subcycle_prepare_topology(void); /* build active list + ghost pool + shared CSR just before the subcycle loop (run.cc) */
 

@@ -64,14 +64,36 @@ void transport_flux_initial_operations(void)
 #if defined(RT_SOLVER_EXPLICIT) && defined(RT_INFRARED)
         CellP[i].Dt_Rad_E_gamma_T_weighted_IR = 0;
 #endif
+#if defined(RT_SOLVER_EXPLICIT) && defined(RT_EVOLVE_INTENSITIES)
+        for(k=0; k<N_RT_FREQ_BINS; k++) {for(int k_dir=0; k_dir<N_RT_INTENSITY_BINS; k_dir++) {CellP[i].Dt_Rad_Intensity[k][k_dir] = 0;}}
+#endif
+#ifdef COSMIC_RAY_FLUID
+        for(k=0; k<N_CR_PARTICLE_BINS; k++) {
+            CellP[i].DtCosmicRayEnergy[k] = 0;
+#if defined(CRFLUID_EVOLVE_SPECTRUM)
+            CellP[i].DtCosmicRay_Number_in_Bin[k] = 0;
+#endif
+#ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
+            for(int kAlf=0; kAlf<2; kAlf++) {CellP[i].DtCosmicRayAlfvenEnergy[k][kAlf] = 0;}
+#endif
+        }
+#endif
     }
 }
 
 
 /* ===== PUBLIC ENTRY POINT ===== */
-void transport_subcycle_exchange_fluxes(void)
+void transport_subcycle_exchange_fluxes(int transport_sub)
 {
     CPU_Step[CPU_MISC] += measure_time();
+    /* The previous sub-step's kick moved the owners' transported fields; the
+       topology is unchanged (nothing drifts inside the loop), so bring the ghost
+       copies current in place. If the pool cannot be refreshed, rebuild it and
+       the shared CSR collectively rather than flux against stale values. */
+    if(transport_sub > 0 && NTask > 1 && ghost_refresh_values() != GHOST_REFRESH_OK) {
+        const double gsl_safety = gizmo_ghost_safety_factor();
+        gizmo_gradients_refresh_symlist(gsl_safety, gsl_safety, false);
+    }
     transport_flux_initial_operations();
 
     /* GPU/neighbor-list path: reuse the hydro GPU kernel with the symmetric CSR list.
@@ -89,7 +111,7 @@ void transport_subcycle_exchange_fluxes(void)
                            gizmo_sym_neighbor_list.total_pairs,
                            (void *)hydro_out);
 
-        /* Scatter only RT flux outputs (discard hydro forces) */
+        /* Scatter only the transport (RT and cosmic-ray) rate outputs; discard the hydro forces */
         for(int aa = 0; aa < gizmo_sym_num_active; aa++) {
             int ii = gizmo_sym_active_indices[aa];
 #if defined(RT_SOLVER_EXPLICIT) && defined(RT_EVOLVE_ENERGY)
@@ -102,6 +124,23 @@ void transport_subcycle_exchange_fluxes(void)
 #endif
 #if defined(RT_SOLVER_EXPLICIT) && defined(RT_INFRARED)
             CellP[ii].Dt_Rad_E_gamma_T_weighted_IR += hydro_out[aa].Dt_Rad_E_gamma_T_weighted_IR;
+#endif
+#if defined(RT_SOLVER_EXPLICIT) && defined(RT_EVOLVE_INTENSITIES)
+            for(int kf=0; kf<N_RT_FREQ_BINS; kf++) {for(int k_dir=0; k_dir<N_RT_INTENSITY_BINS; k_dir++) {CellP[ii].Dt_Rad_Intensity[kf][k_dir] += hydro_out[aa].Dt_Rad_Intensity[kf][k_dir];}}
+#endif
+#ifdef COSMIC_RAY_FLUID
+            for(int kb=0; kb<N_CR_PARTICLE_BINS; kb++) {
+                CellP[ii].DtCosmicRayEnergy[kb] += hydro_out[aa].DtCosmicRayEnergy[kb];
+#if defined(CRFLUID_EVOLVE_SPECTRUM)
+                CellP[ii].DtCosmicRay_Number_in_Bin[kb] += hydro_out[aa].DtCosmicRay_Number_in_Bin[kb];
+#endif
+#ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
+                for(int kAlf=0; kAlf<2; kAlf++) {CellP[ii].DtCosmicRayAlfvenEnergy[kb][kAlf] += hydro_out[aa].DtCosmicRayAlfvenEnergy[kb][kAlf];}
+#endif
+#if !defined(CRFLUID_EVOLVE_SCATTERINGWAVES) && !defined(CRFLUID_EVOLVE_SPECTRUM)
+                CellP[ii].DtCosmicRayEnergy[kb] += CellP[ii].DtCosmicRayEnergy_StreamingLoss[kb]; /* hydro-pass streaming loss, held over the step like its gas-heating counterpart */
+#endif
+            }
 #endif
         }
 
@@ -177,6 +216,9 @@ void transport_subcycle_kick(void)
         for(int kb = 0; kb < N_CR_PARTICLE_BINS; kb++) {
             CellP[i].CosmicRayEnergyPred[kb] = CellP[i].CosmicRayEnergy[kb];
             CellP[i].CosmicRayFluxPred[kb] = CellP[i].CosmicRayFlux[kb];
+#ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
+            for(int kAlf = 0; kAlf < 2; kAlf++) {CellP[i].CosmicRayAlfvenEnergyPred[kb][kAlf] = CellP[i].CosmicRayAlfvenEnergy[kb][kAlf];}
+#endif
         }
 #endif
     }
