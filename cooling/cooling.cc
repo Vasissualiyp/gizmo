@@ -72,6 +72,55 @@ double get_equilibrium_dust_temperature_estimate(int i, double shielding_factor_
 double gas_dust_heating_coeff(int i, double T, double Tdust, struct particle_data *pp, struct gas_cell_data *cell);
 MyFloat get_FUV_G0(int target, MyFloat shieldfac, int mode, struct particle_data *pp, struct gas_cell_data *cell);
 
+#ifdef COOLING_COMPACT_CROSSCHECK
+/* The compact cooling chain must read only its pp/cell arguments: a read of the global P/CellP at the compact
+   index j picks up the unrelated particle j. Re-run the chain on a copy of the compact inputs with P/CellP
+   pointing at a shifted copy of the gas (entry k holds cell k+1), and abort unless the result is bit-identical
+   to the real pass. Costs a second cooling pass and a copy of the local gas every step: test builds only. */
+static void cooling_compact_crosscheck_run(struct particle_data *chk_P, struct gas_cell_data *chk_Cell, int N_active)
+{
+    if(N_gas < 2) {return;}
+    struct particle_data *shift_P = (struct particle_data *) mymalloc("shift_P", N_gas * sizeof(struct particle_data));
+    struct gas_cell_data *shift_Cell = (struct gas_cell_data *) mymalloc("shift_Cell", N_gas * sizeof(struct gas_cell_data));
+    for(int k = 0; k < N_gas; k++) {shift_P[k] = P[(k+1) % N_gas]; shift_Cell[k] = CellP[(k+1) % N_gas];}
+    struct particle_data *P_real = P; struct gas_cell_data *CellP_real = CellP;
+    P = shift_P; CellP = shift_Cell;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+    for(int j = 0; j < N_active; j++) {do_the_cooling_for_particle(j, chk_P, chk_Cell);}
+    P = P_real; CellP = CellP_real;
+    myfree(shift_Cell);
+    myfree(shift_P);
+}
+
+static void cooling_compact_crosscheck_compare(const std::vector<int> &cool_indices, struct particle_data *chk_P, struct gas_cell_data *chk_Cell,
+                                               struct particle_data *compact_P, struct gas_cell_data *compact_Cell, int N_active)
+{
+    int n_bad = 0, j_bad = -1; size_t off_bad = 0; const char *which = "";
+    for(int j = 0; j < N_active; j++)
+    {
+        const unsigned char *a = (const unsigned char *) &compact_Cell[j], *b = (const unsigned char *) &chk_Cell[j];
+        const unsigned char *c = (const unsigned char *) &compact_P[j], *d = (const unsigned char *) &chk_P[j];
+        int bad_cell = memcmp(a, b, sizeof(struct gas_cell_data)), bad_p = memcmp(c, d, sizeof(struct particle_data));
+        if(!bad_cell && !bad_p) {continue;}
+        if(n_bad++ == 0) {
+            j_bad = j;
+            if(bad_cell) {which = "gas_cell_data"; while(a[off_bad] == b[off_bad]) {off_bad++;}}
+            else {which = "particle_data"; while(c[off_bad] == d[off_bad]) {off_bad++;}}
+        }
+    }
+    if(n_bad > 0)
+    {
+        int i = cool_indices[j_bad];
+        PRINT_WARNING("COOLING_COMPACT_CROSSCHECK: the cooling chain read the global P/CellP: %d of %d cooled cells change when the global arrays are shuffled. "
+                      "First: ID=%llu (global index %d, compact index %d), %s byte offset %zu (gdb: ptype /o struct %s); InternalEnergy %.17g vs %.17g",
+                      n_bad, N_active, (unsigned long long) P[i].ID, i, j_bad, which, off_bad, which, compact_Cell[j_bad].InternalEnergy, chk_Cell[j_bad].InternalEnergy);
+        endrun(8857);
+    }
+}
+#endif
+
 /* this is the 'parent' loop to do the cell cooling+chemistry. this is now openmp-parallelized, since the semi-implicit iteration can be a non-negligible cost.
    Uses a gather-dispatch-scatter pattern with compact arrays so that the cooling chain operates on contiguous memory
    indexed 0..N_active-1, enabling future GPU offloading. */
@@ -104,6 +153,13 @@ void cooling_parent_routine(void)
         compact_Cell[j] = CellP[cool_indices[j]];
     }
 
+#ifdef COOLING_COMPACT_CROSSCHECK
+    struct particle_data *chk_P = (struct particle_data *) mymalloc("chk_P", N_active * sizeof(struct particle_data));
+    struct gas_cell_data *chk_Cell = (struct gas_cell_data *) mymalloc("chk_Cell", N_active * sizeof(struct gas_cell_data));
+    memcpy(chk_P, compact_P, N_active * sizeof(struct particle_data)); memcpy(chk_Cell, compact_Cell, N_active * sizeof(struct gas_cell_data));
+    cooling_compact_crosscheck_run(chk_P, chk_Cell, N_active);
+#endif
+
     /* Step 3: Dispatch — run cooling on compact arrays indexed 0..N_active-1 */
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic)
@@ -112,6 +168,12 @@ void cooling_parent_routine(void)
     {
         do_the_cooling_for_particle(j, compact_P, compact_Cell);
     }
+
+#ifdef COOLING_COMPACT_CROSSCHECK
+    cooling_compact_crosscheck_compare(cool_indices, chk_P, chk_Cell, compact_P, compact_Cell, N_active);
+    myfree(chk_Cell);
+    myfree(chk_P);
+#endif
 
     /* Step 4: Scatter — copy modified data back from compact arrays to the global arrays */
     for(int j = 0; j < N_active; j++)
