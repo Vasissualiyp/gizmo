@@ -289,3 +289,18 @@ Fix: rescale 4.7e-28 to the stated depletion. This changes every run with cold a
 the current coefficient. Sensitive test: Lambda_Cplus against Barinovs' L(T) times 0.5 solar C/H.
 Status: recorded, no decision.
 
+### 4.3 SN ejecta overrunning long-timestep cells inject spurious energy (fullphysics_mini, 2026-10-11)
+Found while attributing a jaco/legacy gap in `test/fullphysics_mini` (branch `sn_parity`; runs and analysis in
+/mnt/ceph/users/mgrudic/sn_parity/). That test is a 50 Msun cloud with a 30 Msun star going SN at t = 0.086.
+- About 0.23 kyr after the SN, the ejecta reach coarse envelope cells on long timesteps (kernel ~0.2 box, n_H ~ 1e2,
+  ~1e4 K, ~600 ejecta cells inside one kernel). Those cells jump to 1e9-1e11 K and ~1e4 km/s.
+- Total gas energy jumps by up to 1.1-1.7 E_SN within one ~10 yr output interval. Legacy and jaco both do it, from
+  identical pre-jump states.
+- With `MaxSizeTimestep` 1e-5 instead of 1.25e-3 the jump disappears in both codes, and their energy histories match.
+- Likely cause: the long-step cells are not shortened (WAKEUP) before the ejecta arrive, so they take fluxes over a
+  step far longer than the signal-crossing time. Not isolated.
+- Consequences:
+  - It inflates post-SN dense-gas temperatures by 0.1-0.26 dex in that test. Legacy, as the reference, is wrong there.
+  - It is a production concern wherever SN ejecta meet coarse, long-step gas.
+Classification: legacy GIZMO energy-conservation defect (timestepping), independent of the cooling module.
+Status: recorded, not investigated further.
