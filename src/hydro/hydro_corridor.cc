@@ -17,22 +17,9 @@
 #include "../mesh/ghost_symlist_lifecycle.h"  /* gizmo_gradients_prep_symlist / refresh_symlist */
 #include "hydro_corridor.h"
 
-/* Default adaptive thresholds (global summed / per-rank-max active gas) used
- * when the optional NeighborLoopModeBThreshold{Sum,Max} parameters are unset.
- * The corridor uses the same DECISION FORM as the runner's per-loop policy:
- *   Mode B iff sum > 0 && sum <= threshold_sum && max <= threshold_max.
- * It does NOT use the same NUMBERS. The corridor's default is 1000/1000 on
- * active GAS; a loop that reaches the runner's own adaptive path without a
- * dispatch override falls back to the Spec's threshold, defaulting to 64/64
- * on that loop's own active count (neighbor_loop_runner.cc, nlr_spec_threshold_*).
- * Consequence, by design and measured: between 65 and 1000 active gas the
- * corridor selects Mode B for gradients/hydro_force/cellcorrections (which do
- * take the override) while density -- which does not set dispatch_override --
- * independently selects Mode A and performs its own one-way ghost import.
- * That import feeds density's own neighbour search; it is not handed downstream.
- * Centralized here so a future tuning lives in one place. */
-static constexpr int CORRIDOR_DEFAULT_MODEB_THRESHOLD_SUM = 1000;
-static constexpr int CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX = 1000;
+/* The corridor takes the runner's Mode-B rule and the built-in thresholds of a
+ * symmetric loop (nlr_default_modeb_thresholds), on the summed and per-rank-max
+ * count of active GAS.  Density is one-way and decides for itself. */
 
 /* Step-scoped mode state. Reset to UNSET by gizmo_hydro_corridor_end().
  * File-static so consumers must go through the accessor; no extern reads.
@@ -80,15 +67,14 @@ void gizmo_hydro_corridor_decide_mode(void)
     g_corridor_mode = GizmoHydroCorridorMode::MODE_A;
     return;
 #endif
-    /* Adaptive dispatch: the runner's Mode-B rule (nlr_mode_b_rule), with the
-       corridor's own defaults standing in where the optional
-       NeighborLoopModeBThreshold{Sum,Max} params are unset. TRANSPORT_SUBCYCLE
-       has already forced Mode A above. */
+    /* Adaptive dispatch: the runner's Mode-B rule with a symmetric loop's
+       defaults standing in where NeighborLoopModeBThreshold{Sum,Max} are unset.
+       TRANSPORT_SUBCYCLE has already forced Mode A above. */
     int sum_active_gas = 0, max_active_gas = 0;
     global_active_gas_counts(&sum_active_gas, &max_active_gas);
-    bool select_mode_b = nlr_mode_b_rule(sum_active_gas, max_active_gas,
-                                         CORRIDOR_DEFAULT_MODEB_THRESHOLD_SUM,
-                                         CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX);
+    int default_sum, default_max;
+    nlr_default_modeb_thresholds(MODE_B_SEARCH_SYMMETRIC, &default_sum, &default_max);
+    bool select_mode_b = nlr_mode_b_rule(sum_active_gas, max_active_gas, default_sum, default_max);
     GizmoHydroCorridorMode mode = select_mode_b ? GizmoHydroCorridorMode::MODE_B
                                                 : GizmoHydroCorridorMode::MODE_A;
     g_corridor_mode = mode;

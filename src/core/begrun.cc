@@ -2837,9 +2837,9 @@ void read_parameter_file(char *fname)
                     if(strcmp("MaxSizeTimestep",tag[i])==0) {*((double *)addr[i])=(1.e-3*All.TimeMax); printf("Tag %s (%s) not set in parameter file: it is often unsafe to not set a maximum timestep. We will default to assume 0.1 percent of the maximum time (=%g), but this may need to be set lower. \n",tag[i],alternate_tag[i],All.MaxSizeTimestep); continue;}
                 }
                 if(strcmp("DesNumNgb",tag[i])==0) {*((double *)addr[i])=(0.5*(KERNEL_NMIN+KERNEL_NMAX)); printf("Tag %s (%s) not set in parameter file: you did not set a target effective neighbor number for the interaction kernel. Trying to set a reasonable guess of =%g based on the kernel specified, but PLEASE CHECK that this is intended and experiment with different values or set your own for safety. \n",tag[i],alternate_tag[i],All.DesNumNgb); continue;}
-                if(strcmp("NeighborLoopModeBThresholdSum",tag[i])==0) {*((int *)addr[i])=-1; continue;} /* unset -> each loop uses its Spec::modeb_threshold_sum */
-                if(strcmp("NeighborLoopModeBThresholdMax",tag[i])==0) {*((int *)addr[i])=-1; continue;} /* unset -> each loop uses its Spec::modeb_threshold_max */
-                if(strcmp("NeighborLoopModeDThresholdSum",tag[i])==0) {*((int *)addr[i])=-1; continue;} /* both unset -> the build's default (gizmo_nlr_moded_thresholds) */
+                if(strcmp("NeighborLoopModeBThresholdSum",tag[i])==0) {*((int *)addr[i])=-1; continue;} /* unset -> each loop's built-in default */
+                if(strcmp("NeighborLoopModeBThresholdMax",tag[i])==0) {*((int *)addr[i])=-1; continue;} /* unset -> each loop's built-in default */
+                if(strcmp("NeighborLoopModeDThresholdSum",tag[i])==0) {*((int *)addr[i])=-1; continue;} /* unset -> 0: Mode D wherever Mode B is not chosen */
                 if(strcmp("NeighborLoopModeDThresholdMax",tag[i])==0) {*((int *)addr[i])=-1; continue;}
                 if(strcmp("GravityHostWalkBelowActive",tag[i])==0) {*((int *)addr[i])=1000; printf("Tag %s (%s) not set in parameter file: defaulting to run the gravity walk on the host below %d RANK-LOCAL active candidates per step (0 would disable this and always use the device path). \n",tag[i],alternate_tag[i],All.GravityHostWalkBelowActive); continue;}
                 if(strcmp("TreeUpdateFullSweep_ActiveFraction",tag[i])==0) {*((double *)addr[i])=2; printf("Tag %s (%s) not set in parameter file: defaulting to %g -- the device tree update drifts every node of the tree unless the rank-local fraction of elements it updates is below this, in which case it brings current only the nodes the update touches. \n",tag[i],alternate_tag[i],All.TreeUpdateFullSweep_ActiveFraction); continue;}
@@ -3269,6 +3269,7 @@ void read_parameter_file(char *fname)
     {
         if(ThisTask==0) {printf("NeighborLoopModeDThresholdSum and NeighborLoopModeDThresholdMax must be >= -1 (-1 = unset, 0 = Mode D wherever Mode B is not chosen, positive = lower bound on the summed / per-rank-max active count)\n");} endrun(1);
     }
+    gizmo_nlr_report_dispatch_thresholds();
     if(All.GravityHostWalkBelowActive < 0)
     {
         if(ThisTask==0) {printf("GravityHostWalkBelowActive must be >= 0 (0 = no count-based host routing, positive = rank-local active-candidate count below which the host walk is used)\n");} endrun(1);

@@ -2019,18 +2019,15 @@ constexpr bool nlr_spec_has_reset_per_iter_device_context_v =
 /* ============================================================================
  * Dispatch threshold accessors
  *
- * Production dispatch policy lives in the constexpr Spec::modeb_threshold_sum
- * and Spec::modeb_threshold_max in each NeighborLoopSpec — these are
- * code-level dispatch policy constants for the loop, decided alongside the
- * physics. They are NOT user-tunable runtime parameters.
+ * The built-in Mode-B thresholds depend on the loop's search mode
+ * (nlr_default_modeb_thresholds); a Spec may override them with constexpr
+ * Spec::modeb_threshold_{sum,max}.  The runtime overrides are the parameterfile
+ * pairs NeighborLoopModeBThreshold{Sum,Max} and NeighborLoopModeDThreshold{Sum,Max};
+ * the resolved values are printed at startup.  See the dispatch-policy block in
+ * mesh/neighbor_loop_runner.cc.
  *
- * The runtime overrides are the parameterfile pairs
- * NeighborLoopModeBThreshold{Sum,Max} and NeighborLoopModeDThreshold{Sum,Max},
- * so the values a run used are recorded in its parameter log. See the
- * dispatch-policy block in mesh/neighbor_loop_runner.cc.
- *
- * Resolution precedence (parameterfile > Spec constexpr) is applied by the
- * _for() lookups.
+ * Resolution precedence (parameterfile > Spec constexpr > search-mode default)
+ * is applied by the _for() lookups and nlr_select_mode.
  * ========================================================================== */
 
 int  gizmo_nlr_modeb_threshold_sum_for(const char *loop_name, int spec_default);
@@ -2038,13 +2035,15 @@ int  gizmo_nlr_modeb_threshold_max_for(const char *loop_name, int spec_default);
 /* The Mode-B rule at these GLOBAL active counts (summed, per-rank max), with
  * the given defaults standing in where the parameterfile pair is unset: Mode B
  * iff any rank has work and both counts are within the thresholds.  Shared by
- * the runner and the hydro corridor, which has its own defaults. */
+ * the runner and the corridors. */
 bool nlr_mode_b_rule(int sum_active, int max_active, int default_sum, int default_max);
+/* The built-in Mode-B thresholds (summed, per-rank max) for a loop of this
+ * search mode (MODE_B_SEARCH_ONEWAY / _SYMMETRIC), used where neither the
+ * parameterfile nor the Spec sets one.  The symmetric sum scales with NTask. */
+void nlr_default_modeb_thresholds(int search_mode, int *threshold_sum, int *threshold_max);
 /* The Mode-D lower bounds (summed, per-rank max) from the parameterfile pair
- * NeighborLoopModeDThreshold{Sum,Max}.  Returns false when Mode D is off for
- * the run: both parameters unset in a build without NEIGHBOR_LOOP_MODE_D.  Both
- * unset with it = 0/0; one unset beside a set one = 0 for that bound. */
-bool gizmo_nlr_moded_thresholds(int *threshold_sum, int *threshold_max);
+ * NeighborLoopModeDThreshold{Sum,Max}; an unset bound is 0. */
+void gizmo_nlr_moded_thresholds(int *threshold_sum, int *threshold_max);
 
 /* The three ways the runner answers a neighbour query. */
 enum class NlrMode { A, B, D };

@@ -374,6 +374,7 @@ void gizmo_let_wire_note_failed(long long bytes);
 void report_memory_ledger(const char *when);
 void report_memory_ledger_on_growth(const char *when);
 int gizmo_memory_preflight(void);
+void gizmo_nlr_report_dispatch_thresholds(void);   /* rank 0 prints the resolved neighbour-loop Mode B/D thresholds */
 void gizmo_size_memory_arena(void);   /* sets All.WorkingMemoryPoolSize from what will draw on the pool, unless the parameter file asked for a size; call once, before mymalloc_init */
 #ifdef PMGRID
 /* Arena bytes the long-range mesh will want, for startup sizing, split into what it holds for the

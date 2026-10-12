@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <climits>                                   /* INT_MAX */
 #include <type_traits>
 #include <utility>                                   /* std::declval for SFINAE hook detection */
 #include <Kokkos_Core.hpp>
@@ -214,18 +215,15 @@ void nlr_free_active_list(int *active_list)
 /* ============================================================================
  * Mode-A/B/D dispatch thresholds
  *
- * Production dispatch policy is the constexpr Spec::modeb_threshold_sum and
- * Spec::modeb_threshold_max in each NeighborLoopSpec — those are code-level
- * dispatch policy constants for the loop, decided alongside the physics.
- *
- * Resolution precedence (first wins):
+ * Mode-B resolution precedence (first wins):
  *   1. parameterfile NeighborLoopModeBThreshold{Sum,Max} (-1 = unset;
  *      any other value overrides, <= 0 disables Mode B)
- *   2. Spec::modeb_threshold_{sum,max} constexpr (code default)
+ *   2. Spec::modeb_threshold_{sum,max} constexpr, where a Spec declares one
+ *   3. the default for the loop's search mode (nlr_default_modeb_thresholds)
  *
  * Mode D, on the calls Mode B does not take, needs both counts at or above the
- * parameterfile pair NeighborLoopModeDThreshold{Sum,Max} (see
- * gizmo_nlr_moded_thresholds for the unset defaults).
+ * parameterfile pair NeighborLoopModeDThreshold{Sum,Max}; unset, that is 0/0,
+ * so an eligible one-way loop uses Mode D wherever Mode B is not chosen.
  *
  * The thresholds are settable ONLY from the parameterfile, so the values a run
  * used are recorded in its parameter log.
@@ -255,23 +253,52 @@ bool nlr_mode_b_rule(int sum_active, int max_active, int default_sum, int defaul
     return (sum_active > 0) && (sum_active <= TS) && (max_active <= TM);
 }
 
-bool gizmo_nlr_moded_thresholds(int *threshold_sum, int *threshold_max)
+/* Built-in Mode-B thresholds by search mode, used where neither the parameterfile
+ * nor the Spec sets one.
+ *   One-way loops: Mode B up to 64 active globally (and 64 on any rank); above
+ *   that an eligible loop uses Mode D, which needs no ghost import either.
+ *   Symmetric loops: Mode B up to an average of 320 active per rank, with no rank
+ *   above 3200.  Measured on Frontier, Mode A's import and list build stop paying
+ *   for themselves below a few hundred active per rank.  The per-rank cap is a
+ *   separate, absolute guard against imbalance (ten times the 320 cutoff): a step
+ *   goes to Mode A when any one rank holds more than 3200, which keeps a hot rank's
+ *   request-driven walks and its export rounds bounded. */
+void nlr_default_modeb_thresholds(int search_mode, int *threshold_sum, int *threshold_max)
+{
+    if(search_mode == MODE_B_SEARCH_SYMMETRIC) {
+        const long long per_rank_average = 320, per_rank_max = 3200;
+        const long long sum = per_rank_average * (long long)NTask;
+        *threshold_sum = (sum > INT_MAX) ? INT_MAX : (int)sum;
+        *threshold_max = (int)per_rank_max;
+    } else {
+        *threshold_sum = 64;
+        *threshold_max = 64;
+    }
+}
+
+void gizmo_nlr_report_dispatch_thresholds(void)
+{
+    if(ThisTask != 0) return;
+    int oneway_sum, oneway_max, symm_sum, symm_max, d_sum, d_max;
+    nlr_default_modeb_thresholds(MODE_B_SEARCH_ONEWAY, &oneway_sum, &oneway_max);
+    nlr_default_modeb_thresholds(MODE_B_SEARCH_SYMMETRIC, &symm_sum, &symm_max);
+    oneway_sum = gizmo_nlr_modeb_threshold_sum_for(nullptr, oneway_sum);
+    oneway_max = gizmo_nlr_modeb_threshold_max_for(nullptr, oneway_max);
+    symm_sum = gizmo_nlr_modeb_threshold_sum_for(nullptr, symm_sum);
+    symm_max = gizmo_nlr_modeb_threshold_max_for(nullptr, symm_max);
+    gizmo_nlr_moded_thresholds(&d_sum, &d_max);
+    printf("Neighbor loops: Mode B at or below summed/per-rank-max active %d/%d (one-way), %d/%d (symmetric); "
+           "eligible one-way loops use Mode D at or above %d/%d, Mode A otherwise\n",
+           oneway_sum, oneway_max, symm_sum, symm_max, d_sum, d_max);
+}
+
+void gizmo_nlr_moded_thresholds(int *threshold_sum, int *threshold_max)
 {
     const int p_sum = nlr_host_all_ptr()->NeighborLoopModeDThresholdSum;
     const int p_max = nlr_host_all_ptr()->NeighborLoopModeDThresholdMax;
-    if(p_sum == -1 && p_max == -1) {
-        /* Unset: the build's default.  NEIGHBOR_LOOP_MODE_D builds have always
-         * taken Mode D wherever Mode B was not chosen; other builds never did. */
-#ifdef NEIGHBOR_LOOP_MODE_D
-        *threshold_sum = 0; *threshold_max = 0;
-        return true;
-#else
-        return false;
-#endif
-    }
+    /* Unset (-1) = 0: Mode D wherever Mode B is not chosen. */
     *threshold_sum = (p_sum == -1) ? 0 : p_sum;
     *threshold_max = (p_max == -1) ? 0 : p_max;
-    return true;
 }
 
 
@@ -2704,7 +2731,7 @@ static int nlr_spec_threshold_max(int fallback) {
 
 /* The adaptive A/B/D rule, one definition.  Mode B by the Mode-B rule
  * (parameterfile NeighborLoopModeBThreshold{Sum,Max}, else the Spec's
- * modeb_threshold_{sum,max}, else 64/64).  Otherwise Mode D when the loop can
+ * modeb_threshold_{sum,max}, else the default for its search mode).  Otherwise Mode D when the loop can
  * be answered by the fused device walk, some rank has work, and both counts
  * meet the Mode-D lower bounds; otherwise Mode A.  Collective inputs, so every
  * rank answers alike.  Nothing here touches Mode D's state: a call answered by
@@ -2712,13 +2739,15 @@ static int nlr_spec_threshold_max(int fallback) {
 template <typename Spec>
 NlrMode nlr_select_mode(int sum_active, int max_active)
 {
-    if(nlr_mode_b_rule(sum_active, max_active, nlr_spec_threshold_sum<Spec>(64), nlr_spec_threshold_max<Spec>(64))) {
+    int default_sum, default_max;
+    nlr_default_modeb_thresholds(Spec::search_mode, &default_sum, &default_max);
+    if(nlr_mode_b_rule(sum_active, max_active, nlr_spec_threshold_sum<Spec>(default_sum), nlr_spec_threshold_max<Spec>(default_max))) {
         return NlrMode::B;
     }
     if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
         int TDS = 0, TDM = 0;
-        if(sum_active > 0 && gizmo_nlr_moded_thresholds(&TDS, &TDM) &&
-           sum_active >= TDS && max_active >= TDM) {
+        gizmo_nlr_moded_thresholds(&TDS, &TDM);
+        if(sum_active > 0 && sum_active >= TDS && max_active >= TDM) {
             return NlrMode::D;
         }
     }
