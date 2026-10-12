@@ -29,6 +29,8 @@
  * bottom of the same function. Reading UNSET from a consumer is a bug
  * (consumer placed outside the corridor span). */
 static GizmoHydroCorridorMode g_corridor_mode = GizmoHydroCorridorMode::UNSET;
+/* Whether this step's shared list is built to outlive the corridor for the transport sub-steps. */
+static int g_corridor_keep_for_substeps = 0;
 
 /* Global active-gas counts — collective Allreduce so every rank computes
  * the same mode (corridor coherence requires this). Fills the summed and the
@@ -125,7 +127,10 @@ void gizmo_hydro_corridor_begin(void)
 
     /* Mode A: import the shared gas ghost pool (NTask>1) and build the
      * active list + gizmo_sym_* CSR once for the whole corridor span. */
-    gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false);
+#ifdef TRANSPORT_SUBCYCLE
+    g_corridor_keep_for_substeps = transport_subcycle_keep_wanted();
+#endif
+    gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false, g_corridor_keep_for_substeps);
 
     /* Publish the corridor's view ONLY when the runner's caller-owned-pool
      * contract can be satisfied: at NTask>1 that requires a LIVE ghost pool
@@ -199,7 +204,9 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage)
      * on) happen inside the re-import itself, so no side-effect list is
      * maintained here. */
     const double gsl_safety = gizmo_ghost_safety_factor();
-    gizmo_gradients_refresh_symlist(gsl_safety, gsl_safety, false);
+    /* Only a list that was admitted to the heap at prep tries again (the same answer, once per step). */
+    g_corridor_keep_for_substeps = gizmo_sym_neighbor_list.on_heap;
+    gizmo_gradients_refresh_symlist(gsl_safety, gsl_safety, false, g_corridor_keep_for_substeps);
 
     /* Republish. The active set is frozen across the corridor span, so
      * active_indices/num_active are pointer-stable; only the CSR arrays

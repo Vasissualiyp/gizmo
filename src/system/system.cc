@@ -293,6 +293,27 @@ long long report_comittable_memory(long long *MemTotal,
   return (*MemTotal - *Committed_AS);
 }
 
+/* Node memory headroom from /proc/meminfo, in kB: physical (MemAvailable) and commit
+   (CommitLimit - Committed_AS). Returns 1 only when all three were read; 0 elsewhere. */
+int report_node_memory_headroom(long long *avail_kb, long long *commit_headroom_kb)
+{
+  long long mem_available = -1, commit_limit = -1, committed = -1;
+  char buf[1024];
+  FILE *fd = fopen("/proc/meminfo", "r");
+  *avail_kb = 0; *commit_headroom_kb = 0;
+  if(!fd) {return 0;}
+  while(fgets(buf, sizeof(buf), fd) == buf)
+    {
+      if(strncmp(buf, "MemAvailable:", 13) == 0) {mem_available = atoll(buf + 13);}
+      if(strncmp(buf, "CommitLimit:", 12) == 0)  {commit_limit = atoll(buf + 12);}
+      if(strncmp(buf, "Committed_AS:", 13) == 0) {committed = atoll(buf + 13);}
+    }
+  fclose(fd);
+  if(mem_available < 0 || commit_limit < 0 || committed < 0) {return 0;}
+  *avail_kb = mem_available; *commit_headroom_kb = commit_limit - committed;
+  return 1;
+}
+
 /* task to assess available memory and print it. also returns an estimate of the maximum available memory for an MPI task (assuming equal numbers of tasks per node) */
 double mpi_report_comittable_memory(long long BaseMem, int verbose)
 {

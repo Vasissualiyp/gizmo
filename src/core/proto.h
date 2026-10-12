@@ -35,6 +35,10 @@ void add_turb_accel(void);
 void log_turb_temp(void);
 double get_random_number(MyIDType id);
 double mpi_report_comittable_memory(long long BaseMem, int verbose);
+int report_node_memory_headroom(long long *avail_kb, long long *commit_headroom_kb);
+int gizmo_node_headroom_admits(long long bytes_this_rank);
+void gizmo_kept_list_grow(long long delta_bytes);
+void gizmo_kept_list_note_refused(long long bytes);
 long long report_comittable_memory(long long *MemTotal,
                                    long long *Committed_AS,
                                    long long *SwapTotal,
@@ -749,6 +753,13 @@ enum ghost_refresh_status {
     GHOST_REFRESH_FAIL_ON_PEER          /* this rank could refresh, another could not */
 };
 int ghost_refresh_values(void);
+/* Set the live ghost pool aside (NumPart back to local, provenance held privately), restore it
+ * (same slot layout, new provenance epoch, values to be refreshed by the caller), or drop it.
+ * Restore is local and returns 0 when the layout it needs is not there; callers decide
+ * collectively. */
+int ghost_pool_park(void);
+int ghost_pool_restore(void);
+void ghost_pool_discard_parked(void);
 /* Monotonic count of completed ghost imports. Read by the hydro corridor, which
  * fast-paths a value-refresh only when the live pool's epoch matches the one its
  * published CSR was built from — see hydro/hydro_corridor.cc. */
@@ -773,6 +784,10 @@ extern "C" {
  * supply pools keyed on it stop matching. Rank-local, O(1), frees nothing.
  * `reason` documents the call site. */
 void ghost_exchange_supply_identity_changed(const char *reason);
+/* Announce that gas cells left the gas set without leaving their slots (a swallow zeroed their
+ * mass). Rank-local, O(1). The topology stamp reads both epochs. */
+void ghost_exchange_gas_eligibility_changed(const char *reason);
+void ghost_exchange_topology_stamp(long long *identity_epoch, long long *eligibility_epoch);
 #ifdef __cplusplus
 }
 #endif
@@ -1263,6 +1278,8 @@ void rt_source_injection(void);
 GIZMO_GPU_FUNCTION MyFloat dust_planck_mean_opacity(MyFloat Trad, MyFloat Tdust);
 
 #ifdef TRANSPORT_SUBCYCLE
+int transport_subcycle_keep_wanted(void);
+int transport_subcycle_keep_topology(void);
 void transport_subcycle_exchange_fluxes(int transport_sub);
 void transport_subcycle_kick(void);
 void transport_subcycle_prepare_topology(void);

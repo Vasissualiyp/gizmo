@@ -78,6 +78,54 @@ void gizmo_let_wire_grow(long long delta_bytes)
 void gizmo_let_wire_reset(void)            {g_let_wire_current = 0;}
 void gizmo_let_wire_note_failed(long long bytes) {g_let_wire_failed += bytes;}
 
+/* The shared gas neighbour list kept on the heap from the hydro pass to the transport
+   sub-steps (core/transport_subcycle.cc) is transient in the same sense: tracked as
+   current / high-water bytes, not as a persistent family, plus the size of the last list it
+   could not keep (0 when the last one was kept). */
+static long long g_kept_list_current = 0, g_kept_list_highwater = 0, g_kept_list_refused = 0;
+void gizmo_kept_list_grow(long long delta_bytes)
+{
+    g_kept_list_current += delta_bytes;
+    if(g_kept_list_current < 0) {
+        static int warned = 0;
+        if(!warned) {warned = 1;
+            printf("MEMORY LEDGER WARNING: kept sub-step list total went negative (%lld B) on task=%d -- freed more than tracked; clamping to 0.\n",
+                   g_kept_list_current, ThisTask);
+            fflush(stdout);}
+        g_kept_list_current = 0;
+    }
+    if(g_kept_list_current > g_kept_list_highwater) {g_kept_list_highwater = g_kept_list_current;}
+}
+void gizmo_kept_list_note_refused(long long bytes) {g_kept_list_refused = bytes;}
+
+/* Whether every node can hold this many more bytes outside the working pool, for an optional
+   allocation whose only fallback is the path the run takes without it. Collective. Each node's
+   total must fit in a quarter of the smaller of its physical headroom (MemAvailable) and its
+   commit headroom (CommitLimit - Committed_AS) where the node enforces it: a heap allocation can
+   be granted under overcommit and fail only when its pages are touched, so physical headroom
+   always bounds it, and a strict-commit node (vm.overcommit_memory = 2) refuses on the commit
+   figure alone. Elsewhere CommitLimit is advisory and Committed_AS routinely exceeds it. A node
+   whose memory cannot be read answers no. */
+int gizmo_node_headroom_admits(long long bytes_this_rank)
+{
+    long long node_bytes = 0;
+    MPI_Allreduce(&bytes_this_rank, &node_bytes, 1, MPI_LONG_LONG, MPI_SUM, GizmoNodeComm);
+    long long avail_kb = 0, commit_headroom_kb = 0;
+    int ok = report_node_memory_headroom(&avail_kb, &commit_headroom_kb);
+    if(ok) {
+        int strict_commit = -1;
+        FILE *fd = fopen("/proc/sys/vm/overcommit_memory", "r");
+        if(fd) {if(fscanf(fd, "%d", &strict_commit) != 1) {strict_commit = -1;} fclose(fd);}
+        if(strict_commit < 0 || strict_commit > 2) {ok = 0;}   /* the policy cannot be read: unknown, so no */
+        long long headroom_kb = avail_kb;
+        if(strict_commit == 2 && commit_headroom_kb < headroom_kb) {headroom_kb = commit_headroom_kb;}
+        ok = ok && (headroom_kb > 0) && (4 * node_bytes <= 1024LL * headroom_kb);
+    }
+    int all_ok = 0;
+    MPI_Allreduce(&ok, &all_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+    return all_ok;
+}
+
 /* Per-process virtual and resident size from /proc/self/status (Linux; 0 elsewhere).
    VIRTUAL/committed (VmSize) is what mmap reserved -- the quantity strict-overcommit
    nodes (Frontera) fail on -- and can far exceed RESIDENT (VmRSS), the pages actually
@@ -141,8 +189,9 @@ static void report_memory_ledger_impl(const char *when, int always)
     MPI_Reduce(&kok_hw,  &node_kok_hw,  1, MPI_LONG_LONG, MPI_SUM, 0, GizmoNodeComm);
 
     /* LET wire transient buffers: report the high-water (and failed bytes). */
-    long long let_in[3] = {g_let_wire_highwater, g_let_wire_current, g_let_wire_failed}, node_let[3] = {0, 0, 0};
-    MPI_Reduce(let_in, node_let, 3, MPI_LONG_LONG, MPI_SUM, 0, GizmoNodeComm);
+    long long let_in[6] = {g_let_wire_highwater, g_let_wire_current, g_let_wire_failed,
+                           g_kept_list_highwater, g_kept_list_current, g_kept_list_refused}, node_let[6] = {0, 0, 0, 0, 0, 0};
+    MPI_Reduce(let_in, node_let, 6, MPI_LONG_LONG, MPI_SUM, 0, GizmoNodeComm);
 
     /* Label-classified Kokkos buckets (current, bucket x space) -> node sums, so the
        "Kokkos observed" superset is decomposed into SoA / tree / tree-build scratch /
@@ -246,13 +295,14 @@ static void report_memory_ledger_impl(const char *when, int always)
         n += snprintf(buf + n, (n < (int) sizeof(buf)) ? sizeof(buf) - n : 0,
                       "MEMORY LEDGER [%s] busiest of %d nodes (task=%d, %d ranks/node, physical %s)\n"
                       "  pools: base %.0f res / %.0f hw | SoA %.0f | tree %.0f | timebin %.0f |"
-                      " LET-wire hw %.0f (cur %.0f, fail %.0f)\n",
+                      " LET-wire hw %.0f (cur %.0f, fail %.0f) | sub-step list kept hw %.0f (cur %.0f, last refused %.0f)\n",
                       when, GizmoNodeCount, ThisTask, GizmoRanksThisNode, node_phys,
                       node_base_reserved_mb, node_base_highwater_mb,
                       node_family_bytes[GIZMO_MEM_PARTICLE_SOA] / (1024.0 * 1024.0),
                       node_family_bytes[GIZMO_MEM_TREE_NODES] / (1024.0 * 1024.0),
                       node_family_bytes[GIZMO_MEM_STL_TIMEBIN] / (1024.0 * 1024.0),
-                      node_let[0] / (1024.0 * 1024.0), node_let[1] / (1024.0 * 1024.0), node_let[2] / (1024.0 * 1024.0));
+                      node_let[0] / (1024.0 * 1024.0), node_let[1] / (1024.0 * 1024.0), node_let[2] / (1024.0 * 1024.0),
+                      node_let[3] / (1024.0 * 1024.0), node_let[4] / (1024.0 * 1024.0), node_let[5] / (1024.0 * 1024.0));
         /* Tree-node breakdown: split the "Tree nodes" total into local vs foreign-LET vs
            Father/Nextnode aux, and report the foreign storage that exists vs the since-start
            used high-water (rank-max). "used" is NOT current-at-print: force_treeallocate resets

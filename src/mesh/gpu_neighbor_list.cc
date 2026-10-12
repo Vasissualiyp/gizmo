@@ -2350,10 +2350,26 @@ void gpu_ngb_copy_neighbors_to_host(const gpu_neighbor_list_t *gnl, int *host_de
    in the mymalloc-based neighbor_list_t format expected by gradient/hydro.
    Called from accel.cc (which is NOT compiled by nvcc).
    search_radius_factor: multiplier on KernelRadius (default 1.0; >1 for TURB_DIFF_DYNAMIC). */
+void gpu_build_symmetric_neighbor_list_on(struct particle_data *P_host, int num_total,
+                                          int *active_indices, int num_active,
+                                          neighbor_list_t *out,
+                                          double search_radius_factor, int try_heap);
 void gpu_build_symmetric_neighbor_list(struct particle_data *P_host, int num_total,
                                        int *active_indices, int num_active,
                                        neighbor_list_t *out,
                                        double search_radius_factor)
+{
+    gpu_build_symmetric_neighbor_list_on(P_host, num_total, active_indices, num_active, out, search_radius_factor, 0);
+}
+
+/* As above; with try_heap, the host copy goes on the plain heap (out->on_heap = 1) instead of the
+ * working pool, so it can outlive the pool's last-in-first-out scope -- but only when every node
+ * can hold it (gizmo_node_headroom_admits) and every rank's allocation succeeds; otherwise every
+ * rank uses the pool, as without it.  Collective when try_heap is set. */
+void gpu_build_symmetric_neighbor_list_on(struct particle_data *P_host, int num_total,
+                                          int *active_indices, int num_active,
+                                          neighbor_list_t *out,
+                                          double search_radius_factor, int try_heap)
 {
     /* Use the per-step particle arena instead of a dedicated full-NumPart memcpy.
      * The arena's fast path is a no-op when valid (e.g. when gradient/hydro
@@ -2385,11 +2401,26 @@ void gpu_build_symmetric_neighbor_list(struct particle_data *P_host, int num_tot
                        search_radius_factor /* j_kernel_radius_scale */);
 
 
-    /* Copy CSR into mymalloc neighbor_list_t */
+    /* Copy CSR into the host neighbor_list_t */
     out->num_active = num_active;
     out->total_pairs = gpu_nl.total_pairs;
-    out->offsets = (int64_t *) mymalloc("ngb_offsets", (size_t)(num_active + 1) * sizeof(int64_t));
-    out->neighbors = (int *) mymalloc("ngb_neighbors", (size_t)(gpu_nl.total_pairs > 0 ? gpu_nl.total_pairs : 1) * sizeof(int));
+    out->on_heap = 0;
+    const size_t offsets_bytes = (size_t)(num_active + 1) * sizeof(int64_t);
+    const size_t neighbors_bytes = (size_t)(gpu_nl.total_pairs > 0 ? gpu_nl.total_pairs : 1) * sizeof(int);
+    /* What keeping costs in all: this list plus the active-index array that is kept with it. */
+    const long long kept_bytes = (long long)(offsets_bytes + neighbors_bytes) + (long long)(num_active > 0 ? num_active : 1) * (long long)sizeof(int);
+    if(try_heap && gizmo_node_headroom_admits(kept_bytes)) {
+        out->offsets = (int64_t *) malloc(offsets_bytes);
+        out->neighbors = (int *) malloc(neighbors_bytes);
+        int got = (out->offsets && out->neighbors) ? 1 : 0, all_got = 0;
+        MPI_Allreduce(&got, &all_got, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+        if(all_got) {out->on_heap = 1; gizmo_kept_list_grow((long long)(offsets_bytes + neighbors_bytes)); gizmo_kept_list_note_refused(0);}
+        else {free(out->offsets); free(out->neighbors); gizmo_kept_list_note_refused(kept_bytes);}
+    } else if(try_heap) {gizmo_kept_list_note_refused(kept_bytes);}
+    if(!out->on_heap) {
+        out->offsets = (int64_t *) mymalloc("ngb_offsets", offsets_bytes);
+        out->neighbors = (int *) mymalloc("ngb_neighbors", neighbors_bytes);
+    }
     /* gpu_nl.offsets is SharedSpace (UVM) → host memcpy is fine.
      * gpu_nl.neighbors is DEVICE_SPACE (CudaSpace) → must use deep_copy, not host memcpy. */
     memcpy(out->offsets, gpu_nl.offsets, (size_t)(num_active + 1) * sizeof(int64_t));
@@ -2431,6 +2462,7 @@ void gpu_build_cross_type_neighbor_list(struct particle_data *P_host, int num_to
     /* Copy CSR into mymalloc neighbor_list_t */
     out->num_active = num_active;
     out->total_pairs = gpu_nl.total_pairs;
+    out->on_heap = 0;
     out->offsets = (int64_t *) mymalloc("ngb_offsets", (size_t)(num_active + 1) * sizeof(int64_t));
     out->neighbors = (int *) mymalloc("ngb_neighbors", (size_t)(gpu_nl.total_pairs > 0 ? gpu_nl.total_pairs : 1) * sizeof(int));
     /* See gpu_build_symmetric_neighbor_list for why neighbors needs deep_copy. */

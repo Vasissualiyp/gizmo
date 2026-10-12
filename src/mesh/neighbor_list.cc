@@ -160,6 +160,7 @@ void build_neighbor_list(struct particle_data *P, struct gas_cell_data *CellP,
 
     if(max_h <= 0 || num_pool == 0) {
         out->total_pairs = 0;
+        out->on_heap = 0;
         out->offsets = (int64_t *) mymalloc("ngb_offsets", (size_t)(num_active + 1) * sizeof(int64_t));
         memset(out->offsets, 0, (size_t)(num_active + 1) * sizeof(int64_t));
         out->neighbors = NULL;
@@ -269,6 +270,7 @@ void build_neighbor_list(struct particle_data *P, struct gas_cell_data *CellP,
 
     /* Allocate output CSR arrays (offsets first, then neighbors — persist after return) */
     out->total_pairs = total_pairs;
+    out->on_heap = 0;
     out->offsets = (int64_t *) mymalloc("ngb_offsets", (size_t)(num_active + 1) * sizeof(int64_t));
     out->neighbors = (int *) mymalloc("ngb_neighbors", (size_t)(total_pairs > 0 ? total_pairs : 1) * sizeof(int));
 
@@ -322,22 +324,37 @@ void build_neighbor_list(struct particle_data *P, struct gas_cell_data *CellP,
 
 void free_neighbor_list(neighbor_list_t *list)
 {
-    /* Free in reverse mymalloc order: neighbors was allocated after offsets */
-    if(list->neighbors) myfree(list->neighbors);
-    if(list->offsets) myfree(list->offsets);
+    if(list->on_heap) {
+        gizmo_kept_list_grow(-(long long)((size_t)(list->num_active + 1) * sizeof(int64_t)
+                                          + (size_t)(list->total_pairs > 0 ? list->total_pairs : 1) * sizeof(int)));
+        free(list->neighbors); free(list->offsets);
+    } else {
+        /* Free in reverse mymalloc order: neighbors was allocated after offsets */
+        if(list->neighbors) myfree(list->neighbors);
+        if(list->offsets) myfree(list->offsets);
+    }
     list->neighbors = NULL;
     list->offsets = NULL;
     list->total_pairs = 0;
+    list->on_heap = 0;
 }
 
 /* Global symmetric neighbor list: defined here, extern'd in neighbor_list.h */
-neighbor_list_t gizmo_sym_neighbor_list = {NULL, NULL, 0, 0};
+neighbor_list_t gizmo_sym_neighbor_list = {NULL, NULL, 0, 0, 0};
 int *gizmo_sym_active_indices = NULL;
+int gizmo_sym_active_indices_on_heap = 0;
 int gizmo_sym_num_active = 0;
 int gizmo_sym_num_active_global = 0; /* Allreduce'd in gizmo_gradients_prep_symlist; reused by refresh */
 
 void gizmo_sym_neighbor_list_free(void) {
     if(gizmo_sym_neighbor_list.offsets) { free_neighbor_list(&gizmo_sym_neighbor_list); }
-    if(gizmo_sym_active_indices) { myfree(gizmo_sym_active_indices); gizmo_sym_active_indices = NULL; }
+    if(gizmo_sym_active_indices) {
+        if(gizmo_sym_active_indices_on_heap) {
+            gizmo_kept_list_grow(-(long long)((size_t)(gizmo_sym_num_active > 0 ? gizmo_sym_num_active : 1) * sizeof(int)));
+            free(gizmo_sym_active_indices);
+        } else {myfree(gizmo_sym_active_indices);}
+        gizmo_sym_active_indices = NULL;
+    }
+    gizmo_sym_active_indices_on_heap = 0;
     gizmo_sym_num_active = 0;
 }

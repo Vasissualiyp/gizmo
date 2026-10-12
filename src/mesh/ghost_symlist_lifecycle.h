@@ -19,6 +19,9 @@
 extern void gpu_build_symmetric_neighbor_list(struct particle_data *P, int num_total,
     int *active_indices, int num_active, neighbor_list_t *out,
     double search_radius_factor);
+extern void gpu_build_symmetric_neighbor_list_on(struct particle_data *P, int num_total,
+    int *active_indices, int num_active, neighbor_list_t *out,
+    double search_radius_factor, int try_heap);
 
 /* Forward declaration of the out-of-line host All accessor (defined in
  * core/predict.cc). Retained as a stylistic intent-tag for host-snapshot
@@ -248,12 +251,13 @@ static inline void gizmo_hydro_density_import_ghosts_fresh_no_drift(double safet
    external_csr and transport_subcycle, and TRANSPORT_SUBCYCLE forces Mode A).
    So on Mode B the ghost exchange + CSR build are pure dead work — skipped
    here; only the active-index list is built. */
-static inline void gizmo_gradients_prep_symlist(double safety, double search_fac, bool is_mode_b)
+static inline void gizmo_gradients_prep_symlist(double safety, double search_fac, bool is_mode_b, int keep_for_substeps = 0)
 {
     /* active-index allocation (persists across gradients + hydro; used by the
        request-driven Mode B walkers as their active list) */
     gizmo_sym_num_active = 0;
     for(int ii : ActiveParticleList) {if(P[ii].Type == 0 && P[ii].Mass > 0) gizmo_sym_num_active++;}
+    gizmo_sym_active_indices_on_heap = 0;
     gizmo_sym_active_indices = (int *) mymalloc("sym_active",
         (gizmo_sym_num_active > 0 ? gizmo_sym_num_active : 1) * sizeof(int));
     {int aa = 0; for(int ii : ActiveParticleList) {
@@ -300,7 +304,7 @@ static inline void gizmo_gradients_prep_symlist(double safety, double search_fac
 
     /* build the symmetric CSR list (max(h_i,h_j) search radius) */
     double t_sym = my_second();
-    gpu_build_symmetric_neighbor_list(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac);
+    gpu_build_symmetric_neighbor_list_on(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac, keep_for_substeps);
     if(ThisTask == 0) {PRINT_STATUS("Symmetric neighbor list: %d active, %lld pairs (%.4f s)",
                                     gizmo_sym_num_active, (long long)gizmo_sym_neighbor_list.total_pairs, timediff(t_sym, my_second()));}
 }
@@ -312,7 +316,7 @@ static inline void gizmo_gradients_prep_symlist(double safety, double search_fac
    rebuilds the CSR (ghost indices may shift after re-exchange). Skipped
    when global active-gas was 0 in prep — no work in either direction. The
    size-1 backstop symlist from prep stays valid for the (no-op) kernels. */
-static inline void gizmo_gradients_refresh_symlist(double safety, double search_fac, bool is_mode_b)
+static inline void gizmo_gradients_refresh_symlist(double safety, double search_fac, bool is_mode_b, int keep_for_substeps = 0)
 {
     if(gizmo_sym_num_active_global == 0) return;
     if(is_mode_b) {
@@ -326,23 +330,22 @@ static inline void gizmo_gradients_refresh_symlist(double safety, double search_
         const double t_gi_symm = my_second();
         ghost_exchange_hydro(safety);
         cpu_charge_child(CPU_GHOSTIMPORT_SYMM, timediff(t_gi_symm, my_second()));
-        gpu_build_symmetric_neighbor_list(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac);
+        gpu_build_symmetric_neighbor_list_on(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac, keep_for_substeps);
         if(ThisTask == 0) {PRINT_STATUS("Ghost refresh + CSR rebuild after gradients: %lld pairs (%.4f s)",
                                         (long long)gizmo_sym_neighbor_list.total_pairs, timediff(t_refresh, my_second()));}
     }
 }
 
 /* Epilogue for hydro_force(): free the symlist and remove ghost particles.
-   Unconditional — including under TRANSPORT_SUBCYCLE. (The old scheme that
-   kept this pool alive for the RT subcycle loop was broken by construction:
-   sink accretion, wind spawning, rearrange_particle_sequence, and RT source
-   injection all run between hydro_force and the subcycle loop, and their own
-   ghost imports/cleanups and particle-array mutations corrupted the retained
-   pool and the CSR ghost indices into it. The subcycle now builds its own
-   topology immediately before its loop — transport_subcycle_prepare_topology
-   in core/transport_subcycle.cc — after all of those have run.) */
+   Under TRANSPORT_SUBCYCLE the list and the pool may instead be set aside for the
+   transport sub-steps (transport_subcycle_keep_topology): the pool is parked, never
+   left live, because sink accretion, wind spawning, rearrange_particle_sequence and
+   RT source injection run in between and must see only local particles. */
 static inline void gizmo_hydro_cleanup_symlist_and_ghosts(void)
 {
+#ifdef TRANSPORT_SUBCYCLE
+    if(transport_subcycle_keep_topology()) {return;}   /* the transport sub-steps take the list and the pool over */
+#endif
     gizmo_sym_neighbor_list_free();
     ghost_exchange_cleanup();
 }

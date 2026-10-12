@@ -476,6 +476,7 @@ void group_search_build_cross_type_nl(std::vector<particle_data> &particles, int
     {
       nl->num_active = nsources;
       nl->total_pairs = 0;
+      nl->on_heap = 0;
       nl->offsets = (int64_t *) mymalloc("ngb_offsets", (size_t)(nsources + 1) * sizeof(int64_t));
       nl->neighbors = (int *) mymalloc("ngb_neighbors", sizeof(int));
       for(int a = 0; a <= nsources; a++) nl->offsets[a] = 0;
@@ -520,6 +521,7 @@ void group_search_build_cross_type_nl(std::vector<particle_data> &particles, int
   free_neighbor_list(nl);
   nl->num_active = nsources;
   nl->total_pairs = (int64_t)neighbors.size();
+  nl->on_heap = 0;
   nl->offsets = (int64_t *) mymalloc("ngb_offsets", (size_t)(nsources + 1) * sizeof(int64_t));
   nl->neighbors = (int *) mymalloc("ngb_neighbors", (neighbors.size() > 0 ? neighbors.size() : 1) * sizeof(int));
   for(int a = 0; a <= nsources; a++) nl->offsets[a] = offsets[a];

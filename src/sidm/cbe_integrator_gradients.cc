@@ -275,6 +275,7 @@ void cbe_corridor_build(CbeCorridor &c)
         const int n = (int)rows.size();
         neighbor_list_t &list = c.lists[s];
         list.num_active = n;
+        list.on_heap = 0;
         list.offsets = (int64_t *) mymalloc("cbe_corridor_offsets", (size_t)(n + 1) * sizeof(int64_t));
         list.offsets[0] = 0;
         gpu_neighbor_list_t gnl{};

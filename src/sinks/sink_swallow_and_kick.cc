@@ -218,6 +218,9 @@ void sink_swallow_and_kick_loop(void)
     int N_gas_sw = 0, N_sink_sw = 0, N_star_sw = 0, N_dm_sw = 0;
     sink_swk_scatter(active_list, num_active, per_active_accum,
                      &N_gas_sw, &N_sink_sw, &N_star_sw, &N_dm_sw);
+    /* Swallowed gas keeps its slot with zero mass until compaction; anything that kept the gas
+       topology from before this must know (counted on the sink's rank; consumers decide collectively). */
+    if(N_gas_sw > 0) {ghost_exchange_gas_eligibility_changed("sink_swallow_and_kick_loop");}
 
     int Ntot_gas = 0, Ntot_sink = 0, Ntot_star = 0, Ntot_dm = 0;
     MPI_Reduce(&N_gas_sw,  &Ntot_gas,  1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);

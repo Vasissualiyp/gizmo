@@ -27,17 +27,113 @@ extern void hydro_evaluate_gpu(struct particle_data *, struct gas_cell_data *,
 #include "../radiation/rt_direct_ray_transport_functions.h"
 #include "../radiation/rt_diffusion_explicit_functions.h"
 
-/* Build the topology the subcycle loop consumes: active-index list + gas ghost
- * pool + shared symmetric gas CSR (gizmo_sym_*). Called from run.cc immediately
- * before the subcycle loop, AFTER all particle-set mutations (sink accretion,
- * wind spawning, rearrange_particle_sequence) and after any neighbor loop with
- * its own ghost import/cleanup (RT source injection) — any of those running
- * after this build would corrupt the pool or the CSR's ghost indices. One
- * import + one build per main step; every sub-step reuses the frozen topology
- * by design. Freed after the loop (run.cc: gizmo_sym_neighbor_list_free +
- * ghost_exchange_cleanup). */
+/* The sub-steps run on the topology the hydro pass already built -- its active-gas list, its
+ * gas ghost pool and its shared symmetric list -- whenever nothing between the end of
+ * hydro_force and the sub-step loop could have changed it.
+ *
+ * What runs in that window, and what each may change:
+ *   second half-kick, DM heating ............ values only (positions and h do not move)
+ *   sink accretion .......................... values; a swallow zeroes gas mass in place
+ *                                             (ghost_exchange_gas_eligibility_changed)
+ *   wind spawning, rearrange_particle_sequence  particle membership/order (supply identity
+ *                                             epoch, and NumPart)
+ *   FoF ..................................... reorders particles: never kept on a FoF step
+ *   RT source injection, RT chemistry ....... values; may import and clean up a pool of
+ *                                             its own, which the parked one is immune to
+ *   special (reflecting/outflow) boundaries and excision move or remove particles in the
+ *   window, so those builds never keep.
+ * A new routine placed in that window must be added here and signalled, or the kept topology
+ * is unsafe.
+ *
+ * The list lives on the plain heap (it must outlive the working pool's last-in-first-out
+ * scope), admitted only when every node has the headroom; otherwise everything behaves as
+ * before: freed after hydro_force, rebuilt here. */
+static struct {
+    int kept, parked, num_local, num_gas_local;
+    long long identity_epoch, eligibility_epoch;
+} g_kept_topology = {0, 0, 0, 0, 0, 0};
+
+int transport_subcycle_keep_wanted(void)
+{
+#if defined(BOX_DEFINED_SPECIAL_XYZ_BOUNDARY_CONDITIONS_ARE_ACTIVE) || defined(PARTICLE_EXCISION)
+    return 0;
+#endif
+#if (defined(SINK_PARTICLES) || defined(GALSF_SUBGRID_WINDS)) && defined(FOF)
+    if(All.Time >= All.TimeNextOnTheFlyFoF) {return 0;}
+#endif
+    return 1;
+}
+
+/* End of hydro_force: take over the shared list and the pool instead of freeing them.
+ * Collective (every rank reaches the hydro epilogue). Returns 1 if kept. */
+int transport_subcycle_keep_topology(void)
+{
+    if(!gizmo_sym_neighbor_list.on_heap) {return 0;}   /* admission is collective, so this is too */
+    /* Ghosts are expected wherever the corridor imported (NTask > 1 with active gas anywhere);
+       then every rank must hold a live pool to park, or none keeps. The active list was built in
+       the working pool; it moves to the heap with the list. One collective decides both. */
+    const int need_pool = (NTask > 1 && gizmo_sym_num_active_global > 0) ? 1 : 0;
+    const size_t active_bytes = (size_t)(gizmo_sym_num_active > 0 ? gizmo_sym_num_active : 1) * sizeof(int);
+    int *active_heap = (int *) malloc(active_bytes);
+    int got = (active_heap && (!need_pool || ghost_pool_is_live())) ? 1 : 0, all_got = 0;
+    MPI_Allreduce(&got, &all_got, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+    if(!all_got) {
+        free(active_heap);
+        gizmo_kept_list_note_refused((long long)((size_t)(gizmo_sym_neighbor_list.num_active + 1) * sizeof(int64_t)
+            + (size_t)(gizmo_sym_neighbor_list.total_pairs > 0 ? gizmo_sym_neighbor_list.total_pairs : 1) * sizeof(int)) + (long long)active_bytes);
+        return 0;
+    }
+    if(gizmo_sym_num_active > 0) {memcpy(active_heap, gizmo_sym_active_indices, (size_t)gizmo_sym_num_active * sizeof(int));}
+    if(gizmo_sym_active_indices_on_heap) {free(gizmo_sym_active_indices);} else {myfree(gizmo_sym_active_indices);}
+    gizmo_sym_active_indices = active_heap; gizmo_sym_active_indices_on_heap = 1;
+    gizmo_kept_list_grow((long long)active_bytes);
+    if(need_pool) {ghost_pool_park();}   /* every rank has a live pool here, so every rank parks */
+    g_kept_topology.parked = need_pool;
+    g_kept_topology.num_local = NumPart; g_kept_topology.num_gas_local = N_gas;
+    ghost_exchange_topology_stamp(&g_kept_topology.identity_epoch, &g_kept_topology.eligibility_epoch);
+    g_kept_topology.kept = 1;
+    return 1;
+}
+
+/* Collective. 1 = the kept topology is live again with current ghost values; 0 = it was
+ * dropped (or there was none) and the caller builds a fresh one. */
+static int transport_subcycle_reuse_kept_topology(void)
+{
+    if(!g_kept_topology.kept) {return 0;}   /* same on every rank: keeping was collective */
+    g_kept_topology.kept = 0;
+    long long identity = 0, eligibility = 0;
+    ghost_exchange_topology_stamp(&identity, &eligibility);
+    int ok = (identity == g_kept_topology.identity_epoch) && (eligibility == g_kept_topology.eligibility_epoch)
+          && (NumPart == g_kept_topology.num_local) && (N_gas == g_kept_topology.num_gas_local) && !ghost_pool_is_live();
+    if(ok) {   /* the same active rows, in the same order */
+        int n = 0;
+        for(int ii : ActiveParticleList) {
+            if(P[ii].Type != 0 || P[ii].Mass <= 0) {continue;}
+            if(n >= gizmo_sym_num_active || gizmo_sym_active_indices[n] != ii) {ok = 0; break;}
+            n++;
+        }
+        if(n != gizmo_sym_num_active) {ok = 0;}
+    }
+    int restored = 0;
+    if(ok && g_kept_topology.parked) {restored = ghost_pool_restore(); ok = restored;}
+    int all_ok = 0;
+    MPI_Allreduce(&ok, &all_ok, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
+    if(all_ok && g_kept_topology.parked && ghost_refresh_values() != GHOST_REFRESH_OK) {all_ok = 0;}   /* collective outcome */
+    if(!all_ok) {
+        if(restored) {ghost_exchange_cleanup();} else {ghost_pool_discard_parked();}
+        gizmo_sym_neighbor_list_free();
+        return 0;
+    }
+    return 1;
+}
+
+/* The topology the sub-step loop consumes (active-index list + gas ghost pool + shared
+ * symmetric gas list, gizmo_sym_*): the hydro pass's, when it was kept and is still valid,
+ * else built here, after every particle-set mutation of the window above. Freed after the
+ * loop (run.cc: gizmo_sym_neighbor_list_free + ghost_exchange_cleanup). */
 void transport_subcycle_prepare_topology(void)
 {
+    if(transport_subcycle_reuse_kept_topology()) {return;}
     const double gsl_safety = gizmo_ghost_safety_factor();
     gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false);
 }
