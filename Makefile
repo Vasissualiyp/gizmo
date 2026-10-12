@@ -587,14 +587,18 @@ MISC_OBJS = sidm/cbe_integrator.o \
 ## includes HYPRE.h unless MHD_MODIFIED_GRADIENT_CG_ONLY or _USE_PARDISO is set, and there is no
 ## hypre module on Rusty (nor one bundled with petsc), so fall back to a local build --
 ## scripts/build_hypre_rusty.sh makes one. Only fills in when no systype block above already set a
-## path, so the homebrew prefixes stay intact. Harmless when the prefix does not exist: only a
-## config that actually includes HYPRE.h cares.
+## path, so the homebrew prefixes stay intact. Gated on the same flags as the include: HYPRE_LIBS
+## goes on every link line, and Apple ld rejects -R, so an ungated fallback breaks every macOS build.
+ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (,$(findstring MHD_MODIFIED_GRADIENT_CG_ONLY,$(CONFIGVARS))$(findstring MHD_MODIFIED_GRADIENT_USE_PARDISO,$(CONFIGVARS)))
 ifeq ($(strip $(HYPRE_INCL)),)
 ifeq ($(strip $(HYPRE_PATH)),)
 HYPRE_PATH := $(HOME)/opt/hypre
 endif
 HYPRE_INCL = -I$(HYPRE_PATH)/include
 HYPRE_LIBS = -L$(HYPRE_PATH)/lib -L$(HYPRE_PATH)/lib64 -Xlinker -R -Xlinker $(HYPRE_PATH)/lib -Xlinker -R -Xlinker $(HYPRE_PATH)/lib64 -lHYPRE
+endif
+endif
 endif
 
 ## name of executable and optimizations
