@@ -21,8 +21,6 @@ absolute error in the root; stop iterating when this is achieved
 #define ROOTFUNC ROOTFIND_FUNCTION
 #endif
 
-/* NaN test that survives -ffast-math (isnan() is folded to false under -ffinite-math-only) */
-#define ROOTFIND_ISNAN(v) ({double rf_v_ = (v); unsigned long long rf_u_; memcpy(&rf_u_, &rf_v_, sizeof(rf_u_)); (((rf_u_ >> 52) & 0x7ffULL) == 0x7ffULL) && ((rf_u_ & 0xfffffffffffffULL) != 0);})
 if (ROOTFUNC_a * ROOTFUNC_b > 0) {
     PRINT_WARNING("ERROR: Bounds supplied to bracketed_roofind.h block do not bracket "
                   "the root. x_a=%g x_b=%g f_a=%g f_b=%g Expanding region...",
@@ -37,7 +35,7 @@ if (ROOTFUNC_a * ROOTFUNC_b > 0) {
         ROOTFUNC_b = ROOTFUNC(ROOTFIND_X_b);
         bracket_iter++;
     } while (ROOTFUNC_a * ROOTFUNC_b > 0 && bracket_iter < MAXITER);
-    if ((bracket_iter == MAXITER) || ROOTFIND_ISNAN(ROOTFUNC_a) || ROOTFIND_ISNAN(ROOTFUNC_b)) {
+    if ((bracket_iter == MAXITER) || isnan(ROOTFUNC_a) || isnan(ROOTFUNC_b)) {
         PRINT_WARNING("ERROR: Could not bracket root. x_a=%g x_b=%g f_a=%g f_b=%g\n", ROOTFIND_X_a, ROOTFIND_X_b, ROOTFUNC_a, ROOTFUNC_b);
         endrun(234528);
     }
@@ -117,10 +115,6 @@ while (ROOTFIND_X_error > DELTA_TOL) {
     }
     DELTA_TOL = DMAX(fabs(ROOTFIND_ABS_X_tol), ROOTFIND_REL_X_tol * fabs(ROOTFIND_X_b)); // tolerance relative to the best estimate b, not to the (possibly wild) proposed point
     ROOTFUNC_new = ROOTFUNC(ROOTFIND_X_new);
-    {int rf_nan_retry = 0; while (ROOTFIND_ISNAN(ROOTFUNC_new) && rf_nan_retry < 8) { // NaN residual: step back toward the best evaluated point
-        ROOTFIND_X_new = ((ROOTFIND_X_new > 0) && (ROOTFIND_X_b > 0)) ? sqrt(ROOTFIND_X_new * ROOTFIND_X_b) : 0.5 * (ROOTFIND_X_new + ROOTFIND_X_b);
-        ROOTFUNC_new = ROOTFUNC(ROOTFIND_X_new); rf_nan_retry++;}
-     if (ROOTFIND_ISNAN(ROOTFUNC_new)) {PRINT_WARNING("bracketed_rootfind.h: residual is NaN near x=%g, returning the best evaluated point x=%g", ROOTFIND_X_new, ROOTFIND_X_b); ROOTFIND_X_new = ROOTFIND_X_b; ROOTFUNC_new = ROOTFUNC_b; break;}}
     if (ROOTFUNC_new == 0) {
         break;
     }
@@ -151,7 +145,6 @@ while (ROOTFIND_X_error > DELTA_TOL) {
     }
 }
 if (ROOTFUNC_new != 0 && fabs(ROOTFUNC_b) < fabs(ROOTFUNC_new)) {ROOTFIND_X_new = ROOTFIND_X_b; ROOTFUNC_new = ROOTFUNC_b;} // return the best evaluated estimate, not whichever point was evaluated last
-#undef ROOTFIND_ISNAN
 
 #undef ROOTFUNC
 
