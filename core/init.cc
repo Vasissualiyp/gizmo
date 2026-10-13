@@ -298,6 +298,9 @@ void init(void)
                than from whatever the allocator left behind */
             P[i].OldPos = P[i].Pos; P[i].OldVel = P[i].Vel;
             P[i].Hermite_OldAcc = {}; P[i].OldJerk = {};
+#ifdef HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
+            P[i].dt_crit_last = P[i].dt_crit_prev = 0; /* no criterion history: the default step rule until there is one */
+#endif
 #endif
 #if defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)
 #if defined(SINGLE_STAR_FB_SNE)
@@ -656,6 +659,13 @@ void init(void)
             CellP[i].Rad_Flux_AGN = 0;
 #endif
         }
+#if defined(COOL_MOLECFRAC_NONEQM)
+        if(RestartFlag == 2) /* the snapshot stores the fraction per neutral H; rebuild the total from it */
+        {
+            CellP[i].MolecularMassFraction_perNeutralH = DMIN(1,DMAX(0,CellP[i].MolecularMassFraction_perNeutralH));
+            CellP[i].MolecularMassFraction = DMIN(1,DMAX(0, 1.-CellP[i].Ne/1.25)) * CellP[i].MolecularMassFraction_perNeutralH;
+        }
+#endif
 #ifdef GALSF_SUBGRID_WINDS
         if(RestartFlag == 0) {CellP[i].DelayTime = 0;}
 #if (GALSF_SUBGRID_WIND_SCALING==1)
@@ -1067,13 +1077,6 @@ void init(void)
     }
     
 
-#if defined(COOL_MOLECFRAC_NONEQM)
-    if(RestartFlag == 2) // should have read in CellP[i].MolecularMassFraction_perNeutralH
-    {
-        CellP[i].MolecularMassFraction_perNeutralH = DMIN(1,DMAX(0,CellP[i].MolecularMassFraction_perNeutralH));
-        CellP[i].MolecularMassFraction = DMIN(1,DMAX(0, 1.-CellP[i].Ne/1.25)) * CellP[i].MolecularMassFraction_perNeutralH;
-    }
-#endif
     
 
 #ifdef CHIMES_INITIALISE_IN_EQM

@@ -245,6 +245,8 @@
 ## ----------------------------------------------------------------------------------------------------
 #SINGLE_STAR_TIMESTEPPING=1     # use additional timestep criteria to ensure resolved binaries/multiples dont dissolve in close encounters. 0=most conservative. 1=super-timestep hard binaries by operator-splitting the binary orbit. 2=more aggressive super-timestep. cite Grudic et al., arXiv:2010.11254, for the methods here.
 #HERMITE_INTEGRATION=32         # Instead of the usual 2nd order DKD Leapfrog timestep, do 4th order Hermite integration for particles matching the bitflag. Allows longer timesteps and higher accuracy collisional dynamics. cite Grudic et al., arXiv:2010.11254, for the methods here.
+#HERMITE_CORRECTOR_ITERATIONS=2 # P(EC)^n Hermite: after the corrector, re-evaluate gravity at the corrected state and re-apply the corrector, n passes in all (default 1 = standard PEC). Each extra pass costs one Hermite gravity evaluation per step. Use with HERMITE_SYMMETRIC_TIMESTEP: on adaptive block steps n>1 alone makes eccentric orbits worse. cite Kokubo, Yoshinaga & Makino 1998, MNRAS 297, 1067
+#HERMITE_SYMMETRIC_TIMESTEP     # time-symmetric block-step choice for Hermite particles: the largest power-of-2 step h <= (f_start+f_end)/2 of the timestep criterion f, f_end extrapolated linearly from the previous step. Removes the secular energy drift of eccentric orbits that the default start-of-step choice causes. Use with HERMITE_CORRECTOR_ITERATIONS=2. Adds two doubles per particle, so restartfiles do not cross between builds with and without it. Inert with FORCE_EQUAL_TIMESTEPS. cite Hut, Makino & McMillan 1995, ApJ 443, L93; Makino et al. 2006, New Astron. 12, 124
 ## ----------------------------------------------------------------------------------------------------
 # ----- sink creation and accretion/growth/merger modules
 ## ----------------------------------------------------------------------------------------------------
@@ -261,6 +263,7 @@
 #SINGLE_STAR_FB_RAD             # enable radiative feedback from stars, hooking into the standard radiation hydrodynamics algorithms. you need to determine how the effective temperatures of the stars scale, which will be used to determine their input fluxes into the different explicitly-evolved bands.
 #EOS_SUBSTELLAR_ISM             # allows for the local equation of state polytropic index to vary between 7/5 and 5/3 and outside this range following the detailed fit from Vaidya et al. A&A 580, A110 (2015) for n_H ~ 10^7, which accounts for collisional dissociation at 2000K and ionization at 10^4K, and take the fmol-weighted average with 5./3 at the end to interpolate between atomic/not self-shielding and molecular/self-shielding. Gamma should technically really come from calculating the species number-weighted specific heats, but fmol is very approximate so this should be OK. See the code and uncomment the noted lines in EOS.c if you want to use the exact version from Vaidya+15, which rolls the heat of ionization into the EOS. cite Grudic+ arXiv:2010.11254
 #EOS_GMC_BAROTROPIC             # Barotropic EOS calibratied to Masunaga & Inutsuka 2000; useful for test problems in small-scale star formation such as cloud collapse, jet launching. See Federrath et al. 2014ApJ...790..128F. Can also set to a numerical value =1 to instead use EOS used in Bate Bonnell & Bromm 2003
+#EOS_GAMMA_PROBE                # inert diagnostic (EOS_GENERAL builds): every sync point rank 0 prints the largest |SoundSpeed^2 rho/(gamma P) - 1| since the last one, gamma = gamma_eos_value() at the state the EOS update just computed, and the range of gamma seen
 ## ----------------------------------------------------------------------------------------------------
 # ----- optional and de-bugging modules (intended for specific behaviors)
 ## ----------------------------------------------------------------------------------------------------
@@ -293,6 +296,7 @@
 ## ----------------------------------------------------------------------------------------------------
 #SINK_SWALLOWGAS                  # 'top-level switch' for accretion (should always be enabled if accretion is on). enables BH to actually eliminate gas particles and take their mass.
 #SINK_ALPHADISK_ACCRETION=(10)    # gas accreted goes into a 'virtual' alpha-disk (mass reservoir), which then accretes onto the BH at the viscous rate (determining luminosity, etc). cite GIZMO methods. should be set to a value, which limits the maximum mass of the reservoir to that multiple of the central sink mass
+#SINK_MDOT_RESERVOIR_CAP=30       # with SINK_ALPHADISK_ACCRETION: while a sink holds fewer than SINK_MDOT_RESERVOIR_CAP_NRESOLVED (default 100) cells' worth of mass, drain at most M_sink/N of the reservoir per t_acc (floored at one gas cell). ON with N=30 under SINGLE_STAR_STARFORGE_DEFAULTS; set only to change N
 #SINK_SUBGRIDBHVARIABILITY        # model variability below resolved dynamical time for BH (convolve accretion rate with a uniform power spectrum of fluctuations on timescales below the minimum resolved dynamical time). cite Hopkins & Quataert 2011, MNRAS, 415, 1027. Requires GALSF.
 #SINK_GRAVCAPTURE_NONGAS          # accretion determined only by resolved gravitational capture by the BH, for non-gas particles (can be enabled with other accretion models for gas). cite Hopkins et al., 2016, MNRAS, 458, 816
 ## ----
@@ -415,7 +419,7 @@
 #RT_USE_GRAVTREE_SAVE_RAD_FLUX          # save radiative fluxes incident on each cell if using RHD methods that propagate fluxes through the gravity tree when these wouldn't be saved by default
 #RT_REPROCESS_INJECTED_PHOTONS          # re-process photon energy while doing the discrete injection operation conserving photon energy, put only the un-absorbed component of the current band into that band, putting the rest in its "donation" bin (ionizing->optical, all others->IR). This would happen anyway during the routine for resolved absorption, but this may more realistically handle situations where e.g. your dust destruction front is at totally unresolved scales and you don't want to spuriously ionize stuff on larger scales. Assume isotropic re-radiation, so inject only energy for the donated bin and not net flux/momentum. follows STARFORGE methods (Grudic+ arXiv:2010.11254) - cite this
 #RT_SINK_ANGLEWEIGHT_PHOTON_INJECTION   # uses a solid-angle as opposed to simple kernel weight (requires extra passes) for depositing radiation from sinks/BHs when the direct deposition is used. also ensures the sink uses a 2-way search to ensure overlapping diffuse gas gets radiation. cite Grudic+ arXiv:2010.11254
-#RT_ISRF_BACKGROUND=1                   # include Draine 1978 ISRF for photoelectric heating (appropriate for solar circle, must be re-scaled for different environments); rescaled by a constant normalization given by this constant, if defined
+#RT_ISRF_BACKGROUND=1                   # include Draine 1978 ISRF for photoelectric heating (appropriate for solar circle, must be re-scaled for different environments); its strength is the parameter InterstellarRadiationFieldStrength. Set =0 to switch it off, also where SINGLE_STAR_FB_RAD or SINGLE_STAR_STARFORGE_DEFAULTS+COOLING would turn it on: no field reset at the box edge, no ISRF parameters read, FUV for H2/photoelectric heating only from the RT bands (a G0=1 Habing default without them), and the cosmic-ray background falls back to the unattenuated Milky Way value used by builds without this flag
 ## ----------------------------------------------------------------------------------------------------
 # ----------- Transport subcycling: allow RT and/or CR transport to take multiple smaller steps per hydro step  [HIGHLY EXPERIMENTAL]
 ## ----------------------------------------------------------------------------------------------------
@@ -537,6 +541,7 @@
 # --------------------
 # ----- Cooling and Additional Fluid Physics
 #COOLING_OPERATOR_SPLIT            # do the hydro heating/cooling in operator-split fashion from chemical/radiative. slightly more accurate when tcool >> tdyn, but much noisier when tcool << tdyn
+#COOLING_COMPACT_CROSSCHECK        # abort if the compact-array cooling chain reads the global P/CellP instead of its arguments: re-runs cooling each step against shuffled global arrays and requires a bit-identical result (test builds only, ~2x cooling cost)
 #COOL_LOWTEMP_THIN_ONLY            # in the COOL_LOW_TEMPERATURES module, neglect the suppression of cooling at very high surface densities due to the opacity limit (disables limiter in Eqs B29-B30, Hopkins et al arXiv:1702.06148)
 #SUPER_TIMESTEP_DIFFUSION          # use super-timestepping to accelerate integration of diffusion operators [for testing or if there are stability concerns]
 #TURB_DRIVING_UPDATE_FORCE_ON_TURBUPDATE # if this is enabled, we only update as frequently as the driving phases are recomputed, as set by TurbDrive_TimeBetweenTurbUpdates. Only enable as an optimization if the cost of evaluating the turbulent force is large. To avoid large errors, TurbDrive_TimeBetweenTurbUpdates must be set by-hand to be << lambda_min / V where V is the typical turbulent velocity and lambda_min is the smallest driven wavelength.
@@ -559,7 +564,7 @@
 #NO_CHILD_IDS_IN_ICS               # IC file does not have child IDs: do not read them (used for compatibility with snapshot restarts from old versions of the code)
 # --------------------
 # ----- Particle Merging/Splitting/Deletion/Boundaries
-#MAINTAIN_TREE_IN_REARRANGE        # don't rebuild the domains/tree every time a particle is spawned - salvage the existing one by redirecting pointers as needed. cite Grudic+ arXiv:2010.11254
+#MAINTAIN_TREE_IN_REARRANGE        # don't rebuild the domains/tree every time a particle is spawned - salvage the existing one by redirecting pointers as needed. cite Grudic+ arXiv:2010.11254 Forced on for any SINK_PARTICLES run (nuclear zoom excepted): swallows and spawns rearrange the particle list mid-step and the walks that follow do not rebuild first
 #PREVENT_PARTICLE_MERGE_SPLIT      # don't allow gas particle splitting/merging operations
 #PREVENT_PARTICLE_MERGE            # don't allow gas MERGING but still allow splitting (cf. PREVENT_PARTICLE_MERGE_SPLIT, which disables both). Gives a diffusion-free, finest-resolution reference for spawned outflows; cf. SINK_SPAWN_NO_MERGE, which protects only spawned cells.
 
@@ -585,6 +590,7 @@
 #RT_TIMESTEP_LIMIT_RECOMBINATION   # limit timesteps to the explicit recombination time when transporting ionizing photons. note our chemistry solvers are all implicit and can handle larger timesteps, but no gaurantee of transport accuracy for much larger steps since opacities depend on ionization states.
 #RT_ENHANCED_NUMERICAL_DIFFUSION   # option which increases numerical diffusion, to get smoother solutions (akin to using HLL instead of HLLC+E fluxes), if desired; akin to slopelimiters~0 model
 #RT_COMPGRAD_EDDINGTON_TENSOR      # forces computation of eddington tensor even when not needed by the code
+#RT_DIAG_IR_DOUBLE_COUNT=1         # RT_INFRARED diagnostic, inert: every N sync points task 0 appends to OutputDir/rt_ir_diag.txt the energy routed to the IR band through E_abs_tot_toIR, injected sink luminosity, gas thermal energy, radiation energy per band and every flow into or out of each band; and to rt_cool_diag.txt the per-term ledger of the cooling step
 #RT_REINJECT_ACCRETED_PHOTONS      # when sink particles are used, photons lost when a gas cell is accreted are reinjected into the lowest-energy frequency bin on the following photon injection from that sink
 # --------------------
 # ----- Sink particle/sink particle special options

@@ -112,17 +112,11 @@ int eligible_for_hermite(int i)
 #endif
 #if defined(SINK_PARTICLES) || defined(GALSF)
     if(P[i].StellarAge >= DMAX(All.Time - 2*(get_particle_timestep_in_physical(i)*All.cf_hubble_a), 0)) {return 0;} // if we were literally born yesterday then let things settle down a bit with the less-accurate, but more-robust regular integration
-    /* An accreting sink STAYS Hermite-integrated. It used to fall back to KDK for the step
-       ("for stability reasons"), but that decision is per-particle, so when one member of a hard
-       pair accreted and the other did not, the two were integrated by different schemes in the
-       same step and the forces between them stopped being reciprocal. Measured on a 116.6+39.3
-       Msun pair at 20 AU: the members disagreed on 4.5% of steps, per-step sink momentum change
-       jumped 232x on exactly those steps, and total momentum drifted 131 Msun km/s in one sync
-       interval -- a hard failure of the conservation check.
-       What the fallback was really compensating for is fixed at the source instead: accretion now
-       shifts the Hermite carry state along with Pos/Vel (see sinks/sink.cc), so the predictor no
-       longer works from a stale base. Coupling eligibility across a pair was rejected: demotion
-       shortens the step 3.3x (see SINK_TIMESTEP_SAFETY_FACTOR in core/timestep.cc), a one-way
+    /* Accreting sinks stay Hermite-integrated. Falling back to KDK per particle lets the two
+       members of a pair use different schemes in the same step, so their mutual forces stop
+       being reciprocal and momentum is not conserved. Instead, accretion shifts the Hermite carry
+       state along with Pos/Vel (see sinks/sink.cc), so the predictor never works from a stale
+       base. Demoting both members together was rejected: demotion shortens the step, a one-way
        ratchet on the hierarchy. */
 #endif
 #if (SINGLE_STAR_TIMESTEPPING > 0)
@@ -159,7 +153,7 @@ void do_hermite_prediction(void)
 		}}} // for (int i : ActiveParticleList)
 }
 
-void do_hermite_correction(void) // corrector step
+void do_hermite_correction(int final_pass) // corrector step; final_pass: last of the HERMITE_CORRECTOR_ITERATIONS passes
 {
     int i; integertime ti_step, tstart=0, tend=0;
 #ifdef _OPENMP
@@ -176,7 +170,8 @@ void do_hermite_correction(void) // corrector step
                     P[i].Pos = P[i].OldPos + (P[i].Vel + P[i].OldVel) * (dt_grav * 0.5) + (P[i].Hermite_OldAcc - P[i].GravAccel) * (dt_grav * dt_grav / 12);
 #ifdef PMGRID
                     //Add the long-range kick from the second half-step, if necessary (since we are overwriting the previous kick operations with the Hermite scheme)
-                    if(All.PM_Ti_endstep == All.Ti_Current)	/* need to do long-range kick */
+                    //Final pass only: an intermediate corrected state is a force-evaluation point and, like the predicted state, carries no PM kick
+                    if(final_pass && All.PM_Ti_endstep == All.Ti_Current)	/* need to do long-range kick */
                     {
                         double dt_grav_pm = get_gravkick_factor(All.PM_Ti_begstep + (All.PM_Ti_endstep - All.PM_Ti_begstep)/2, All.PM_Ti_endstep, i, 0);
                         P[i].Vel += P[i].GravPM * dt_grav_pm;
@@ -210,6 +205,9 @@ void apply_long_range_kick(integertime tstart, integertime tend)
 
 void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurrent, int mode)
 {
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+    rt_diag_kick_mode = mode;
+#endif
     Vec3<double> dp; double dt_entr, dt_gravkick, dt_hydrokick;
     double mass_old, mass_pred, mass_new;
     mass_old = mass_pred = mass_new = P[i].Mass;    
@@ -256,6 +254,9 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
         if(P[i].Type==0)
         {
             Vec3<double> grav_acc; double dEnt_Gravity = 0;
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+            double rt_diag_u0 = CellP[i].InternalEnergy;
+#endif
             grav_acc = P[i].GravAccel * All.cf_a2inv;
 #ifdef PMGRID
             grav_acc += P[i].GravPM * All.cf_a2inv;
@@ -344,6 +345,9 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
                 demin=0.025*CellP[i].InternalEnergy; emin=0.025*(erad_tot/rsol_fac + CellP[i].InternalEnergy*P[i].Mass); enew=DMAX(erad_tot/rsol_fac + dEnt*P[i].Mass, emin);
                 dEnt=(enew - erad_tot/rsol_fac) / P[i].Mass; if(dEnt < demin) {dErad=rsol_fac*(dEnt-demin); dEnt=demin;}
                 if(dErad<-0.975*erad_tot) {dErad=-0.975*erad_tot;} CellP[i].InternalEnergy = dEnt; for(kfreq=0;kfreq<N_RT_FREQ_BINS;kfreq++) {CellP[i].Rad_E_gamma[kfreq] *= 1 + dErad/erad_tot;}
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+                rt_diag_sc(RT_DIAG_SC_KICK_DERAD, dErad);
+#endif
             } else {
                 if(dEnt < 0.5*CellP[i].InternalEnergy) {CellP[i].InternalEnergy *= 0.5;} else {CellP[i].InternalEnergy = dEnt;}
             }
@@ -351,6 +355,9 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
             if(dEnt < 0.5*CellP[i].InternalEnergy) {CellP[i].InternalEnergy *= 0.5;} else {CellP[i].InternalEnergy = dEnt;}
 #endif
             CellP[i].enforce_temperature_floor(); /* if we've fallen below the minimum temperature, force the 'floor' */
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+            rt_diag_sc(RT_DIAG_SC_KICK_DU, (CellP[i].InternalEnergy - rt_diag_u0) * P[i].Mass);
+#endif
         }
         
         /* now, kick for non-gas/fluid quantities (accounting for momentum conservation if masses are changing) */
@@ -381,6 +388,9 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
                 P[i].OldPos = P[i].Pos;
                 P[i].OldJerk = P[i].GravJerk;
                 P[i].Hermite_OldAcc = P[i].GravAccel; // this is the value from the first Hermite tree pass for this timestep
+#ifdef HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
+                P[i].dt_crit_prev = P[i].dt_crit_last; // criterion at the start of this step, for the next step choice
+#endif
             }
         }
 #endif
@@ -597,7 +607,10 @@ void apply_special_boundary_conditions(int i, double mass_for_dp, int mode)
                 if(P[i].Type==0) {int kf; for(kf=0;kf<N_CR_PARTICLE_BINS;kf++) {if(CellP[i].CosmicRayFlux[kf][j]<0) {CellP[i].CosmicRayFlux[kf][j]=-CellP[i].CosmicRayFlux[kf][j]; CellP[i].CosmicRayFluxPred[kf][j]=CellP[i].CosmicRayFlux[kf][j];}}}
 #endif
             }
-            if(special_boundary_condition_xyz_def_outflow[j] == 0 || special_boundary_condition_xyz_def_outflow[j] == -1) {P[i].Mass=0; if(P[i].Type==0) {CellP[i].Mass=0;} if(mode==1) {P[i].dp[0]=P[i].dp[1]=P[i].dp[2]=0;} TreeMomentsStaleFlag=1;}
+            if(special_boundary_condition_xyz_def_outflow[j] == 0 || special_boundary_condition_xyz_def_outflow[j] == -1) {P[i].Mass=0; if(P[i].Type==0) {CellP[i].Mass=0;} if(mode==1) {P[i].dp[0]=P[i].dp[1]=P[i].dp[2]=0;}
+#pragma omp atomic write
+                TreeMomentsStaleFlag=1; /* reached from the OpenMP-parallel drift; every thread writes the same value, but keep it a defined write */
+            }
         }
         else if (P[i].Pos[j] >= box_upper[j])
         {
@@ -612,7 +625,10 @@ void apply_special_boundary_conditions(int i, double mass_for_dp, int mode)
                 if(P[i].Type==0) {int kf; for(kf=0;kf<N_CR_PARTICLE_BINS;kf++) {if(CellP[i].CosmicRayFlux[kf][j]>0) {CellP[i].CosmicRayFlux[kf][j]=-CellP[i].CosmicRayFlux[kf][j]; CellP[i].CosmicRayFluxPred[kf][j]=CellP[i].CosmicRayFlux[kf][j];}}}
 #endif
             }
-            if(special_boundary_condition_xyz_def_outflow[j] == 0 || special_boundary_condition_xyz_def_outflow[j] == 1) {P[i].Mass=0; if(P[i].Type==0) {CellP[i].Mass=0;} if(mode==1) {P[i].dp[0]=P[i].dp[1]=P[i].dp[2]=0;} TreeMomentsStaleFlag=1;}
+            if(special_boundary_condition_xyz_def_outflow[j] == 0 || special_boundary_condition_xyz_def_outflow[j] == 1) {P[i].Mass=0; if(P[i].Type==0) {CellP[i].Mass=0;} if(mode==1) {P[i].dp[0]=P[i].dp[1]=P[i].dp[2]=0;}
+#pragma omp atomic write
+                TreeMomentsStaleFlag=1; /* reached from the OpenMP-parallel drift; every thread writes the same value, but keep it a defined write */
+            }
         }
     }
 #endif

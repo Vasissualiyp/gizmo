@@ -10,6 +10,8 @@ import socket
 # stall into the URLError the mirror-fallback path already handles.
 socket.setdefaulttimeout(300)
 import fcntl
+import re
+import warnings
 from shutil import move, rmtree, copyfile
 from glob import glob
 import numpy as np
@@ -175,28 +177,16 @@ def build_gizmo_for_test(test_name: str, num_openmp_threads: int = 0, extra_conf
     No-op when GIZMO_TEST_SKIP_BUILD_RUN is set (we're validating externally produced snapshots)."""
     if environ.get("GIZMO_TEST_SKIP_BUILD_RUN"):
         return
-    # Serialise the build against other processes sharing this tree. Everything from here to the
-    # move is repo-root state -- Config.sh, GIZMO_config.h, every object file, and the GIZMO
-    # binary itself -- so two builds at once corrupt each other. The lock covers the BUILD only,
-    # so builds serialise (minutes) while runs overlap (tens of minutes).
+    # Serialise the build against other processes sharing this tree: Config.sh, GIZMO_config.h,
+    # the object files and the binary are all repo-root state. Builds serialise; runs overlap.
     #
-    # NECESSARY BUT NOT SUFFICIENT for concurrent jobs in one checkout. With this lock in place,
-    # a run of 11 concurrent jobs still produced a binary whose translation units disagreed on
-    # the layout of the All struct -- mymalloc_init read All.MaxMemSize at an offset holding a
-    # double's bit pattern and aborted before any physics -- and the identical test passed the
-    # moment it built alone. Whatever leaks past the lock was not identified. For parallel jobs,
-    # give each its own checkout (git worktree, ~10 MB); keep this lock as the last line of
-    # defence, not the guarantee.
+    # Necessary but not sufficient for concurrent jobs in ONE checkout: builds whose translation
+    # units disagreed on a struct layout have been seen even with the lock held. Give each
+    # parallel job its own checkout (git worktree) and treat this lock as a backstop.
     #
-    # lockf, NOT flock. Measured on this filesystem with four jobs on four nodes: fcntl.flock
-    # granted all four simultaneously -- it is honoured node-locally with no cluster
-    # coordination -- while fcntl.lockf serialised them exactly (waits 0/20/40/60 s, no
-    # overlapping intervals). They are different mechanisms with different cluster support; do
-    # not "simplify" this back to flock.
-    #
-    # Chosen over a mkdir/O_EXCL lock because the kernel releases this one when the holder dies.
-    # These jobs get killed and time out; a lock that survives its owner turns one dead job into
-    # every later job hanging until someone clears it by hand.
+    # lockf, not flock: on a network filesystem flock can be node-local, granting the "exclusive"
+    # lock to one process per node at once. And a kernel-released lock rather than mkdir/O_EXCL, so
+    # a killed job cannot leave every later job waiting on a stale lock.
     with open(_BUILD_LOCK, "w") as _lock:
         fcntl.lockf(_lock, fcntl.LOCK_EX)
         _build_gizmo_locked(test_name, num_openmp_threads, extra_config_flags)
@@ -244,18 +234,19 @@ def _build_gizmo_locked(test_name: str, num_openmp_threads: int, extra_config_fl
     system(f"chmod +x test/{test_name}/GIZMO")
 
 
-def download_test_files(test_name: str):
-    """Downloads the ICs and parameter files for a test of a given name"""
+def download_test_files(test_name: str, exact_files=None):
+    """Downloads the ICs and parameter files for a test of a given name. exact_files replaces the
+    conventional reference-solution names, so a regenerated reference can be published under a new
+    name without breaking checkouts that still expect the old one."""
 
     website_path = "http://www.tapir.caltech.edu/~phopkins/sims/"
     website_path2 = f"https://users.flatironinstitute.org/~mgrudic/gizmo_tests/{test_name}/"
 
     # Note: we are assuming a convention for the test ICs, params, and exact values
     icfile = f"{test_name}_ics.hdf5"
-    exactfile = f"{test_name}_exact.txt"  # exact solution (might not exist!)
-    exactfile2 = f"{test_name}_exact.hdf5"  # exact solution (might not exist!)
+    exact = exact_files or (f"{test_name}_exact.txt", f"{test_name}_exact.hdf5")  # might not exist!
 
-    for f in icfile, exactfile, exactfile2:
+    for f in (icfile, *exact):
         # Never clobber a locally-generated IC (e.g. from make_<test>_ics.py): a stale
         # remote copy would silently override the freshly generated one. Reference "exact"
         # solutions have no local generator, so those are always fetched.
@@ -319,6 +310,30 @@ def _log_reached_timemax(logfile: str, nbytes: int = 262144) -> bool:
     return _GIZMO_FINISHED in _log_tail(logfile, nbytes)
 
 
+def _final_snapshot_reached_timemax(paramsfile: str, rtol: float = 1e-6) -> bool:
+    """Whether the run's last snapshot is at TimeMax: evidence of completion that does not depend on
+    stdout, whose tail srun can drop from very large logs."""
+    try:
+        params = parse_params(paramsfile)
+        time_max = float(params["TimeMax"])
+    except (OSError, KeyError, ValueError):
+        return False
+    outdir, base = params.get("OutputDir", "output"), params.get("SnapshotFileBase", "snapshot")
+    numbered = []
+    for s in glob(path.join(outdir, f"{base}_*.hdf5")) + glob(path.join(outdir, "snapdir_*", f"{base}_*.0.hdf5")):
+        m = re.search(r"_(\d+)(?:\.\d+)?\.hdf5$", s)
+        if m:
+            numbered.append((int(m.group(1)), s))
+    if not numbered:
+        return False
+    try:
+        with h5py.File(max(numbered)[1], "r") as F:
+            time = float(F["Header"].attrs["Time"])
+    except (OSError, KeyError):
+        return False
+    return abs(time - time_max) <= rtol * abs(time_max)
+
+
 def _check_gizmo_exit(test_name: str, returncode: int, outfile: str, errfile: str, paramsfile: str):
     """Fail loudly if GIZMO did not run to completion.
 
@@ -334,6 +349,10 @@ def _check_gizmo_exit(test_name: str, returncode: int, outfile: str, errfile: st
             f"--- tail of {outfile} ---\n{_log_tail(outfile)}"
         )
     if not _log_reached_timemax(outfile):
+        if _final_snapshot_reached_timemax(paramsfile):
+            warnings.warn(f"{test_name}: {outfile} lacks GIZMO's final-time line (truncated stdout?), "
+                          "but the last snapshot is at TimeMax; treating the run as complete")
+            return
         mark_run_truncated(test_name, "GIZMO exited 0 without reaching TimeMax", paramsfile)
         raise RuntimeError(
             f"GIZMO exited 0 for test '{test_name}' but never reported reaching TimeMax, so it "
@@ -344,8 +363,9 @@ def _check_gizmo_exit(test_name: str, returncode: int, outfile: str, errfile: st
 
 
 def run_test(test_name: str, num_mpi_ranks: int = 1, num_openmp_threads: int = 0, timeout: float | None = None,
-             param_overrides: dict | None = None):
+             param_overrides: dict | None = None, restart_flag: int = 0):
     """Runs the test. If num_openmp_threads > 0, sets OMP_NUM_THREADS for the run.
+    restart_flag is GIZMO's second argument: 0 = start from InitCondFile, 2 = snapshot restart from it.
     If the GIZMO subprocess exceeds the timeout, it is killed and the test is skipped
     via pytest.skip. Timeout defaults to GIZMO_TEST_TIMEOUT env var or DEFAULT_TEST_TIMEOUT.
     param_overrides replaces parameter values for this run only, via a sibling params file.
@@ -370,7 +390,7 @@ def run_test(test_name: str, num_mpi_ranks: int = 1, num_openmp_threads: int = 0
         cmd = ["mpirun", "-np", str(num_mpi_ranks), "--use-hwthread-cpus", "--oversubscribe"]
     if num_openmp_threads > 0 and not environ.get("SLURM_JOB_ID"):
         cmd += ["--bind-to", "none"]
-    cmd += ["./GIZMO", paramsfile, "0"]
+    cmd += ["./GIZMO", paramsfile, str(restart_flag)]
 
     effective_timeout = _resolve_test_timeout(timeout)
     outfile, errfile = f"test_{test_name}.out", f"test_{test_name}.err"
@@ -478,7 +498,7 @@ def finalize_variant_output(test_name: str, extra_config_flags=()):
 
 
 def build_and_run_test(test_name: str, num_mpi_ranks: int = 1, num_openmp_threads: int = 0, extra_config_flags: tuple = (), timeout: float | None = None,
-                       param_overrides: dict | None = None):
+                       param_overrides: dict | None = None, exact_files=None):
     """Top-level routine that does all necessary building, downloading, and running of the test.
     When extra_config_flags is non-empty, the resulting output/ directory is renamed to a
     variant-specific name so that multiple flag combinations can coexist on disk. The baseline
@@ -496,7 +516,7 @@ def build_and_run_test(test_name: str, num_mpi_ranks: int = 1, num_openmp_thread
     try:
         chdir(f"test/{test_name}/")
         try:
-            download_test_files(test_name)
+            download_test_files(test_name, exact_files)
             run_test(test_name, num_mpi_ranks, num_openmp_threads, timeout=timeout,
                      param_overrides=param_overrides)
         finally:

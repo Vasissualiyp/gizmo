@@ -22,8 +22,6 @@ Runs 10 crossing times (TimeMax 29.2), matching test/plummer_binaries. Note this
 its t_cross is 2.92 code rather than ~3.24 and a duration copied from the sibling would cover a
 twentieth of the evolution.
 
-Tolerances remain provisional -- measured at the shorter duration and not yet re-derived for
-this one, so a failure here is more likely a stale ceiling than a regression.
 """
 
 import glob
@@ -55,41 +53,16 @@ IC_FILE = f"{TEST_DIR}/{TEST_NAME}_ics.hdf5"
 
 PERIODIC = False             # no BOX_PERIODIC, and the cluster is ~1 pc in a 300 pc box
 
-def _physical_cpu_count():
-    """Number of physical CPU cores on this host (counts hyperthreads as 1).
-
-    On Linux we parse /proc/cpuinfo for unique (physical id, core id) pairs;
-    elsewhere we fall back to os.cpu_count() // 2 assuming 2-way SMT.
-    """
-    import os
-    try:
-        with open("/proc/cpuinfo") as f:
-            text = f.read()
-        cores, cur = set(), {}
-        for line in text.splitlines():
-            if not line.strip():
-                if "physical id" in cur and "core id" in cur:
-                    cores.add((cur["physical id"], cur["core id"]))
-                cur = {}
-            elif ":" in line:
-                k, v = line.split(":", 1)
-                cur[k.strip()] = v.strip()
-        if cores:
-            return len(cores)
-    except OSError:
-        pass
-    return max(1, (os.cpu_count() or 4) // 2)
 
 
-# Same shape as test/plummer_binaries: 2 MPI ranks, threads filling out to a total core cap.
-# Capped rather than scaled with the node for the same reason -- a few hundred particles with a
-# deep timestep hierarchy leave a handful active per step, so wider parallelism adds
-# synchronisation without adding work. This test has FEWER particles than plummer_binaries (~335
-# vs 512) and a wider bin spread, so if anything it saturates sooner; 8 is an upper bound, not a
-# measured optimum here.
-PBR_MAX_CORES = 8
+# 2 MPI ranks, 1 OpenMP thread, fixed. One thread makes the run bit-reproducible: two runs at this
+# layout give identical energy and drift histories, whereas OpenMP reduction order alone spread
+# |dE/E| over 2.4e-4..7.2e-3 across a 10-member ensemble at 2x4, so no single-run tolerance could
+# both admit that tail and bound a regression. More ranks do not help either: a few hundred
+# particles with a deep timestep hierarchy leave a handful active per step, and 8 ranks ran ~50x
+# slower than 2 (sync-bound). 2x1 takes ~1 h on a 32-core workstation.
 PBR_NUM_MPI_RANKS = 2
-PBR_NUM_OMP_THREADS = max(1, min(PBR_MAX_CORES, _physical_cpu_count()) // PBR_NUM_MPI_RANKS)
+PBR_NUM_OMP_THREADS = 1
 
 N_SYSTEMS = 256
 A_CLUSTER = 1.0              # pc
@@ -98,24 +71,15 @@ A_MIN_AU = 100.0             # pericentre floor; sets the runtime, see the param
 A_MAX_AU = 5.0e3
 SEED = 42
 
-# Calibrated at 3x the observed maxima from the first full 10-crossing run (2 ranks x 4 threads,
-# icelake, 101 snapshots to t=29.2): |dE/E| peaked at 5.24e-4 and the drift band at 2.24e-4.
-# The old 5e-2 energy ceiling sat 95x above what the code actually does and could not have caught
-# anything. 3x leaves room for the run-to-run variation a different decomposition can produce
-# while still bounding a real regression.
+# Only magnitudes are asserted, not growth exponents: unlike test/triple's, this cluster's drift
+# has no stable trend (its local slope changes sign between windows), so a fitted exponent would
+# measure the window rather than the integrator. Energy climbs monotonically (the 4th-order
+# block-step residual, ~t^1.3); the drift wanders in a band.
 #
-# ONLY MAGNITUDES ARE ASSERTED HERE -- deliberately, unlike test/triple, which additionally guards
-# a growth EXPONENT. That works there because a clean 3-body configuration gives a stable trend.
-# It does not transfer: measured on this run the drift's local slope reads +0.10, -3.73, +8.71 and
-# +1.03 over successive windows. A negative slope is proof it is not a power law, so any exponent
-# fit here reports where the window landed, not the integrator.
-#
-# The distinction that matters is visible in the raw series: energy climbs monotonically at every
-# one of the 10 crossings (9.3e-6 -> 5.0e-4, settling to ~t^1.3 after an early transient), which
-# is the known 4th-order block-step residual; the drift wanders inside 2.8e-5 to 2.2e-4 with no
-# trend. Bounded momentum against secular energy is the signature the source prediction produces.
-MAX_DE_OVER_E = 1.6e-3       # 3.05x the measured 5.24e-4
-MAX_COM_DRIFT = 7e-4         # |v_com| / cluster dispersion; 3.13x the measured 2.24e-4
+# Both tolerances are 3x the values measured over the full 10-crossing run at the fixed 2x1 layout
+# above, which is deterministic (see there): |dE/E| = 5.67e-4, |v_com|/sigma = 2.37e-4.
+MAX_DE_OVER_E = 1.7e-3       # 3.0x the measured 5.67e-4
+MAX_COM_DRIFT = 7e-4         # |v_com| / cluster dispersion; 2.95x the measured 2.37e-4
 
 
 def _ensure_ic():
@@ -244,14 +208,9 @@ def test_plummer_binaries_realistic(num_mpi_ranks, num_omp_threads, extra_config
     print(f"  a range    {a_first[k].min()*AU_PER_PC:.0f} - {a_first[k].max()*AU_PER_PC:.0f} AU;"
           f"  e median {np.median(e_first[np.isfinite(e_first)]):.2f}")
 
-    # Binary survival and |da/a| are REPORTED, never asserted. Which pairs survive is set by
-    # individual chaotic three-body encounters: there is no a priori correct answer, and the
-    # outcome will not reproduce between runs any more than fewbody's threshold counts do (those
-    # moved 3/48 -> 1/48 between two builds differing in no relevant physics). An assertion on
-    # them would fail on chaos and pass on nothing.
-    #
-    # Energy and momentum are different in kind -- they have a priori correct values, so a
-    # deviation is unambiguously integration error. That is why only they are asserted.
+    # Binary survival and |da/a| are reported, never asserted: which pairs survive is decided by
+    # chaotic three-body encounters, so there is no correct answer to assert. Energy and momentum
+    # have a priori correct values, so only they are asserted.
     assert energy[-1] < MAX_DE_OVER_E, (
         f"energy error {energy[-1]:.3e} over t={t[-1]:.2f} (tol {MAX_DE_OVER_E}). Measured on the "
         f"synced state with a direct potential, so this is the integrator, not the output "
