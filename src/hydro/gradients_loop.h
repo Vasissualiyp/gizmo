@@ -366,8 +366,8 @@ struct GradientsSpec
 
         active.kernel_mode_i = -1;
         if(active.sph_gradients_flag_i) active.kernel_mode_i = 0;
-#if defined(HYDRO_SPH) || defined(KERNEL_CRK_FACES)
-        active.kernel_mode_i = 0;
+#if defined(HYDRO_SPH) || defined(KERNEL_CRK_FACES) || defined(MHD_CONSTRAINED_GRADIENT)
+        active.kernel_mode_i = 0;   /* faces built in this pass read the kernel derivative (ill-conditioned fallback, CRK) */
 #endif
 #ifdef HYDRO_MULTIFLUID
         active.FluidType = ctx.P[i].FluidType;

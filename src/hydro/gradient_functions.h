@@ -352,21 +352,14 @@ void gradient_accumulate_neighbor(struct GasGraddata_in_ *local, struct GasGradd
         kernel->dwk_i = kernel->wk_i = 0;
     }
 
-    int sph_gradients_flag_j = 0;
 #if defined(MHD_CONSTRAINED_GRADIENT) || defined(KERNEL_CRK_FACES)
     if(kernel->r < h_j)
     {
-        sph_gradients_flag_j = SHOULD_I_USE_SPH_GRADIENTS(CellP[j].ConditionNumber);
-        int kernel_mode_j;
-#if defined(HYDRO_SPH) || defined(KERNEL_CRK_FACES)
-        kernel_mode_j = 0;
-#else
-        if(sph_gradients_flag_j) {kernel_mode_j=0;} else {kernel_mode_j=-1;}
-#endif
+        /* the j-side kernel only builds the face, which reads the derivative in its fallback and CRK branches */
         double hinv_j, hinv3_j, hinv4_j;
         kernel_hinv(h_j, &hinv_j, &hinv3_j, &hinv4_j);
         u = kernel->r * hinv_j;
-        kernel_main(u, hinv3_j, hinv4_j, &kernel->wk_j, &kernel->dwk_j, kernel_mode_j);
+        kernel_main(u, hinv3_j, hinv4_j, &kernel->wk_j, &kernel->dwk_j, 0);
     }
     else
 #endif
@@ -677,28 +670,20 @@ void gradient_accumulate_neighbor_iter(struct GasGraddata_in_ *local, struct Gas
         kernel->dwk_i = kernel->wk_i = 0;
     }
 
-    int sph_gradients_flag_j = 0;
 #if defined(MHD_CONSTRAINED_GRADIENT) || defined(KERNEL_CRK_FACES)
     if(kernel->r < h_j)
     {
-        sph_gradients_flag_j = SHOULD_I_USE_SPH_GRADIENTS(CellP[j].ConditionNumber);
-        int kernel_mode_j;
-#if defined(HYDRO_SPH) || defined(KERNEL_CRK_FACES)
-        kernel_mode_j = 0;
-#else
-        if(sph_gradients_flag_j) {kernel_mode_j=0;} else {kernel_mode_j=-1;}
-#endif
+        /* the j-side kernel only builds the face, which reads the derivative in its fallback and CRK branches */
         double hinv_j, hinv3_j, hinv4_j;
         kernel_hinv(h_j, &hinv_j, &hinv3_j, &hinv4_j);
         u = kernel->r * hinv_j;
-        kernel_main(u, hinv3_j, hinv4_j, &kernel->wk_j, &kernel->dwk_j, kernel_mode_j);
+        kernel_main(u, hinv3_j, hinv4_j, &kernel->wk_j, &kernel->dwk_j, 0);
     }
     else
 #endif
     {
         kernel->dwk_j = kernel->wk_j = 0;
     }
-    (void)sph_gradients_flag_j;
 
     double Particle_Size_j = P[j].Get_Particle_Size();
     double Particle_Size_i = pow(local->Mass / local->GQuant.Density, 1./NUMDIMS);
