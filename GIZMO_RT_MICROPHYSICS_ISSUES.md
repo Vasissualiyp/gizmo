@@ -254,8 +254,8 @@ Decision: regenerate that benchmark from ICs whose ionization matches their temp
 jaco variant to a same-IC legacy run. Until then its jaco variants are xfail with this reason.
 Decision (MYG, 2026-10-06): regenerate the gmc_cooling_rt benchmark from a cold neutral start (InitGasTemp ~100 K)
 with the option-2 fixes. The root-find fix itself (x-tolerance only) is deferred to a later batch.
-Update (2026-10-13): the unconverged root-find is not confined to the first call, and it now has a fix; see 2.2. A
-benchmark regenerated with the old `bracketed_rootfind.h` still encodes it.
+Update (2026-10-13): the unconverged root-find is not confined to the first call, and it now has a fix; see 2.2. The
+cold-start benchmark (6602963f, 95e37029 on starforge_dev) does not depend on it: old and fixed headers agree to 0.7%.
 
 ### 2.2 The root finder's early exit leaves DoCooling unconverged on nearly every call (fixed on `rootfind-brent-fix`)
 `system/bracketed_rootfind.h` is the Brent block behind DoCooling (`cooling.cc:421`), the H2-fraction solve (`:2136`)
@@ -279,16 +279,24 @@ and `rt_ir_lambdadust`. Its use in `rt_eqm_dust_temp` sits inside `#if (0)`. Lin
 
 The step's own |du|/u is about 1.2%, so the old answer was usually uncertain by the whole step.
 
-**Effect on the snapshot at t_end:** the pristine build matches the benchmark to <1% in every density bin. The fix
-changes the binned medians:
-- T rises by 3-21%, most at n_H = 170-460 cm^-3.
-- x_e rises 4-5x at n_H = 280-770 cm^-3.
-- FUV energy density rises 2-18% and FIR 12-17%.
-- The test fails 3 of 9 T bins at its 10% tolerance.
+**Effect on gmc_cooling_rt.** All of the measured simulation-level effect comes through the warm start (2.1), not the
+equilibrium state.
+- Warm start (InitGasTemp 1e4 K, 3b0923b5): the fix raises T by 3-21%, x_e 4-5x at n_H = 280-770 cm^-3, FUV by
+  2-18% and FIR by 12-17%. Swapping the header one call site at a time puts 100% of this on DoCooling.
+- Mechanism (tracer-logged): the first step (dt = 3820 yr, much longer than the cooling time) sets H+ through the
+  `RT_CHEM_PHOTOION` implicit update nH0 = (HI + f*alpha)/(1 + f*(alpha + Gamma_coll + Gamma_ph)), f = dt*n_e, at the
+  end-of-step T. With n_e ~ n(H+), this has a threshold at a = dt*n_H*Gamma_coll(T) = 1, about 13.8 kK at n_H ~ 150.
+  - The converged first step ends at 13.8 kK (a ~ 1) and leaves H+ = 2e-5 to 1.6e-3.
+  - The old header ends at 12.3 kK (final bracket 44% of u, a ~ 0.22) and leaves H+ = 2e-7. HII = a*x_m/(1-a)
+    reproduces this to 2%.
+  - Afterwards H+ only recombines, so the 450x first-step gap becomes the 4-5x x_e gap at 1 Myr.
+  Neither answer is physical: it is an end-of-step ionization over a step much longer than the cooling time, at a
+  threshold.
+- Cold start (InitGasTemp 100 K, current starforge_dev eafcbd5b): old header, fixed header and the 2.3 fixes agree
+  to 0.7% in every bin of T, Tdust, x_e, FUV and FIR, and all three pass the cold-start benchmark.
 
-Swapping the header one call site at a time puts 100% of this on DoCooling; the H2 and dust sites change nothing.
-Earlier, from fresh cell states (dust-temperature harness), the old header put 17 of 150 sampled ionised cells
-(5e3-3e4 K) 10-25% too cold, up to 47% from the root in u.
+The only other evidence of wider impact is per call, not per run: from fresh states (dust-temperature harness), the old
+header put 17 of 150 sampled ionised cells (5e3-3e4 K) 10-25% too cold, up to 47% from the root in u.
 
 Not fixed by this: the stop is still on bracket width, so a sign change at a discontinuity of the residual is still
 accepted as a root (2.1). The same thing happens in strongly irradiated envelope cells, where the dust equilibrium
@@ -300,8 +308,9 @@ dust solver.
   them; the fix passes all 17.
 - Cost: about 15% more cooling-function calls per gas solve.
 
-**Status: gmc_cooling_rt_exact must be regenerated with the fixed header (not done; MYG to decide).** Any comparison
-of cold-gas temperatures between v1.2 and v1.3/dev carries this difference.
+**Status:** merged onto origin/starforge_dev eafcbd5b (a05459db on `rootfind-brent-fix`, clean merge, not yet pushed). No
+benchmark needs regenerating. Whether v1.2 vs v1.3/dev runs differ because of this is untested: v1.3 (168cdb3d)
+has the early exit and v1.2 (30459741) does not, but the cold-start test shows no effect.
 
 ### 2.3 Equilibrium dust-temperature solvers miss their roots (fixes on `dust-solver-fullset`)
 Found with a stress harness that links the production objects and brute-force scans each solver's residual
@@ -354,8 +363,10 @@ including the sign.
   from 16.3 K to 59 K.
 - The solvers' own NaN guards are dead under -ffast-math, like every isnan in the build.
 
-**Status: not merged.** Genoa sweep arm `rootfind_sweep/fullset_nop5` (job 7232422) is running against the
-header-only arm.
+**Status:** merged onto origin/starforge_dev eafcbd5b as 681ee28c on `dust-solver-fullset` (not yet pushed). The only
+conflict was c1c7c9eb's floor and iteration cap in `rt_eqm_dust_temp`'s bracketing loops; both they and P3's bracket
+tightening are kept. On eafcbd5b without these fixes `test/dust_temp_solvers` still fails 36 cases: the guards stop the
+forgedinfire hang but not the misses. Not merged into starforge_dev.
 
 ## 3. Idealized-test and build-system defects
 
