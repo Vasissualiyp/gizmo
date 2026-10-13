@@ -126,7 +126,7 @@ uses the actual du). Ledger tool: scratchpad rtledger/ledger3.py.
 
 ### 1.1e The drain is per step, and the gas share counts the dust's scattering (rt_closed_box, 2026-10-09)
 Found with the jaco closed-box harness (gizmo_jaco_dev branch `rt_closed_box_jaco`, e694dcec); legacy code at b01265d8.
-Runs, A/B arms and scripts are in /mnt/ceph/users/mgrudic/jaco_cbox/.
+Runs, A/B arms and scripts are in /mnt/ceph/users/mgrudic/jaco_push_2026-10/b_rt_energy_and_hii/jaco_cbox/.
 - **Per-step loss (extends 1.1d).** Where a cell is IR-thick over one step (x = c~ kappa_abs rho dt >> 1; the RT
   Courant step gives x ~ 0.4 tau_cell), each half-kick absorbs nearly the whole band and hands the gas f_gas of it at
   1:1 (rt_utilities.cc:931). The cooling return re-radiates it at c~/c. So the E_gas + E_b c/c~ ledger loses ~2 f_gas
@@ -191,7 +191,7 @@ Decision (MYG, 2026-10-06): deferred; not in the option-2 baseline. `starforge_R
 
 ### 1.4 Photoionization over-counts injected photons; injection reprocessing hides it (unresolved-Strömgren probe, 2026-10-09)
 Found with `test/stromgren_unresolved` (branch `stromgren_probe` e6f9f258). Setup: a fixed 4e4 K source in a uniform box,
-Q swept so that R_S,B/Δx = 0.1-10, at n_H = 1e2 and 1e5. Runs are in /mnt/ceph/users/mgrudic/jaco_stromgren/.
+Q swept so that R_S,B/Δx = 0.1-10, at n_H = 1e2 and 1e5. Runs are in /mnt/ceph/users/mgrudic/jaco_push_2026-10/b_rt_energy_and_hii/jaco_stromgren/.
 
 - **Defect.** The cooling module's photoionization rate c σ n_γ (`cooling.cc` ~912-925) is applied to the discretely
   injected lump without limiting it to the photons present. Each injected photon then ionizes ~c~ σ n_HI Δt atoms:
@@ -317,7 +317,7 @@ Status: recorded, no decision.
 
 ### 4.3 SN ejecta overrunning long-timestep cells inject spurious energy (fullphysics_mini, 2026-10-11)
 Found while attributing a jaco/legacy gap in `test/fullphysics_mini` (branch `sn_parity`; runs and analysis in
-/mnt/ceph/users/mgrudic/sn_parity/). That test is a 50 Msun cloud with a 30 Msun star going SN at t = 0.086.
+/mnt/ceph/users/mgrudic/jaco_push_2026-10/d_bugfixes/sn_parity/). That test is a 50 Msun cloud with a 30 Msun star going SN at t = 0.086.
 - About 0.23 kyr after the SN, the ejecta reach coarse envelope cells on long timesteps (kernel ~0.2 box, n_H ~ 1e2,
   ~1e4 K, ~600 ejecta cells inside one kernel). Those cells jump to 1e9-1e11 K and ~1e4 km/s.
 - Total gas energy jumps by up to 1.1-1.7 E_SN within one ~10 yr output interval. Legacy and jaco both do it, from
