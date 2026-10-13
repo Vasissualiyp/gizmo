@@ -187,8 +187,12 @@ int force_treebuild(int npart, struct unbind_data *mp)
                    "One of the creation/destruction sites mis-updated the global count.\n", red_tot[2], (long long) All.TotNumPart);
             fflush(stdout);
         }
+        /* The deficit is measured against the reduced count of particles that actually exist
+           (red_tot[2]), not against All.TotNumPart: that global is hand-maintained, and once it has
+           drifted -- the case the warning above reports -- a comparison against it would see a
+           permanent deficit and buy a decomposition on every step without repairing anything. */
         long long in_tree = (long long) Nodes[All.MaxPart].N_part;
-        long long deficit = (long long) All.TotNumPart - in_tree;
+        long long deficit = red_tot[2] - in_tree;
         if(not_whole_any) {deficit = 0;} /* subset build: the count comparison is meaningless */
         if(deficit > n_zero_tot || deficit < 0)
         {
@@ -199,10 +203,10 @@ int force_treebuild(int npart, struct unbind_data *mp)
             if(ThisTask == 0)
             {
                 printf("WARNING: tree integrity check failed: root node holds %lld particles, expected %lld "
-                       "(deficit %lld, of which %lld zero-mass are allowed). Particles missing from the tree "
-                       "contribute to no rank's multipole moments, so forces are wrong by their mass. "
+                       "(deficit %lld, of which %lld zero-mass are allowed; All.TotNumPart=%lld). Particles missing "
+                       "from the tree contribute to no rank's multipole moments, so forces are wrong by their mass. "
                        "Requesting a domain decomposition to restore ownership.\n",
-                       in_tree, (long long) All.TotNumPart, deficit, n_zero_tot);
+                       in_tree, red_tot[2], deficit, n_zero_tot, (long long) All.TotNumPart);
                 fflush(stdout);
             }
         }
@@ -1749,30 +1753,26 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                 Vec3<double> src_vel_asused = P[no].Vel;
 #endif
 #ifdef HERMITE_INTEGRATION
-                /* Hermite-only passes: an inactive Hermite-integrated source sits at its
-                 * KDK-drifted position -- and its stored Vel is whole-step-kicked (see
-                 * do_the_kick) -- so the drifted position is O(dt^2) wrong mid-step.
-                 * Re-predict the source from its own Old* state, exactly as
-                 * do_hermite_prediction does for the target. This covers the single-particle
-                 * branch only: a source absorbed into a node multipole still contributes at
-                 * its drifted position. Under SINGLE_STAR_DIRECT_GRAVITY_RADIUS (1000 AU,
-                 * STARFORGE default) star-bearing nodes inside that radius are force-opened
-                 * to singles, so close sink pairs -- where the O(dt^2) error matters -- take
-                 * this branch; more distant sinks arrive via drifted nodes uncorrected.
+                /* Hermite-only passes: an inactive Hermite source sits at its KDK-drifted position
+                 * with a whole-step-kicked Vel (see do_the_kick), O(dt^2) wrong mid-step, so
+                 * re-predict it from its own Old* state as do_hermite_prediction does for the
+                 * target. Single-particle branch only: a source inside a node multipole keeps its
+                 * drifted position, but SINGLE_STAR_DIRECT_GRAVITY_RADIUS opens star-bearing nodes
+                 * nearby, so the close pairs where this matters take this branch. Nothing is
+                 * written back. Active sources are skipped: at HermiteOnlyFlag==1 their Old* are
+                 * stale and their live Pos is already correct. The KDK pass is untouched, since the
+                 * leapfrog's cancellation assumes plain drifted positions.
                  *
-                 * Nothing is written back: the predicted state exists only in this force
-                 * evaluation. Active sources are
-                 * skipped: at HermiteOnlyFlag==1 their Old* are stale (find_timesteps has
-                 * already advanced Ti_begstep, so D=0 would return the previous step's start
-                 * position) and their live Pos is already correct -- corrected at flag==1,
-                 * predicted at flag==2. The KDK pass (HermiteOnlyFlag==0) is untouched: the
-                 * leapfrog's cancellation structure assumes the plain drifted positions.
-                 *
-                 * PERFORMANCE: this gate costs ~16% per particle-step, almost all of it in
-                 * eligible_for_hermite() -- it depends only on the SOURCE but is evaluated per
-                 * (target, source) pair, and it is cross-TU, so it blocks optimization here.
-                 * Hoisting it into a per-pass array would recover most of that. Not done. */
-                if(HermiteOnlyFlag && !TimeBinActive[P[no].TimeBin] && eligible_for_hermite(no))
+                 * The Old* polynomial only interpolates over the source's own step. Past that it
+                 * extrapolates outside its convergence radius and, for a close pair, biases the
+                 * source along the orbit, which rectifies into COM drift -- so outside the span the
+                 * drifted state is kept: lower order, but unbiased. The integer span checks come
+                 * first because eligible_for_hermite() is the costly part: it depends only on the
+                 * source but runs per pair, and being cross-TU the compiler cannot hoist it. */
+                if(HermiteOnlyFlag && !TimeBinActive[P[no].TimeBin]
+                   && (ti_Current >= P[no].Ti_begstep)
+                   && ((ti_Current - P[no].Ti_begstep) <= P[no].integertime_step())
+                   && eligible_for_hermite(no))
                 {
                     double hD = get_gravkick_factor(P[no].Ti_begstep, ti_Current, no, 0);
                     dr = P[no].OldPos + (P[no].OldVel + (P[no].Hermite_OldAcc + P[no].OldJerk * (hD/3)) * (hD/2)) * hD - pos;
@@ -4219,6 +4219,30 @@ void force_refresh_node_moments(void)
 #endif
 }
 
+
+/*! Entry check for every consumer that walks the STANDING tree without first offering to rebuild
+ *  it. TreeReconstructFlag set here means the particle list changed (rearrange, spawn, fof, ...)
+ *  and nothing has rebuilt since: the threading still points at vacated or stale slots, so the
+ *  walk's neighbour set or forces are wrong. The rebuild cannot be done here -- it is not
+ *  escape-safe mid-step and would reorder slots under a caller that may hold indices -- so this
+ *  only reports: a warning once per rank and a cpu.txt counter, fatal under the audits. The
+ *  protocol answer is upstream: either maintain the tree through the mutation or rebuild before
+ *  the next walk. The flag is rank-uniform by protocol, so the fatal path cannot desync ranks. */
+void force_tree_check_walkable(const char *tag)
+{
+    if(!TreeReconstructFlag) {return;}
+    TreeOpsCount[TREEOPS_CONDEMNED_WALK]++;
+    static int reported = 0;
+    if(!reported)
+    {
+        reported = 1;
+        printf("WARNING task %d [%s]: tree walk started on a CONDEMNED tree (TreeReconstructFlag set, no rebuild since the particle list changed). Its results can be wrong; further occurrences are counted as condemned_walk in cpu.txt.\n", ThisTask, tag);
+        fflush(stdout);
+    }
+#ifdef TREE_INTEGRITY_AUDITS
+    endrun(91572);
+#endif
+}
 
 /*! Tier-0 (always-on) walk-threading validator. Runs only when a maintained rearrange noted a
  *  change (TreeWalkValidatePending); costs nothing otherwise. Walks the Nextnode threading from

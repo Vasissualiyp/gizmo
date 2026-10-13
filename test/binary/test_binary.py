@@ -69,23 +69,23 @@ A0 = A_AU / AU_PER_PC
 V_ORB = np.sqrt(G_CODE * MTOT / A0)          # normalisation for the COM drift
 P_ORB = 2.0 * np.pi * np.sqrt(A0 ** 3 / (G_CODE * MTOT))
 
-# WHAT THIS TEST GUARDS, as of the shared-normalization change (SINK_TIMESTEP_SAFETY_FACTOR in
-# core/timestep.cc). With both criteria on one normalization the pair's timebins FUSE, and an
-# isolated binary then has no inactive sources at all -- so the Hermite source prediction in
-# gravity/forcetree.cc never fires here and this test does NOT guard it. It guards the
-# NORMALIZATION: revert that and the bins split again, and the same run measures |dE/E| = 1.6e-2
-# and drift = 8.5e-3, ~10x and ~4x over the ceilings below. The source prediction itself has NO
-# guard in the committed suite -- test/triple's hierarchy cannot fuse, so the prediction is
-# load-bearing there, but its committed assertion does not discriminate it (see
-# test/triple/README.md for what would).
+# What this guards: the shared timestep normalization (SINK_TIMESTEP_SAFETY_FACTOR in
+# core/timestep.cc). With it the pair's timebins fuse, so an isolated binary has no inactive
+# sources and the Hermite source prediction never fires here; without it the bins split again
+# and |dE/E| and the drift exceed the ceilings below by ~10x and ~4x. The source prediction is
+# exercised by test/triple, whose hierarchy cannot fuse (see test/triple/README.md).
 #
-# Measured over 1000 orbits (starforge_defaults, 1 rank, per-orbit envelope), both changes in:
-#     |dE/E| = 7.78e-5    COM drift = 3.48e-15   (drift is at round-off; growth t^-0.25)
-# The drift ceiling is deliberately NOT set near 3e-15: that number is round-off on this
-# machine and would make the test a floating-point-reproducibility check. 5e-4 still catches a
-# revert by 4x, which is the regression this bounds.
+# Measured over 1000 orbits (starforge_defaults, 1 rank, per-orbit envelope): |dE/E| = 7.78e-5,
+# COM drift = 3.48e-15. The drift ceiling sits far above that round-off value so the test is not
+# a floating-point-reproducibility check; 5e-4 still catches a revert by 4x.
 MAX_DE_OVER_E = 1.5e-3
 MAX_COM_DRIFT = 5e-4
+
+# nbody_accuracy variant (HERMITE_CORRECTOR_ITERATIONS=2 + HERMITE_SYMMETRIC_TIMESTEP): 3x its measured
+# 1000-orbit envelope, 3.72e-6. The ceiling above sits ~20x over the default arm and would not notice
+# this variant losing its 24x gain. The drift ceiling is shared: both arms sit at round-off.
+NBODY_ACCURACY_FLAGS = ("HERMITE_CORRECTOR_ITERATIONS=2", "HERMITE_SYMMETRIC_TIMESTEP")
+MAX_DE_OVER_E_NBODY_ACCURACY = 1.1e-5
 
 # A systematic (secular) error grows as t^1, a random walk as t^0.5. Anything at or above
 # ~0.85 is a drift with a mechanism behind it and should be investigated rather than
@@ -192,10 +192,8 @@ def _per_orbit_envelope(t, y):
     The instantaneous values oscillate by orders of magnitude WITHIN each orbit -- |a/a0-1|
     swings from 1e-4 to 0.2 -- because a snapshot catches the two particles at whatever point
     their own timebins have reached, so an inactive one contributes a velocity from its last
-    kick. Reading a final value, or fitting a power law through the oscillation, measures that
-    sampling artefact rather than the integration error: the first version of this test
-    reported |da/a| = 1.06e-3 and "energy is bounded", both of which were simply where the
-    last snapshot happened to fall.
+    kick. A final value, or a power law fitted through the oscillation, measures that sampling
+    artefact rather than the integration error.
 
     The per-orbit MINIMUM is the envelope floor, where the states are most nearly
     synchronised, and it is monotonic. That is the secular error.
@@ -307,6 +305,7 @@ def _order_sweep(extra_config_flags, n_ranks, n_omp, variant_id):
         try:
             chdir(TEST_DIR)
             run_test(TEST_NAME, n_ranks, n_omp, param_overrides={
+                "OutputDir": path.basename(outdir),   # a variant's run otherwise writes to output/
                 "ErrTolIntAccuracy": float(eta),
                 "TimeMax": float(SWEEP_ORBITS * P_ORB),
                 "TimeBetSnapshot": float(P_ORB / 4.0),
@@ -346,6 +345,7 @@ def _order_sweep(extra_config_flags, n_ranks, n_omp, variant_id):
                "not hold the orbit, and this variant records by how much",
         strict=False,
     )),
+    pytest.param(NBODY_ACCURACY_FLAGS, id="nbody_accuracy"),
 ])
 def test_binary(num_mpi_ranks, num_omp_threads, extra_config_flags, request):
     _ensure_ic()
@@ -388,8 +388,9 @@ def test_binary(num_mpi_ranks, num_omp_threads, extra_config_flags, request):
     print(f"  pericentre  min separation {sep.min():.4e} pc "
           f"(softening 1e-7, so {sep.min() / 1e-7:.0f}x above it)")
 
-    assert de < MAX_DE_OVER_E, (
-        f"relative energy error {de:.3e} over {n_orbits:.1f} orbits (tol {MAX_DE_OVER_E}); "
+    max_de = MAX_DE_OVER_E_NBODY_ACCURACY if variant_id == "nbody_accuracy" else MAX_DE_OVER_E
+    assert de < max_de, (
+        f"relative energy error {de:.3e} over {n_orbits:.1f} orbits (tol {max_de}); "
         f"E0={energy[0]:.6e}, E_final={energy[-1]:.6e}. Measured on the IO_HERMITE_SYNC state, "
         f"so this is the integrator and not the output convention."
     )

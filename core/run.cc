@@ -130,6 +130,12 @@ void run(void)
     while(1)			/* main timestep iteration loop */
     {
         compute_statistics();	/* regular statistics outputs (like total energy) */
+#if defined(EOS_GAMMA_PROBE) && defined(EOS_GENERAL)
+        eos_gamma_probe_report();
+#endif
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+        rt_diag_ir_double_count_report();
+#endif
 
         write_cpu_log();		/* output some CPU usage log-info (accounts for everything needed up to the current sync-point) */
 
@@ -195,15 +201,12 @@ void run(void)
             /* Condemned tree, no decomposition owed. The cheap answer -- skip force_update_tree,
                let gravity_tree below do the rearrange+rebuild -- is only safe while every local
                particle still keys into a top-leaf this rank owns: a rebuild buckets by position,
-               and an escaped particle's subtree is destroyed by the pseudo exchange (its mass then
-               enters no rank's moments; found by the stage-4 auditor, mechanism confirmed against
-               kokkos 068b4f33). Ownership drift therefore escalates to the decomposition tier;
-               benign steps keep the cheap rebuild. */
-            move_particles(All.Ti_Current); /* the build (gravity_tree) drifts everyone to now anyway;
-                doing it first lets the escape check below see the positions the build will actually
-                bucket -- checking pre-drift positions misses boundary crossings inside this step,
-                which is exactly how the auditor caught the first version of this branch. Idempotent:
-                the later calls are no-ops. */
+               and an escaped particle's subtree is destroyed by the pseudo exchange, so its mass
+               enters no rank's moments (cf. kokkos 068b4f33). Ownership drift therefore escalates
+               to a decomposition; benign steps keep the cheap rebuild. */
+            move_particles(All.Ti_Current); /* drift first, so the escape check sees the positions
+                the build will bucket (a pre-drift check misses crossings within this step);
+                idempotent, so the build's own drift is then a no-op. */
             int esc_loc = domain_any_local_particle_escaped(), esc_any = 0;
             MPI_Allreduce(&esc_loc, &esc_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
             if(esc_any)
@@ -270,10 +273,13 @@ void run(void)
 
 #ifdef HERMITE_INTEGRATION // we do a prediction step using the saved "old" pos, accel and jerk from the beginning of the timestep. Then we recompute accel and jerk and do the correction
         do_hermite_prediction();
-        HermiteOnlyFlag = 2;
-        gravity_tree();	/* re-compute gravitational accelerations for synchronous particles */
-        HermiteOnlyFlag = 0;
-        do_hermite_correction();
+        for(int hermite_pass = 0; hermite_pass < HERMITE_CORRECTOR_ITERATIONS; hermite_pass++) /* P(EC)^n: each pass evaluates at the latest (predicted, then corrected) state */
+        {
+            HermiteOnlyFlag = 2;
+            gravity_tree();	/* re-compute gravitational accelerations for synchronous particles */
+            HermiteOnlyFlag = 0;
+            do_hermite_correction(hermite_pass == HERMITE_CORRECTOR_ITERATIONS - 1);
+        }
 #endif
         EB_GRAV_REPORT(); /* after Hermite, so Vel is the corrected end-of-step velocity */
         /* Check whether we need to interrupt the run */
@@ -413,7 +419,7 @@ void calculate_non_standard_physics(void)
 #endif
         /* one deterministic cleanup for the whole sink pass: eliminates swallow victims and folds
            in freshly spawned cells. Runs on spawn OR swallow (both rank-uniform triggers); the
-           tree consequences are decided inside rearrange itself (stage-2 protocol). */
+           tree consequences are decided inside rearrange itself. */
         if(need_cleanup_rearrange) {rearrange_particle_sequence();}
 #if defined(TREE_INTEGRITY_AUDITS) && defined(MAINTAIN_TREE_IN_REARRANGE)
         if(need_cleanup_rearrange) {force_tree_full_audit(0, "sink_cleanup");}
@@ -449,15 +455,6 @@ void calculate_non_standard_physics(void)
             printf("Transport subcycling: %d sub-steps (hydro_dt/transport_dt = %.1f)\n",
                    All.Transport_Subcycle_N, max_hydro_dt_global / min_transport_dt_global);
     }
-    /* Save the hydro-pass DtInternalEnergy before the subcycle loop. rt_update_driftkick adds
-       IR gas heating to DtInternalEnergy each sub-step; without resetting, it accumulates N-fold.
-       We reset to the hydro value before each kick so only one sub-step's IR contribution is present. */
-#if defined(RT_INFRARED) && defined(COOLING)
-    for(int idx : ActiveParticleList) {
-        if(P[idx].Type == 0 && P[idx].Mass > 0)
-            CellP[idx].DtIE_IR_Subcycle = CellP[idx].DtInternalEnergy;
-    }
-#endif
     for(int transport_sub = 0; transport_sub < All.Transport_Subcycle_N; transport_sub++) {
 #endif // TRANSPORT_SUBCYCLE
 
@@ -495,14 +492,6 @@ void calculate_non_standard_physics(void)
 #ifdef TRANSPORT_SUBCYCLE
     /* --- recompute transport fluxes every sub-step and apply kick --- */
     transport_subcycle_exchange_fluxes();
-    /* Reset DtInternalEnergy to hydro-pass value before each kick, so rt_update_driftkick's
-       IR gas heating contribution doesn't accumulate across sub-steps. */
-#if defined(RT_INFRARED) && defined(COOLING)
-    for(int idx : ActiveParticleList) {
-        if(P[idx].Type == 0 && P[idx].Mass > 0)
-            CellP[idx].DtInternalEnergy = CellP[idx].DtIE_IR_Subcycle;
-    }
-#endif
     transport_subcycle_kick();
 #endif
 
@@ -529,9 +518,6 @@ void calculate_non_standard_physics(void)
 
 #ifdef TRANSPORT_SUBCYCLE
     } /* end transport subcycle loop */
-    /* After the loop DtInternalEnergy = DtIE_IR_Subcycle + IR_rate_last_substep, which is correct:
-       the pre-kick reset already prevents N-fold accumulation, so the cooling solver and second
-       KDK half-kick see exactly one sub-step's IR contribution at the final Rad_E_gamma state. */
 #if defined(TRANSPORT_SUBCYCLE_COOLING) && !defined(COOLING_OPERATOR_SPLIT)
     /* zero DtInternalEnergy after the subcycle loop — the hydro work has been fully applied across all sub-steps */
     for(int idx : ActiveParticleList) {
@@ -1088,7 +1074,7 @@ void write_cpu_log(void)
     {
       fprintf(FdCPU, "Step %lld, Time: %.16g, CPUs: %d\n",(long long) All.NumCurrentTiStep, All.Time, NTask);
       fprintf(FdCPU, "Nactive=%lld, Imbal(Max/Mean)=%g \n", (long long) GlobNumForceUpdate, (max_CPU_Step[0]/(MIN_REAL_NUMBER + avg_CPU_Step[0])-1.)*NTask+1.);
-      fprintf(FdCPU, "TreeOps: build=%lld refresh=%lld decomp=%lld light=%lld defer=%lld escalate=%lld rearrange=%lld swap_s=%.2f rearr_s=%.2f swaps=%lld\n", TreeOpsCount[TREEOPS_BUILD], TreeOpsCount[TREEOPS_REFRESH], TreeOpsCount[TREEOPS_DECOMP], TreeOpsCount[TREEOPS_DECOMP_LIGHT], TreeOpsCount[TREEOPS_DEFER], TreeOpsCount[TREEOPS_ESCALATE], TreeOpsCount[TREEOPS_REARRANGE], maint_max[0], maint_max[1], (long long) maint_max[2]);
+      fprintf(FdCPU, "TreeOps: build=%lld refresh=%lld decomp=%lld light=%lld defer=%lld escalate=%lld rearrange=%lld condemned_walk=%lld swap_s=%.2f rearr_s=%.2f swaps=%lld\n", TreeOpsCount[TREEOPS_BUILD], TreeOpsCount[TREEOPS_REFRESH], TreeOpsCount[TREEOPS_DECOMP], TreeOpsCount[TREEOPS_DECOMP_LIGHT], TreeOpsCount[TREEOPS_DEFER], TreeOpsCount[TREEOPS_ESCALATE], TreeOpsCount[TREEOPS_REARRANGE], TreeOpsCount[TREEOPS_CONDEMNED_WALK], maint_max[0], maint_max[1], (long long) maint_max[2]);
       fprintf(FdCPU,
 	      "total         %10.2f  %5.1f%%\n"
 	      "tree+gravity  %10.2f  %5.1f%%\n"

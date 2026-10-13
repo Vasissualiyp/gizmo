@@ -72,6 +72,55 @@ double get_equilibrium_dust_temperature_estimate(int i, double shielding_factor_
 double gas_dust_heating_coeff(int i, double T, double Tdust, struct particle_data *pp, struct gas_cell_data *cell);
 MyFloat get_FUV_G0(int target, MyFloat shieldfac, int mode, struct particle_data *pp, struct gas_cell_data *cell);
 
+#ifdef COOLING_COMPACT_CROSSCHECK
+/* The compact cooling chain must read only its pp/cell arguments: a read of the global P/CellP at the compact
+   index j picks up the unrelated particle j. Re-run the chain on a copy of the compact inputs with P/CellP
+   pointing at a shifted copy of the gas (entry k holds cell k+1), and abort unless the result is bit-identical
+   to the real pass. Costs a second cooling pass and a copy of the local gas every step: test builds only. */
+static void cooling_compact_crosscheck_run(struct particle_data *chk_P, struct gas_cell_data *chk_Cell, int N_active)
+{
+    if(N_gas < 2) {return;}
+    struct particle_data *shift_P = (struct particle_data *) mymalloc("shift_P", N_gas * sizeof(struct particle_data));
+    struct gas_cell_data *shift_Cell = (struct gas_cell_data *) mymalloc("shift_Cell", N_gas * sizeof(struct gas_cell_data));
+    for(int k = 0; k < N_gas; k++) {shift_P[k] = P[(k+1) % N_gas]; shift_Cell[k] = CellP[(k+1) % N_gas];}
+    struct particle_data *P_real = P; struct gas_cell_data *CellP_real = CellP;
+    P = shift_P; CellP = shift_Cell;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+    for(int j = 0; j < N_active; j++) {do_the_cooling_for_particle(j, chk_P, chk_Cell);}
+    P = P_real; CellP = CellP_real;
+    myfree(shift_Cell);
+    myfree(shift_P);
+}
+
+static void cooling_compact_crosscheck_compare(const std::vector<int> &cool_indices, struct particle_data *chk_P, struct gas_cell_data *chk_Cell,
+                                               struct particle_data *compact_P, struct gas_cell_data *compact_Cell, int N_active)
+{
+    int n_bad = 0, j_bad = -1; size_t off_bad = 0; const char *which = "";
+    for(int j = 0; j < N_active; j++)
+    {
+        const unsigned char *a = (const unsigned char *) &compact_Cell[j], *b = (const unsigned char *) &chk_Cell[j];
+        const unsigned char *c = (const unsigned char *) &compact_P[j], *d = (const unsigned char *) &chk_P[j];
+        int bad_cell = memcmp(a, b, sizeof(struct gas_cell_data)), bad_p = memcmp(c, d, sizeof(struct particle_data));
+        if(!bad_cell && !bad_p) {continue;}
+        if(n_bad++ == 0) {
+            j_bad = j;
+            if(bad_cell) {which = "gas_cell_data"; while(a[off_bad] == b[off_bad]) {off_bad++;}}
+            else {which = "particle_data"; while(c[off_bad] == d[off_bad]) {off_bad++;}}
+        }
+    }
+    if(n_bad > 0)
+    {
+        int i = cool_indices[j_bad];
+        PRINT_WARNING("COOLING_COMPACT_CROSSCHECK: the cooling chain read the global P/CellP: %d of %d cooled cells change when the global arrays are shuffled. "
+                      "First: ID=%llu (global index %d, compact index %d), %s byte offset %zu (gdb: ptype /o struct %s); InternalEnergy %.17g vs %.17g",
+                      n_bad, N_active, (unsigned long long) P[i].ID, i, j_bad, which, off_bad, which, compact_Cell[j_bad].InternalEnergy, chk_Cell[j_bad].InternalEnergy);
+        endrun(8857);
+    }
+}
+#endif
+
 /* this is the 'parent' loop to do the cell cooling+chemistry. this is now openmp-parallelized, since the semi-implicit iteration can be a non-negligible cost.
    Uses a gather-dispatch-scatter pattern with compact arrays so that the cooling chain operates on contiguous memory
    indexed 0..N_active-1, enabling future GPU offloading. */
@@ -104,6 +153,13 @@ void cooling_parent_routine(void)
         compact_Cell[j] = CellP[cool_indices[j]];
     }
 
+#ifdef COOLING_COMPACT_CROSSCHECK
+    struct particle_data *chk_P = (struct particle_data *) mymalloc("chk_P", N_active * sizeof(struct particle_data));
+    struct gas_cell_data *chk_Cell = (struct gas_cell_data *) mymalloc("chk_Cell", N_active * sizeof(struct gas_cell_data));
+    memcpy(chk_P, compact_P, N_active * sizeof(struct particle_data)); memcpy(chk_Cell, compact_Cell, N_active * sizeof(struct gas_cell_data));
+    cooling_compact_crosscheck_run(chk_P, chk_Cell, N_active);
+#endif
+
     /* Step 3: Dispatch — run cooling on compact arrays indexed 0..N_active-1 */
 #ifdef _OPENMP
 #pragma omp parallel for schedule(dynamic)
@@ -112,6 +168,12 @@ void cooling_parent_routine(void)
     {
         do_the_cooling_for_particle(j, compact_P, compact_Cell);
     }
+
+#ifdef COOLING_COMPACT_CROSSCHECK
+    cooling_compact_crosscheck_compare(cool_indices, chk_P, chk_Cell, compact_P, compact_Cell, N_active);
+    myfree(chk_Cell);
+    myfree(chk_P);
+#endif
 
     /* Step 4: Scatter — copy modified data back from compact arrays to the global arrays */
     for(int j = 0; j < N_active; j++)
@@ -200,6 +262,9 @@ void do_the_cooling_for_particle(int i, struct particle_data *pp, struct gas_cel
         update_explicit_molecular_fraction(i, 0.5*dtime*UNIT_TIME_IN_CGS, pp, cell); // if we're doing the H2 explicitly with this particular model, we update it in two half-steps before and after the main cooling step
 #endif
 
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+        double rt_diag_dtie_code_dt = cell[i].DtInternalEnergy * dtime * cell[i].Mass; /* code units, before the cgs conversion */
+#endif
         set_PdV_work_heatingrate(i, dtime, pp, cell);
 
 #if !defined(CHIMES)
@@ -241,6 +306,22 @@ void do_the_cooling_for_particle(int i, struct particle_data *pp, struct gas_cel
 #ifndef COOLING_OPERATOR_SPLIT
         de_u_work = cell[i].DtInternalEnergy / nHcgs * ratefact; /* use the combined and rate-limited value which is more accurately computed above */
 #endif
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+        rt_diag_add(RT_DIAG_COOL_GAS, 0, de_u); rt_diag_add(RT_DIAG_COOL_OFFERED, 0, de_rad_tot);
+        struct rt_diag_cool_terms cr = rt_diag_cr; /* terms of the converged-u CoolingRate call */
+        double gasfact = ratefact * (C_LIGHT_CODE/C_LIGHT_CODE_REDUCED), routed_sum = 0; for(k=0;k<N_RT_FREQ_BINS;k++) {routed_sum += cell[i].Lambda_RadiativeCooling_toRHDBins[k];}
+        rt_diag_sc(RT_DIAG_SC_DEU, de_u); rt_diag_sc(RT_DIAG_SC_Q, (cr.q_post + cr.dtie)*gasfact); rt_diag_sc(RT_DIAG_SC_DTIE, cr.dtie*gasfact);
+        rt_diag_sc(RT_DIAG_SC_DTIE_CODE, rt_diag_dtie_code_dt); rt_diag_sc(RT_DIAG_SC_THICK, (cr.q_post - cr.q_pre)*gasfact);
+        rt_diag_sc(RT_DIAG_SC_MOL, -cr.mol*gasfact); rt_diag_sc(RT_DIAG_SC_MOL_HEAT, -DMIN(cr.mol,0)*gasfact); rt_diag_sc(RT_DIAG_SC_DUST, -cr.dust*gasfact);
+        rt_diag_sc(RT_DIAG_SC_METAL, -cr.metal*gasfact); rt_diag_sc(RT_DIAG_SC_HHE, -cr.hhe*gasfact); rt_diag_sc(RT_DIAG_SC_COMPTON, -cr.compton*gasfact);
+        rt_diag_sc(RT_DIAG_SC_CR, cr.h_cr*cr.fcorr*gasfact); rt_diag_sc(RT_DIAG_SC_PE, -cr.pelec*gasfact); rt_diag_sc(RT_DIAG_SC_ION_HEAT, cr.h_ion*cr.fcorr*gasfact);
+        rt_diag_sc(RT_DIAG_SC_HEAT, cr.heat*gasfact); rt_diag_sc(RT_DIAG_SC_LAMBDA, -cr.lambda*gasfact);
+        rt_diag_sc(RT_DIAG_SC_ROUTED_GAS, -routed_sum*gasfact); rt_diag_sc(RT_DIAG_SC_UNROUTED, (cr.q_post + routed_sum)*gasfact);
+        rt_diag_sc(RT_DIAG_SC_OFFER_NUV, cell[i].Lambda_RadiativeCooling_toRHDBins[RT_FREQ_BIN_NUV]*ratefact);
+        rt_diag_sc(RT_DIAG_SC_OFFER_IR, cell[i].Lambda_RadiativeCooling_toRHDBins[RT_FREQ_BIN_INFRARED]*ratefact);
+        rt_diag_sc(RT_DIAG_SC_DEU_WORK, de_u_work); rt_diag_sc(RT_DIAG_SC_N_COOL, 1);
+        rt_diag_sc(RT_DIAG_SC_DC_ABS_IR, cr.dc_abs_ir); rt_diag_sc(RT_DIAG_SC_DC_ABS_NONIR, cr.dc_abs_nonir); rt_diag_sc(RT_DIAG_SC_DC_EMIT, cr.dc_emit); rt_diag_sc(RT_DIAG_SC_DC_COUPLE, cr.dc_couple);
+#endif
         double de_u_radabs=0; /* need to collect absorbed photon energy to know how much energy to limit the 'dumped' energy to */
         for(k=0;k<N_RT_FREQ_BINS;k++)
         {
@@ -259,6 +340,9 @@ void do_the_cooling_for_particle(int i, struct particle_data *pp, struct gas_cel
         }
         de_u_work += de_u_radabs; /* add this to the energy reservoir represented by the work function */
         double de_u_touse = de_u - de_u_work; /* this is the actual difference between the implicit hydro work+absorption term and the total term, i.e. a corrected de_u_rad, which we use below */
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+        rt_diag_sc(RT_DIAG_SC_DEU_RADABS, de_u_radabs); if(de_u_touse > 0) {rt_diag_sc(RT_DIAG_SC_N_TOUSE_POS, 1);}
+#endif
 
         for(k=0;k<N_RT_FREQ_BINS;k++)
         {
@@ -269,6 +353,10 @@ void do_the_cooling_for_particle(int i, struct particle_data *pp, struct gas_cel
                 {
                     double de_rad_min = DMIN(DMAX(-0.99*cell[i].Rad_E_gamma[k], -de_u_touse), 0); // don't let the radiation loss take all the radiation energy into negative, or more than the energy gained from cooling+heating
                     double de_rad_max = DMAX(DMIN(10.*unew*cell[i].Mass, -de_u_touse), 0); // don't let the radiation gain take more than some large factor times the current energy, or more than the energy lost from cooling+heating
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+                    if(de_rad > de_rad_max) {rt_diag_sc((-de_u_touse <= 0) ? RT_DIAG_SC_CLIP_MAX_ZERO : ((10.*unew*cell[i].Mass < -de_u_touse) ? RT_DIAG_SC_CLIP_MAX_10UM : RT_DIAG_SC_CLIP_MAX_DEU), de_rad - de_rad_max);}
+                    if(de_rad < de_rad_min) {rt_diag_sc((-de_u_touse >= 0) ? RT_DIAG_SC_CLIP_MIN_ZERO : ((-0.99*cell[i].Rad_E_gamma[k] > -de_u_touse) ? RT_DIAG_SC_CLIP_MIN_099E : RT_DIAG_SC_CLIP_MIN_DEU), de_rad_min - de_rad);}
+#endif
                     de_rad = DMAX(DMIN(de_rad, de_rad_max), de_rad_min); // limit de_rad appropriately
                     if(fabs(de_rad) > MIN_REAL_NUMBER)
                     {
@@ -278,6 +366,11 @@ void do_the_cooling_for_particle(int i, struct particle_data *pp, struct gas_cel
 #endif
                         double Rad_E_gamma_before = cell[i].Rad_E_gamma[k]; // save for immediate use below
                         cell[i].Rad_E_gamma[k] += de_rad; /* energy gained by gas is lost here (or vice versa if dust is acting as a net coolant) */
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+                        rt_diag_add(RT_DIAG_COOLING_TO_BAND, k, de_rad);
+                        if(k==RT_FREQ_BIN_NUV) {rt_diag_sc(RT_DIAG_SC_RET_NUV, de_rad);}
+                        if(k==RT_FREQ_BIN_INFRARED) {rt_diag_sc(RT_DIAG_SC_RET_IR, de_rad);}
+#endif
                         cell[i].Rad_E_gamma_Pred[k] = cell[i].Rad_E_gamma[k]; /* updated drifted */
 #if defined(RT_EVOLVE_INTENSITIES)
                         int k_tmp; for(k_tmp=0;k_tmp<N_RT_INTENSITY_BINS;k_tmp++) {cell[i].Rad_Intensity[k][k_tmp] += de_rad/RT_INTENSITY_BINS_DOMEGA; cell[i].Rad_Intensity_Pred[k][k_tmp] += de_rad/RT_INTENSITY_BINS_DOMEGA;}
@@ -303,6 +396,10 @@ void do_the_cooling_for_particle(int i, struct particle_data *pp, struct gas_cel
         cell[i].InternalEnergy = unew;
         cell[i].InternalEnergyPred = cell[i].InternalEnergy;
         set_eos_pressure(i, pp, cell);
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+        rt_diag_sc(RT_DIAG_SC_M_COOL, cell[i].Mass); rt_diag_sc(RT_DIAG_SC_MT_GAS, cell[i].Mass*cell[i].temperature());
+        rt_diag_sc(RT_DIAG_SC_MT_DUST_COOL, cell[i].Mass*cell[i].Dust_Temperature); rt_diag_sc(RT_DIAG_SC_MT_RAD, cell[i].Mass*cell[i].Radiation_Temperature);
+#endif
 #ifndef COOLING_OPERATOR_SPLIT
         if(cell[i].CoolingIsOperatorSplitThisTimestep==0) {cell[i].DtInternalEnergy=0;} // if unsplit, zero the internal energy change here
         /* when TRANSPORT_SUBCYCLE_COOLING, DtInternalEnergy is saved/restored in run.cc around each cooling call */
@@ -1038,6 +1135,9 @@ double CoolingRate(double logT,  double rho, double n_elec_guess, double *n_elec
     double LambdaRec, LambdaRecHp, LambdaRecHep, LambdaRecHepp, LambdaRecHepd, T, T_cmb_radeff, shieldfac, LambdaMol, LambdaMetal, LambdaNeb, LambdaPElec, LambdaDust, Heat_Ion_from_UVB, Heat_Ion_from_RHD;
     double nHcgs = HYDROGEN_MASSFRAC * rho / PROTONMASS_CGS;	/* hydrogen number dens in cgs units */
     Lambda=0; Heat=0; LambdaMol=0; LambdaFF=0; LambdaRec=0; LambdaExc=0; LambdaIon=0; LambdaMetal=0; LambdaNeb=0; LambdaCompton=0; LambdaPElec=0; LambdaDust=0; Heat_Ion_from_UVB=0; Heat_Ion_from_RHD=0; /* make sure these are all initialized to zero */
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+    if(target >= 0) {rt_diag_cr = {}; rt_diag_cr.fcorr = 1;}
+#endif
     if(logT <= Tmin) {logT = Tmin + 0.5 * deltaT;}	/* floor at Tmin */
     if(!isfinite(rho)) {return 0;}
     T = pow(10.0, logT);
@@ -1262,6 +1362,9 @@ double CoolingRate(double logT,  double rho, double n_elec_guess, double *n_elec
 #endif
 
         Heat += CR_gas_heating(target, n_elec, nH0, nHcgs, pp, cell); // CR hadronic+Coulomb+ionization heating //
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+        if(target >= 0) {rt_diag_cr.h_cr = CR_gas_heating(target, n_elec, nH0, nHcgs, pp, cell);}
+#endif
 #if defined(COOL_LOW_TEMPERATURES)
         if(LambdaMol<0) {Heat -= LambdaMol;} // Molecular line heating (Trad_mol_cooling_batch > Tgas) //
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2) || !defined(GALSF_FB_FIRE_STELLAREVOLUTION)
@@ -1305,6 +1408,9 @@ double CoolingRate(double logT,  double rho, double n_elec_guess, double *n_elec
         double gas_self_absorption_opacity = rt_kappa_adaptive_IR_band(target,T,T,-1,-1, pp, cell), surface_density_fromcenter = 0.5 * (cell[target].Density*All.cf_a3inv) * (pp[target].Get_Particle_Size()*All.cf_atime);
         double tau_self = gas_self_absorption_opacity * surface_density_fromcenter, fcorr = 1./(1.+tau_self*tau_self);
         Heat*=fcorr; Lambda*=fcorr; LambdaMetal*=fcorr; LambdaExc*=fcorr; LambdaRec*=fcorr; LambdaIon*=fcorr; LambdaPElec*=fcorr; LambdaFF*=fcorr; LambdaMol*=fcorr; LambdaDust*=fcorr; LambdaCompton*=fcorr;
+#ifdef RT_DIAG_IR_DOUBLE_COUNT
+        rt_diag_cr.fcorr = fcorr;
+#endif
     }
 #endif
 
@@ -1358,6 +1464,11 @@ double CoolingRate(double logT,  double rho, double n_elec_guess, double *n_elec
     if(LambdaDust <= 0) {Heat = -LambdaDust; Lambda = 0;}
 #endif
     double Q = Heat - Lambda;
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+    if(target >= 0) {rt_diag_cr.mol = LambdaMol; rt_diag_cr.dust = LambdaDust; rt_diag_cr.metal = LambdaMetal; rt_diag_cr.hhe = LambdaExc + LambdaIon + LambdaRec + LambdaFF;
+        rt_diag_cr.compton = LambdaCompton; rt_diag_cr.neb = LambdaNeb; rt_diag_cr.pelec = LambdaPElec; rt_diag_cr.h_ion = Heat_Ion_from_UVB + Heat_Ion_from_RHD;
+        rt_diag_cr.heat = Heat; rt_diag_cr.lambda = Lambda; rt_diag_cr.q_pre = Q;}
+#endif
 #if defined(OUTPUT_COOLRATE_DETAIL)
     if(target>=0) {cell[target].CoolingRate = Lambda; cell[target].HeatingRate = Heat;}
 #endif
@@ -1416,6 +1527,9 @@ double CoolingRate(double logT,  double rho, double n_elec_guess, double *n_elec
 #if defined(OUTPUT_COOLRATE_DETAIL)
     if(target>=0) {cell[target].NetHeatingRateQ = Q;}
 #endif
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+    if(target >= 0) {rt_diag_cr.q_post = Q;}
+#endif
 #if defined(OUTPUT_MOLECULAR_FRACTION) && !defined(JACO)
     if(target>=0) {cell[target].MolecularMassFraction = Get_Gas_Molecular_Mass_Fraction(target, T, nH0, n_elec, sqrt(shieldfac)*(gJH0/2.29e-10), pp, cell);}
 #endif
@@ -1426,6 +1540,9 @@ double CoolingRate(double logT,  double rho, double n_elec_guess, double *n_elec
 #if defined(OUTPUT_COOLRATE_DETAIL)
     if(target >= 0) {cell[target].HydroHeatingRate = cell[target].DtInternalEnergy / nHcgs;}
 #endif
+#endif
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+    if(target >= 0) {rt_diag_cr.dtie = Q - rt_diag_cr.q_post;}
 #endif
     return Q;
 } // ends CoolingRate

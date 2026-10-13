@@ -15,6 +15,12 @@
 #include "../core/proto.h"
 #include "../domain/domain.h"
 
+/* Restartfile layout sentinel (see restart()). The magic distinguishes a sentinel from the leading
+   bytes of an All struct written by a pre-sentinel binary. */
+#define RESTARTFILE_MAGIC 0x52535446u
+#define RESTARTFILE_LAYOUT_VERSION 1u
+struct restart_layout_header {unsigned int magic, layout_version; unsigned long long size_all, size_p, size_cell;};
+
 static FILE *fd;
 
 #ifdef CHIMES 
@@ -150,6 +156,36 @@ void restart(int modus)
 
 
 	  save_PartAllocFactor = All.PartAllocFactor;
+
+	  /* Layout sentinel. What follows is a raw byte image of All, P, CellP and a hand-picked list of
+	     globals, so any change to those structs or to that list makes older restartfiles unreadable --
+	     and without this header they misread silently (every later field shifted) or crash somewhere far
+	     downstream. Written first; on read a present-but-different header is a clean, explained abort,
+	     and a file without one (pre-sentinel) is read as before. Struct sizes are checked automatically;
+	     bump RESTARTFILE_LAYOUT_VERSION whenever a byten() field is added or removed below without a
+	     struct size changing. */
+	  {
+	      struct restart_layout_header hdr = {RESTARTFILE_MAGIC, RESTARTFILE_LAYOUT_VERSION,
+	          (unsigned long long) sizeof(struct global_data_all_processes), (unsigned long long) sizeof(struct particle_data), (unsigned long long) sizeof(struct gas_cell_data)};
+	      struct restart_layout_header want = hdr;
+	      byten(&hdr, sizeof(hdr), modus);
+	      if(modus && hdr.magic != want.magic)
+		{
+		  /* No header: written before the sentinel existed. Its layout cannot be verified, so read it exactly as
+		     before -- resuming a run on a newer commit with an unchanged layout is routine and must keep working.
+		     Rewind the bytes just consumed; they are the head of All. */
+		  fseek(fd, -(long) sizeof(hdr), SEEK_CUR);
+		  if(ThisTask == 0) {printf("Restart file '%s' carries no layout header (pre-sentinel binary): layout not verifiable, reading it as before.\n", buf); fflush(stdout);}
+		}
+	      else if(modus && (hdr.layout_version != want.layout_version || hdr.size_all != want.size_all || hdr.size_p != want.size_p || hdr.size_cell != want.size_cell))
+		{
+		  printf("Restart file '%s' was written with a different data layout (file/binary: layout version %u/%u, sizeof All %llu/%llu, P %llu/%llu, CellP %llu/%llu). "
+			 "Restartfiles are byte images and do not survive changes to these structures: resume with the binary that wrote them, or restart from a snapshot.\n",
+			 buf, hdr.layout_version, want.layout_version, hdr.size_all, want.size_all, hdr.size_p, want.size_p, hdr.size_cell, want.size_cell);
+		  fflush(stdout);
+		  endrun(7879);
+		}
+	  }
 
 	  /* common data  */
 	  byten(&All, sizeof(struct global_data_all_processes), modus);
@@ -354,19 +390,11 @@ void restart(int modus)
 
 	      if(modus)		/* read */
 		{
-		  /* Extnodes[].Flag is serialized just above; GlobFlag, the counter it is compared
-		     against, is a plain global (allvars.cc:168) and is not. A resume restarts the
-		     counter at 0 while the nodes carry markers from the previous run, so a node whose
-		     stored Flag collided with an early counter value would read as already-visited and
-		     be skipped when force_update_tree() collects the top-level nodes it has to
-		     communicate.
-		     Flag is only ever a within-pass marker -- every use is
-		     `if(Flag != GlobFlag) {Flag = GlobFlag; ...}` immediately after a GlobFlag++ -- so
-		     any state in which no Flag equals the current counter is valid. Clearing them is
-		     therefore sufficient, and unlike seeding GlobFlag from max(Flag) it reads nothing:
-		     Extnodes_base comes from mymalloc and only nodes the build touched have ever had
-		     Flag written, so a max over the array can pick up an unwritten entry and push the
-		     counter near INT_MAX, where ++ overflows within a few passes. */
+		  /* Extnodes[].Flag is serialized but GlobFlag, the counter it is compared against, is not.
+		     A resume restarts the counter at 0 while nodes keep old markers, so a node could read as
+		     already-visited and be skipped by force_update_tree(). Flag is only a within-pass marker, so
+		     clearing every Flag is sufficient. Do not seed GlobFlag from max(Flag) instead: entries the
+		     build never wrote are uninitialized and can push the counter toward INT_MAX. */
 		  int i;
 		  for(i = 0; i < Numnodestree; i++) {Extnodes_base[i].Flag = 0;}
 		  GlobFlag = 0;

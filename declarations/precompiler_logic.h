@@ -283,14 +283,10 @@
 #endif // FIRE_PHYSICS_DEFAULTS clauses
 
 
-/* SINK_COMPTON_HEATING shares the per-sink angle-weighted luminosity tree infrastructure
- * (mass_sinklumwt_forradfb, NODE::sink_lum / sink_lum_grad, pseudo-node aggregation) with
- * SINK_PHOTONMOMENTUM -- the Compton incident flux IS the same angle-weighted luminosity the
- * rad-pressure module reads. Legacy code carried this implication; it was incorrectly dropped
- * during refactor. The rad-pressure momentum-kick term itself remains independently
- * disable-able at runtime via All.PhotonMomentum_Coupled_Fraction, so a Compton-only physics
- * setup is still expressible. Placed OUTSIDE the FIRE_PHYSICS_DEFAULTS clauses block so it
- * fires for any Config that explicitly enables SINK_COMPTON_HEATING. */
+/* SINK_COMPTON_HEATING reads the same angle-weighted sink luminosity tree data as
+ * SINK_PHOTONMOMENTUM, so it needs that infrastructure compiled in; the momentum kick itself can
+ * still be disabled at runtime (PhotonMomentum_Coupled_Fraction). Kept outside the
+ * FIRE_PHYSICS_DEFAULTS block so it applies to any Config that sets SINK_COMPTON_HEATING. */
 #if defined(SINK_COMPTON_HEATING) && !defined(SINK_PHOTONMOMENTUM)
 #define SINK_PHOTONMOMENTUM
 #endif
@@ -408,6 +404,9 @@
 #ifndef ADAPTIVE_TREEFORCE_UPDATE
 #define ADAPTIVE_TREEFORCE_UPDATE (0.0625) // optimization
 #endif
+#ifndef SINK_MDOT_RESERVOIR_CAP
+#define SINK_MDOT_RESERVOIR_CAP 30 /* throttle the reservoir drain of marginally-resolved sinks; see set_sink_mdot in sinks/sink.cc */
+#endif
 #if !defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM) && !defined(FIRE_SUPERLAGRANGIAN_JEANS_REFINEMENT)
 #ifndef IO_SUPPRESS_TIMEBIN_STDOUT
 #define IO_SUPPRESS_TIMEBIN_STDOUT 16 // only prints outputs to log file if the highest active timebin index is within n of the highest timebin (dt_bin=2^(-N)*dt_bin,max)
@@ -471,14 +470,19 @@
 #if defined(SINGLE_STAR_FB_WINDS) && defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION) || defined(COOLING)
 #define GALSF_FB_FIRE_STELLAREVOLUTION 3 // enable multi-loop feedback from such sources [this is specific to the DG-MG implementations here, not for public use right now!]. for now set to =2, which should force the code version to match previous iterations, as compared to the newer implementations.
 #endif
-#if defined(RT_ISRF_BACKGROUND)
-#if CHECK_IF_PREPROCESSOR_HAS_NUMERICAL_VALUE_(RT_ISRF_BACKGROUND)
-#if (RT_ISRF_BACKGROUND <= 0)
-#undef RT_ISRF_BACKGROUND /* use the negative or zero value above as a key to specifically -undefine- this variable, otherwise it will cause problems below by calling 0 to reset quantities it should not */
-#endif
-#endif
-#endif
 #endif // closes SINGLE_STAR_STARFORGE_DEFAULTS settings
+
+/* RT_ISRF_BACKGROUND=0 (or any value <= 0) in Config.sh switches the interstellar background off, including where an
+   umbrella above would turn it on (those only define it if it is not defined yet). Defined without a value it stays on.
+   The value test is written so that an empty definition is not read as 0: CHECK_IF_PREPROCESSOR_HAS_NUMERICAL_VALUE_
+   cannot tell 0 from empty. */
+#if defined(RT_ISRF_BACKGROUND)
+#if !((1 - RT_ISRF_BACKGROUND - 1 == 2) && (RT_ISRF_BACKGROUND + 0 == 0)) /* given a value */
+#if (RT_ISRF_BACKGROUND + 0 <= 0)
+#undef RT_ISRF_BACKGROUND
+#endif
+#endif
+#endif
 
 #ifdef SINGLE_STAR_RT_DEFAULTS
 #define RT_M1
@@ -550,23 +554,25 @@
 #endif
 #endif
 
-/* TREE_INTEGRITY_AUDITS is set DIRECTLY in a Config file -- deliberately NOT implied by any other
-   flag. It enables the deep tree audits (exactly-once walk, Father/threading cross-check, moment
-   re-derivation) at build/refresh/mutation points, and its failures are FATAL. It was briefly
-   derived from DEVELOPER_MODE, which was wrong: DEVELOPER_MODE only promotes accuracy parameters
-   to runtime parameter-file tags, it is set for convenience by most test configs and by anyone
-   who wants to tune ErrTolTheta, and none of that should buy fatal instrumentation plus a
-   re-derivation of every node moment. The always-on tier-0 checks (force_validate_tree_links and
-   the treebuild root-count/bookkeeping reduce) are what production runs carry. */
+/* TREE_INTEGRITY_AUDITS must be set explicitly in Config.sh; nothing implies it. It enables fatal
+   deep tree audits (exactly-once walk, Father/threading cross-check, moment re-derivation) at
+   build/refresh/mutation points. It is deliberately not tied to DEVELOPER_MODE, which many test
+   configs set only to expose accuracy parameters. Without it only the always-on checks run
+   (force_validate_tree_links and the treebuild bookkeeping reduce). */
 
-#if defined(HERMITE_INTEGRATION) && defined(SINK_WIND_SPAWN) && !defined(MAINTAIN_TREE_IN_REARRANGE)
-/* Hermite is the one consumer that walks the STANDING tree while deliberately skipping the rebuild
-   it was asked for (the HermiteOnlyFlag gate in gravtree.cc), so a spawning Hermite run must have
-   the full per-swap maintenance -- the parent-only carry is not enough for a tree that keeps being
-   walked. This deliberately OVERRIDES the nuclear-zoom exclusion above: a zoom run with Hermite and
-   spawning gets the maintenance despite the exclusion. (cf. gizmo-cpp a06e0073) */
+#if defined(SINK_PARTICLES) && !defined(MAINTAIN_TREE_IN_REARRANGE) && (defined(HERMITE_INTEGRATION) || !defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM))
+/* Every sink pass that swallows ends with a cleanup rearrange (run.cc) that eliminates the victims,
+   spawning or not. Without maintenance that rearrange only condemns the tree, and the consumers
+   that follow in the same step walk it without rebuilding: the Hermite passes (which skip the
+   rebuild by design, the HermiteOnlyFlag gate in gravtree.cc), RT source injection from the sink,
+   and the feedback neighbour loops. The threading still points at the vacated slots, so each of
+   those walks sees a duplicated particle per swallow, and Hermite also refreshes moments on, and
+   takes sink forces from, that tree. The parent-only carry is not enough for a tree that keeps
+   being walked, so every sink run gets the full per-swap maintenance. Nuclear zoom keeps its
+   upstream exclusion above unless Hermite is on; the condemned walks it then makes are reported
+   by force_tree_check_walkable. (cf. gizmo-cpp a06e0073) */
 #ifdef DISABLE_MAINTAIN_TREE_IN_REARRANGE
-#warning "DISABLE_MAINTAIN_TREE_IN_REARRANGE overridden: HERMITE_INTEGRATION + SINK_WIND_SPAWN requires tree maintenance (this config cannot serve as the no-MAINTAIN A/B arm)"
+#warning "DISABLE_MAINTAIN_TREE_IN_REARRANGE overridden: SINK_PARTICLES requires tree maintenance (this config cannot serve as the no-MAINTAIN A/B arm)"
 #endif
 #define MAINTAIN_TREE_IN_REARRANGE
 #endif
@@ -624,8 +630,16 @@
 #endif
 #ifdef HERMITE_INTEGRATION
 #define COMPUTE_JERK_IN_GRAVTREE /* needs to be computed in order to do the Hermite integration */
+#ifndef HERMITE_CORRECTOR_ITERATIONS
+#define HERMITE_CORRECTOR_ITERATIONS 1 /* P(EC)^n: n>1 re-evaluates gravity at the corrected state and re-applies the corrector (Kokubo, Yoshinaga & Makino 1998) */
+#endif
 #ifndef TIDAL_TIMESTEP_CRITERION
 #define TIDAL_TIMESTEP_CRITERION // use tidal tensor timestep criterion -- otherwise won't effectively leverage the Hermite integrator timesteps
+#endif
+#if defined(HERMITE_SYMMETRIC_TIMESTEP) && !defined(FORCE_EQUAL_TIMESTEPS)
+/* inert without HERMITE_INTEGRATION or on equal steps. The code tests this name rather than relying on
+   an #undef, which the re-inclusion of GIZMO_config.h (via eos.h) after this file would undo */
+#define HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
 #endif
 #endif
 

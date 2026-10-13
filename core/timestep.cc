@@ -33,7 +33,7 @@ void find_timesteps(void)
     CPU_Step[CPU_MISC] += measure_time();
 
     int i, bin, binold, prev, next;
-    integertime ti_step, ti_step_old, ti_min, ti_stepmax, ti_max;
+    integertime ti_step, ti_min, ti_stepmax, ti_max;
     double aphys;
 #ifdef SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM
     int special_particle_active_with_this_index[SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM], j_specialpartical_counter=0;
@@ -112,6 +112,9 @@ void find_timesteps(void)
 
 
     /* Now assign new timesteps  */
+#ifdef DEVELOPER_MODE
+    int n_stale_marker_warnings = 0; /* the stale-marker report below is capped per call: one line per particle would swamp the log */
+#endif
     for (int i : ActiveParticleList)
     {
 #ifdef FORCE_EQUAL_TIMESTEPS
@@ -120,6 +123,33 @@ void find_timesteps(void)
         ti_step = get_timestep(i, &aphys, 0);
 #endif
         ti_step = (integertime)(((double)ti_step) / timestep_dilation_factor(i,0));
+#ifdef HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
+        /* Time-symmetric step choice (Hut, Makino & McMillan 1995; block form Makino et al. 2006).
+           The default rule sets a step from the criterion f at its start alone: the largest f over
+           the step while f falls (inbound), the smallest while it rises (outbound). The hierarchy
+           then shrinks and grows one full step late at every bin level, the step sequence is not
+           reversible, and an eccentric orbit drifts in energy although each Hermite step is
+           time-symmetric. Instead take the largest h' in {2h, h, h/2, ...} with
+           h' <= (f_start + f_end)/2, f_end extrapolated linearly from f at the start of the step
+           just completed. f depends on positions and |velocities| only, so it is even under time
+           reversal. Without a criterion history the default rule applies. */
+        if(P[i].dt_crit_last > 0 && P[i].dt_crit_prev > 0 && All.Ti_Current > P[i].Ti_begstep && P[i].TimeBin > 1)
+        {
+            double ticks_per_unit = 1. / (All.Timebase_interval * timestep_dilation_factor(i,0));
+            double f1 = P[i].dt_crit_last * ticks_per_unit, f0 = P[i].dt_crit_prev * ticks_per_unit; /* in ticks */
+            double dfdh = (f1 - f0) / (double)(All.Ti_Current - P[i].Ti_begstep);
+            double hmax = DMIN(All.MaxSizeTimestep, dt_displacement) * ticks_per_unit;
+            int b;
+            for(b = P[i].TimeBin + 1; b > 1; b--)
+            {
+                double h_try = (double) GET_INTEGERTIME_FROM_TIMEBIN(b);
+                if(h_try > hmax) {continue;}
+                double f2 = DMAX(f1 + dfdh * h_try, 0.01 * f1); /* floor: keeps a steep extrapolated decline positive */
+                if(h_try <= 0.5 * (f1 + f2)) {break;}
+            }
+            ti_step = GET_INTEGERTIME_FROM_TIMEBIN(b); /* growth still goes through the sync-point rule below */
+        }
+#endif
         
 #if defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM)
         if(ti_step < 0) {ti_step = ti_min_glob;}
@@ -201,12 +231,34 @@ void find_timesteps(void)
             P[i].TimeBin = bin;
         }
 
-#ifndef WAKEUP
-        ti_step_old = GET_INTEGERTIME_FROM_TIMEBIN(binold);
+        /* Start the new step at the clock, not at the old step plus its length. Being in
+           ActiveParticleList here IS the statement that the particle is synchronized at
+           All.Ti_Current, so for consistent bookkeeping the two forms are bit-identical. They
+           differ only when something upstream left the marker wrong, and then the incremental
+           form advances faithfully from the wrong origin forever -- there is no other absolute
+           write on this path, so a single bad step is permanent. Downstream that shows up as a
+           Hermite source prediction extrapolated over many times the source's own step, far
+           outside the interpolant's convergence radius. Kick intervals are unaffected: kicks
+           take differences of endpoints derived from the same marker, and this lands between
+           the closing and opening kicks, not inside either. */
+#ifdef DEVELOPER_MODE
+        {   /* the absolute write heals silently, so report what it healed -- otherwise the next
+               thing that corrupts the marker is invisible. A cell spawned since the last call is
+               exempt: it is stamped at birth with a step it never took, so it trips this by
+               construction (see the wind/jet spawn site in sinks/sink_swallow_and_kick.cc). */
+#ifndef WAKEUP /* TimeBin is already the NEW bin here, so the old step has to come from binold */
+            integertime ti_step_old = GET_INTEGERTIME_FROM_TIMEBIN(binold); int newborn = 0;
 #else
-        ti_step_old = P[i].dt_step;
+            integertime ti_step_old = P[i].dt_step; int newborn = (P[i].wakeup == -3);
 #endif
-        P[i].Ti_begstep += ti_step_old;
+            if(!newborn && P[i].Ti_begstep + ti_step_old != All.Ti_Current)
+            {
+                if(n_stale_marker_warnings < 8) {PRINT_WARNING("find_timesteps: step marker for particle ID=%llu type=%d was %lld ticks from the clock (Ti_begstep=%lld dt_step=%lld Ti_Current=%lld); re-deriving", (unsigned long long)P[i].ID, (int)P[i].Type, (long long)(All.Ti_Current - P[i].Ti_begstep - ti_step_old), (long long)P[i].Ti_begstep, (long long)ti_step_old, (long long)All.Ti_Current);}
+                n_stale_marker_warnings++;
+            }
+        }
+#endif
+        P[i].Ti_begstep = All.Ti_Current;
 #if defined(WAKEUP)
         P[i].dt_step = ti_step;
 #endif
@@ -232,6 +284,9 @@ void find_timesteps(void)
 #endif
         
     }
+#ifdef DEVELOPER_MODE
+    if(n_stale_marker_warnings > 8) {PRINT_WARNING("find_timesteps: %d stale step markers re-derived on this task this step (first 8 reported above)", n_stale_marker_warnings);}
+#endif
 
 #ifdef SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM
     MPI_Allreduce(xyz_local, xyz_global, 3*SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD); // broadcast the new position of the special particle
@@ -296,8 +351,16 @@ integertime get_timestep(int p,		/*!< particle index */
     if(P[p].Type == 0) {CellP[p].Transport_Dt_Subcycle = MAX_REAL_NUMBER;}
 #endif
 
-#ifdef IO_GRADUAL_SNAPSHOT_RESTART // if on the first timestep of a snapshot restart, start at the lowest allowed timestep to minimize any transient effects
-    if(RestartFlag == 2 && All.Ti_Current == 0) {return 2;}
+#ifdef IO_GRADUAL_SNAPSHOT_RESTART /* first step of a snapshot restart: start everyone at the smallest allowed step to damp restart transients */
+    if(RestartFlag == 2 && All.Ti_Current == 0)
+    {
+        /* At the floor, not at 2 ticks. Sinks are coupled to their gas neighbours' timebin (dt_ngbs below), so a ramp
+           that starts below MinSizeTimestep makes every sink REQUEST a sub-floor step for the first few steps and
+           trips STOP_WHEN_BELOW_MINTIMESTEP; MinSizeTimestep is by definition the smallest step the run may take.
+           Runs with an unset floor keep the 2-tick start. */
+        integertime ti_floor = (integertime) (All.MinSizeTimestep / All.Timebase_interval);
+        return (ti_floor > 2) ? ti_floor : 2;
+    }
 #endif
 #if (SINGLE_STAR_TIMESTEPPING > 0)
     P[p].SuperTimestepFlag = 0;
@@ -1124,6 +1187,9 @@ integertime get_timestep(int p,		/*!< particle index */
     }
 
     if(dt > 0.5 * TIMEBASE * All.Timebase_interval) {dt = 0.5 * TIMEBASE * All.Timebase_interval;} /* prevent integer timeline overflow */
+#ifdef HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
+    P[p].dt_crit_last = eligible_for_hermite(p) ? dt : 0; /* every factor and cap applied, not yet quantised */
+#endif
     ti_step = (integertime) (dt / All.Timebase_interval);
 #ifndef STOP_WHEN_BELOW_MINTIMESTEP
     if(ti_step<=1) ti_step=2;
@@ -1332,12 +1398,10 @@ void process_wake_ups(void)
     bin = 0; for(n = 0; n < TIMEBINS; n++) {if(TimeBinCount[n] > 0) {bin = n; break;}}
     n = 0;
 
-    /* The scan below is O(NumPart) at every sync point, which at production scale is the single
-       largest cost in the run: ~130k particles at 736 B of stride, ~100 times a second, and 97% of
-       those passes find nothing. Gating it is only safe because the flag cannot go false while a
-       request is live -- see the reduction above for migration, the recompute below for requests
-       that outlive a pass, and begrun() for restarts, where the flag is process memory but
-       P[].wakeup is serialized. */
+    /* The scan below is O(NumPart) at every sync point and usually finds nothing, so it is gated.
+       That is safe only because the flag cannot go false while a request is live: see the
+       reduction above for migration, the recompute below for requests that outlive a pass, and
+       begrun() for restarts (the flag is process memory; P[].wakeup is serialized). */
 
     int wakeup_bin_offset = 0;
     while(((integertime)1 << wakeup_bin_offset) < (integertime)WAKEUP) wakeup_bin_offset++;

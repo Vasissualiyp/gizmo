@@ -10,6 +10,10 @@
 #include "../core/proto.h"
 #include "../mesh/kernel.h"
 
+#if defined(SINK_MDOT_RESERVOIR_CAP) && !defined(SINK_MDOT_RESERVOIR_CAP_NRESOLVED)
+#define SINK_MDOT_RESERVOIR_CAP_NRESOLVED 100  /* cells of mass above which a sink counts as resolved */
+#endif
+
 
 /*! \file sink.c
  *  \brief routines for gas accretion onto sink particles, and sink particle mergers
@@ -465,6 +469,26 @@ void set_sink_mdot(int i, int n, double dt)
 #endif
         if(dt > 0) {t_acc_disk = DMAX(t_acc_disk , 3.*dt);} /* make sure accretion timescale is at least a few timesteps to avoid over-shoot, etc */
         mdot = P[n].Sink_Mass_Reservoir / t_acc_disk;
+#ifdef SINK_MDOT_RESERVOIR_CAP
+        /* Marginally-resolved guard: while the sink holds fewer than _NRESOLVED cells' worth of
+           mass, drain at most M_total/CAP of the reservoir per t_acc, so a formation gulp drains
+           near the design rate rather than in one step; above the threshold stock M_res/t_acc
+           applies. The resolution gate matters: ungated, the cap keeps throttling resolved sinks
+           whose capture outpaces M_total/(CAP*t_acc), and the reservoir grows without bound.
+           The drain is floored at one mean gas cell (throttling below that only strands
+           sub-resolution mass) and never exceeds the reservoir itself. MeanGasParticleMass is
+           0/0 in a gasless run, in which case the cap is skipped. */
+        {
+            double dm_cell = All.MeanGasParticleMass;
+            if(dm_cell > 0 && dm_cell < MAX_REAL_NUMBER &&
+               P[n].Mass < ((double) SINK_MDOT_RESERVOIR_CAP_NRESOLVED) * dm_cell)
+            {
+                double m_avail = DMIN(P[n].Sink_Mass_Reservoir,
+                                      DMAX(dm_cell, P[n].Mass / ((double) SINK_MDOT_RESERVOIR_CAP)));
+                mdot = m_avail / t_acc_disk;
+            }
+        }
+#endif
     }
 #endif //ifdef SINK_ALPHADISK_ACCRETION
 
@@ -783,10 +807,8 @@ void sink_final_operations(void)
 #endif
 #ifdef HERMITE_INTEGRATION
             /* Keep the carry state on the post-accretion trajectory. Without this the prediction
-               that runs later in the same step recomputes Pos/Vel from the stale base and the
-               accretion kick is silently discarded -- measured on test/shu1977 as a 20x COM-drift
-               regression (1.8e-3 vs 8.4e-5) when accreting sinks were simply left Hermite-eligible
-               without this shift. */
+               later in the same step recomputes Pos/Vel from the stale base and silently discards
+               the accretion kick (test/shu1977 shows it as COM drift). */
             P[n].OldVel += P[n].Vel - hermite_pre_vel;
             P[n].OldPos += P[n].Pos - hermite_pre_pos;
 #endif

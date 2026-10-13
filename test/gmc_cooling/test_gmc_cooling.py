@@ -60,7 +60,9 @@ def compute_test_statistic(f, save_reference_solution=False, plot=False):
 @pytest.mark.parametrize("num_omp_threads", (default_omp_threads(),))
 # JACO_MODEL_STARFORGE is not exercised here: it has never built in this suite, so the variant
 # only ever reported a build failure that says nothing about gmc_cooling.
-@pytest.mark.parametrize("extra_config_flags", [()], ids=["baseline"])
+# COOLING_COMPACT_CROSSCHECK aborts the run if the compact-array cooling chain reads the global
+# particle arrays instead of its arguments, so reaching TimeMax is that variant's pass condition.
+@pytest.mark.parametrize("extra_config_flags", [(), ("COOLING_COMPACT_CROSSCHECK",)], ids=["baseline", "compact_crosscheck"])
 def test_gmc_cooling(num_mpi_ranks, num_omp_threads, extra_config_flags):
     test_name = "gmc_cooling"
 
