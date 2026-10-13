@@ -138,6 +138,15 @@ GIZMO_GPU_FUNCTION static inline signed char min_work_bin(signed char a, signed 
 /* the positive P[].wakeup flag a particle active in timebin `bin` leaves on a neighbour it must wake (0 means none), and its inverse */
 GIZMO_GPU_FUNCTION static inline int wakeup_flag_from_timebin(int bin) {return bin + 1;}
 GIZMO_GPU_FUNCTION static inline int wakeup_timebin_from_flag(int flag) {return flag - 1;}
+#ifdef MHD_MODIFIED_GRADIENT
+/* c_j - c_i of the last applied MG solve on a face. Each connected piece of that solve fixed its own constant in c,
+   so the difference is defined only between cells that shared a piece; across pieces (two cells that have come into
+   contact since), or for a cell with no MG state (token 0), the face takes no MG correction. */
+GIZMO_GPU_FUNCTION static inline double mg_face_coefficient_difference(double c_i, long long piece_token_i, double c_j, long long piece_token_j)
+{
+    return ((piece_token_i != 0) && (piece_token_i == piece_token_j)) ? (c_j - c_i) : 0.0;
+}
+#endif
 
 /* Whether a position lies outside the extent the domain was built on (DomainCorner, DomainLen). A Peano
    key is the mantissa of (Pos-DomainCorner)/DomainLen + 1, which encodes the position only while that

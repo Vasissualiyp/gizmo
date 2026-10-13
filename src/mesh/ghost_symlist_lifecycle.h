@@ -15,6 +15,7 @@
 #include "sfc_tiles.h"
 #include "ghost_exchange_spec.h"
 #include "ghost_writeback.h"
+#include "../hydro/hydro_corridor.h"   /* gizmo_hydro_corridor_import_gas_ghosts */
 
 extern void gpu_build_symmetric_neighbor_list(struct particle_data *P, int num_total,
     int *active_indices, int num_active, neighbor_list_t *out,
@@ -288,7 +289,7 @@ static inline void gizmo_gradients_prep_symlist(double safety, double search_fac
         double t_refresh = my_second();
         ghost_exchange_cleanup();
         const double t_gi_symm = my_second();
-        ghost_exchange_hydro(safety);
+        gizmo_hydro_corridor_import_gas_ghosts(safety); /* active gas, or all gas on an MG step */
         /* Corridor SYMMETRIC import. Charged to its own import sub-row: leaving it
          * in the caller's residual hid it in misc_hydro, which is where the
          * `ghost import` row lost most of its meaning.  The charge starts after the
@@ -324,7 +325,7 @@ static inline void gizmo_gradients_refresh_symlist(double safety, double search_
         free_neighbor_list(&gizmo_sym_neighbor_list);
         ghost_exchange_cleanup();
         const double t_gi_symm = my_second();
-        ghost_exchange_hydro(safety);
+        gizmo_hydro_corridor_import_gas_ghosts(safety); /* active gas, or all gas on an MG step */
         cpu_charge_child(CPU_GHOSTIMPORT_SYMM, timediff(t_gi_symm, my_second()));
         gpu_build_symmetric_neighbor_list(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac);
         if(ThisTask == 0) {PRINT_STATUS("Ghost refresh + CSR rebuild after gradients: %lld pairs (%.4f s)",

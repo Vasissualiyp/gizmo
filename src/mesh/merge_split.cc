@@ -1167,6 +1167,11 @@ int merge_particles_ij(int i, int j)
     { Vec3<double> B_before_split = (CellP[i].B + CellP[j].B) * (1.0 / (volume_before_merger_i + volume_before_merger_j)); /* calculate the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed. here since VB is the conserved variable explicitly integrated, that gets added with the pre-summation volumes (so we take a volume-weighted mean here) */
     CellP[j].BField_prerefinement = B_before_split; CellP[i].BField_prerefinement = B_before_split; } /* record the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed */
     CellP[j].B += CellP[i].B; CellP[j].BPred += CellP[i].BPred; CellP[j].DtB += CellP[i].DtB; /* simply add conserved quantities */
+#ifdef MHD_MODIFIED_GRADIENT
+    if(CellP[j].MG_piece_token != 0 && CellP[j].MG_piece_token == CellP[i].MG_piece_token) {   /* same gauge: c at the merged (mass-weighted) position */
+        CellP[j].MG_cgcoeff = wt_j * CellP[j].MG_cgcoeff + wt_i * CellP[i].MG_cgcoeff;
+    } else {CellP[j].MG_cgcoeff = 0; CellP[j].MG_piece_token = 0;}   /* no common gauge: the merged cell carries no MG state */
+#endif
     //CellP[j].DtB = CellP[i].DtB = {}; CellP[j].BPred = CellP[j].B; CellP[i].BPred = CellP[i].B; /* zero the time derivatives and cleaning terms: these will be re-calculated self-consistently from the new mesh configuration */
     CellP[j].divB += CellP[i].divB; // CellP[i].divB = CellP[j].divB = 0; /* this is a conserved quantity (volume-integrated) so can simply be added */
 #ifdef DIVBCLEANING_DEDNER

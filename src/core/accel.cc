@@ -6,6 +6,7 @@
 
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
+#include "../hydro/hydro_corridor.h" /* gizmo_hydro_corridor_mg_step */
 
 /*! \file accel.c
  *  \brief driver routines to carry out force computation
@@ -135,24 +136,14 @@ void compute_hydro_densities_and_forces(void)
         double t_bench_grad_start = my_second(); double child0_grad = CPU_ChildCharged;
         hydro_gradient_calc(); /* calculates the gradients of hydrodynamical quantities  */
 #ifdef MHD_MODIFIED_GRADIENT
-        {   /* determine whether the active gas fraction is large enough to justify the global MG solve */
-            long long ngas_active_local = 0;
-            for(int tbin = 0; tbin < TIMEBINS; tbin++) {if(TimeBinActive[tbin]) {ngas_active_local += TimeBinCountGas[tbin];}}
-            long long ngas_active_global; MPI_Allreduce(&ngas_active_local, &ngas_active_global, 1, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
-            double active_gas_fraction = (All.TotN_gas > 0) ? ((double)ngas_active_global / (double)All.TotN_gas) : 1.0;
-            if(active_gas_fraction >= All.ActiveFractionForMGSweep) {
-                All.Flag_SkipMGSolve = 0;
-                const double t_mg_solve = my_second();
-                mg_gradient_correction_calc(); /* MG method: global sparse-matrix solve for exact div(B)=0 correction coefficients (Tu et al. 2026) */
-                /* The solve is charged to its own row rather than left in the gradient
-                 * residual.  It has to be charged SOMEWHERE: measure_time() discounts only
-                 * what a child bucket claims, so an unclaimed span of this size lands both
-                 * in the enclosing bracket and in the next residual, and is counted twice. */
-                cpu_charge_child(CPU_MHD_MG, timediff(t_mg_solve, my_second()));
-            } else {
-                All.Flag_SkipMGSolve = 1;
-                if(ThisTask == 0) {PRINT_STATUS("Skipping MG global solve (active gas fraction %g < %g), using CG fallback for active cells", active_gas_fraction, All.ActiveFractionForMGSweep);}
-            }
+        if(gizmo_hydro_corridor_mg_step()) { /* decided once for the step by gizmo_hydro_corridor_decide_mode */
+            const double t_mg_solve = my_second();
+            mg_gradient_correction_calc(); /* MG method: global sparse-matrix solve for exact div(B)=0 correction coefficients (Tu et al. 2026) */
+            /* The solve is charged to its own row rather than left in the gradient
+             * residual.  It has to be charged SOMEWHERE: measure_time() discounts only
+             * what a child bucket claims, so an unclaimed span of this size lands both
+             * in the enclosing bracket and in the next residual, and is counted twice. */
+            cpu_charge_child(CPU_MHD_MG, timediff(t_mg_solve, my_second()));
         }
 #endif
 #if defined(COOLING) && defined(GALSF_FB_FIRE_RT_LONGRANGE)

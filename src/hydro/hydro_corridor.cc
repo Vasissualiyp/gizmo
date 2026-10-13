@@ -9,11 +9,14 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <vector>
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
 #include "../mesh/neighbor_list.h"            /* gizmo_sym_* globals */
 #include "../mesh/neighbor_loop_runner.h"     /* nlr_external_csr */
 #include "../mesh/ghost_symlist_lifecycle.h"  /* gizmo_gradients_prep_symlist / refresh_symlist */
+#include "../mesh/gpu_neighbor_list.h"        /* gizmo_mark_kernel_radius_dirty_range */
+#include "../system/gpu_particles_arena.h"
 #include "hydro_corridor.h"
 
 /* Default adaptive thresholds (global summed / per-rank-max active gas) used
@@ -42,30 +45,99 @@ static constexpr int CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX = 1000;
  * (consumer placed outside the corridor span). */
 static GizmoHydroCorridorMode g_corridor_mode = GizmoHydroCorridorMode::UNSET;
 
+/* Step-scoped MG decision (see gizmo_hydro_corridor_mg_step in hydro_corridor.h).
+ * Set by decide_mode, cleared by end. */
+static bool g_mg_step = false;
+static bool g_mg_needs_all_gas = false;
+
 /* Global active-gas counts — collective Allreduce so every rank computes
  * the same mode (corridor coherence requires this). Fills the summed and the
- * per-rank-max active-gas counts (matching the runner's sum/max dispatch
- * inputs). Cheap (two int Allreduces). Caller must be inside MPI_COMM_WORLD
- * scope. */
+ * per-rank-max counts of active gas with mass (matching the runner's sum/max
+ * dispatch inputs), and the summed count of all active gas cells, which is the
+ * population All.TotN_gas counts. One pass over the active list, two Allreduces.
+ * Caller must be inside MPI_COMM_WORLD scope. */
 static void
-global_active_gas_counts(int *out_sum, int *out_max)
+global_active_gas_counts(long long *out_sum, int *out_max, long long *out_sum_all_gas)
 {
-    int local_active_gas = 0;
+    long long local_sums[2] = {0, 0};   /* active gas with mass, all active gas */
     for(int ii : ActiveParticleList) {
-        if(P[ii].Type == 0 && P[ii].Mass > 0) local_active_gas++;
+        if(P[ii].Type != 0) continue;
+        local_sums[1]++;
+        if(P[ii].Mass > 0) local_sums[0]++;
     }
+    int local_max = (int) local_sums[0];
+    long long sums[2] = {local_sums[0], local_sums[1]};
     if(NTask > 1) {
-        MPI_Allreduce(&local_active_gas, out_sum, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
-        MPI_Allreduce(&local_active_gas, out_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+        MPI_Allreduce(local_sums, sums, 2, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+        MPI_Allreduce(&local_max, out_max, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     } else {
-        *out_sum = local_active_gas;
-        *out_max = local_active_gas;
+        *out_max = local_max;
     }
+    *out_sum = sums[0]; *out_sum_all_gas = sums[1];
+}
+
+/* The global MG solve runs when the active gas fraction reaches
+ * ActiveFractionForMGSweep and some gas is active; otherwise the local CG
+ * correction is used. Deciding it here, before density, is what lets the gradients
+ * pass (which skips the CG correction on MG steps) and the hydro pass of the same
+ * step agree on the choice. */
+static void decide_mg_step(long long sum_active_gas, long long sum_active_all_gas)
+{
+    g_mg_step = false;
+    g_mg_needs_all_gas = false;
+#ifdef MHD_MODIFIED_GRADIENT
+    double active_gas_fraction = (All.TotN_gas > 0) ? ((double)sum_active_all_gas / (double)All.TotN_gas) : 0.0;
+    g_mg_step = (sum_active_gas > 0) && (active_gas_fraction >= All.ActiveFractionForMGSweep);
+    g_mg_needs_all_gas = g_mg_step && (sum_active_all_gas < (long long)All.TotN_gas);
+    All.Flag_SkipMGSolve = g_mg_step ? 0 : 1;
+    if(!g_mg_step && ThisTask == 0) {PRINT_STATUS("Skipping MG global solve (active gas fraction %g < %g), using CG fallback for active cells", active_gas_fraction, All.ActiveFractionForMGSweep);}
+#else
+    (void)sum_active_gas; (void)sum_active_all_gas;
+#endif
+}
+
+bool gizmo_hydro_corridor_mg_step(void) {return g_mg_step;}
+bool gizmo_hydro_corridor_mg_needs_all_gas(void) {return g_mg_needs_all_gas;}
+
+/* Bring every local gas cell to the current time: the MG graph spans all gas, and
+ * inactive cells are otherwise drifted only lazily. Same bookkeeping as the full
+ * drift (kernel-radius dirty marks, arena coherence). Must run with no ghosts
+ * materialized, so that [0, N_gas) is exactly the owned gas block. */
+static void drift_local_gas_to_current_time(void)
+{
+    std::vector<int> drifted((size_t) N_gas); int n_drifted = 0;
+    drift_particles_batch(NULL, N_gas, All.Ti_Current, drifted.data(), &n_drifted);
+    if(n_drifted > 0) {   /* a repeat import in the same step finds nothing behind */
+        gizmo_mark_kernel_radius_dirty_indices(drifted.data(), n_drifted);
+        gpu_particles_arena_refresh_from_host(NumPart, P, CellP, "mg_all_gas_drift");
+    }
+}
+
+void gizmo_hydro_corridor_import_gas_ghosts(double safety)
+{
+    if(!g_mg_needs_all_gas) {ghost_exchange_hydro(safety); return;}
+    drift_local_gas_to_current_time();
+    std::vector<double> query_pos, query_h;
+    query_pos.reserve(3 * (size_t)N_gas); query_h.reserve((size_t)N_gas);
+    for(int i = 0; i < N_gas; i++) {
+        if(P[i].Type != 0 || P[i].Mass <= 0) continue;
+        query_pos.push_back(P[i].Pos[0]); query_pos.push_back(P[i].Pos[1]); query_pos.push_back(P[i].Pos[2]);
+        query_h.push_back(P[i].KernelRadius);
+    }
+    /* Same supply and reach as ghost_exchange_hydro; only the query set widens. */
+    struct ghost_exchange_spec_t sp = {GHOST_TYPE_0, GHOST_TYPE_0, NGB_SEARCH_SYMMETRIC, safety, "hydro_symmetric_all_gas",
+                                       (int)query_h.size(), (const double (*)[3]) query_pos.data(), query_h.data(),
+                                       MODE_B_RADIUS_LEGACY_KERNEL_ALLTYPES, 1.0};
+    ghost_exchange_run(&sp);
 }
 
 void gizmo_hydro_corridor_decide_mode(void)
 {
 #ifdef TRANSPORT_SUBCYCLE
+#ifdef MHD_MODIFIED_GRADIENT
+    {long long sum_active_gas = 0, sum_active_all_gas = 0; int max_active_gas = 0;
+     global_active_gas_counts(&sum_active_gas, &max_active_gas, &sum_active_all_gas); decide_mg_step(sum_active_gas, sum_active_all_gas);}
+#endif
     /* Transport subcycling reuses the shared symmetric gas CSR
      * (gizmo_sym_neighbor_list) across every subcycle iteration
      * (transport_subcycle_exchange_fluxes consumes it), so the corridor MUST
@@ -84,8 +156,9 @@ void gizmo_hydro_corridor_decide_mode(void)
        Thresholds from the optional NeighborLoopModeBThreshold{Sum,Max} params
        (-1 = unset -> corridor default; any set value overrides, <= 0 disables
        Mode B). TRANSPORT_SUBCYCLE has already forced Mode A above. */
-    int sum_active_gas = 0, max_active_gas = 0;
-    global_active_gas_counts(&sum_active_gas, &max_active_gas);
+    long long sum_active_gas = 0, sum_active_all_gas = 0; int max_active_gas = 0;
+    global_active_gas_counts(&sum_active_gas, &max_active_gas, &sum_active_all_gas);
+    decide_mg_step(sum_active_gas, sum_active_all_gas);
     const struct global_data_all_processes *host_all = nlr_host_all_ptr();
     int threshold_sum = (host_all->NeighborLoopModeBThresholdSum != -1)
                             ? host_all->NeighborLoopModeBThresholdSum
@@ -93,8 +166,9 @@ void gizmo_hydro_corridor_decide_mode(void)
     int threshold_max = (host_all->NeighborLoopModeBThresholdMax != -1)
                             ? host_all->NeighborLoopModeBThresholdMax
                             : CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX;
+    /* An MG step needs the complete gas graph, i.e. the Mode-A ghost pool and CSR. */
     bool select_mode_b = (sum_active_gas > 0) && (sum_active_gas <= threshold_sum)
-                                             && (max_active_gas <= threshold_max);
+                                             && (max_active_gas <= threshold_max) && !g_mg_step;
     GizmoHydroCorridorMode mode = select_mode_b ? GizmoHydroCorridorMode::MODE_B
                                                 : GizmoHydroCorridorMode::MODE_A;
     g_corridor_mode = mode;
@@ -140,7 +214,9 @@ void gizmo_hydro_corridor_begin(void)
     }
 
     /* Mode A: import the shared gas ghost pool (NTask>1) and build the
-     * active list + gizmo_sym_* CSR once for the whole corridor span. */
+     * active list + gizmo_sym_* CSR once for the whole corridor span. With one
+     * task there is no import to carry the all-gas drift, so it is done here. */
+    if(g_mg_needs_all_gas && NTask == 1) {drift_local_gas_to_current_time();}
     gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false);
 
     /* Publish the corridor's view ONLY when the runner's caller-owned-pool
@@ -165,6 +241,14 @@ void gizmo_hydro_corridor_begin(void)
 const nlr_external_csr * gizmo_hydro_corridor_external_csr(void)
 {
     return g_corridor_csr_valid ? &g_corridor_csr : nullptr;
+}
+
+bool gizmo_hydro_corridor_csr_arrays(const int **rows, int *n_rows, const int64_t **offsets, const int **neighbors)
+{
+    if(!g_corridor_csr_valid) {return false;}
+    *rows = g_corridor_csr.active_indices; *n_rows = g_corridor_csr.num_active;
+    *offsets = g_corridor_csr.offsets; *neighbors = g_corridor_csr.neighbors;
+    return true;
 }
 
 void gizmo_hydro_corridor_refresh_ghost_values(const char *stage)
@@ -217,6 +301,8 @@ void gizmo_hydro_corridor_end(void)
 {
     g_corridor_mode      = GizmoHydroCorridorMode::UNSET;
     g_corridor_csr_valid = false;
+    g_mg_step            = false;
+    g_mg_needs_all_gas   = false;
     /* Note: do NOT free gizmo_sym_* here. The legacy
      * gizmo_hydro_cleanup_symlist_and_ghosts() (called after
      * hydro_force) still owns the free. Double-free would crash. */

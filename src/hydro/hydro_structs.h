@@ -181,6 +181,7 @@ struct hydro_data_in
 #endif
 #ifdef MHD_MODIFIED_GRADIENT
     MyFloat MG_cgcoeff;
+    long long MG_piece_token;
 #endif
 #endif // MAGNETIC //
 

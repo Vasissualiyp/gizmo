@@ -65,6 +65,8 @@
 #ifndef HYDRO_CORRIDOR_H
 #define HYDRO_CORRIDOR_H
 
+#include <stdint.h>
+
 enum class GizmoHydroCorridorMode : int {
     UNSET  = 0,   /* outside the corridor; never observed by a consumer */
     MODE_A = 1,   /* large-N adaptive: corridor consumers should pick Mode A */
@@ -81,6 +83,22 @@ enum class GizmoHydroCorridorMode : int {
  *      NeighborLoopModeBThreshold{Sum,Max} parameters if set (<= 0 forces
  *      Mode A), otherwise the built-in corridor defaults. */
 void gizmo_hydro_corridor_decide_mode(void);
+
+/* MHD_MODIFIED_GRADIENT: whether this step runs the global MG solve, decided once
+ * per step by gizmo_hydro_corridor_decide_mode (which also sets All.Flag_SkipMGSolve,
+ * so the gradients and hydro passes of the step read one consistent choice). An MG
+ * step always runs Mode A. The MG graph spans every gas cell, so on an MG step where
+ * not all gas is active, the local gas is drifted to the current time and every
+ * corridor ghost import uses every local gas cell as a query (mg_needs_all_gas).
+ * Both are false outside the corridor span and in builds without MG. */
+bool gizmo_hydro_corridor_mg_step(void);
+bool gizmo_hydro_corridor_mg_needs_all_gas(void);
+
+/* Import the corridor's gas ghost pool: the neighbourhood of the active gas, or of
+ * every local gas cell when gizmo_hydro_corridor_mg_needs_all_gas(). Every corridor
+ * import goes through here, the fail-closed re-import included, so a re-import can
+ * never shrink the MG graph. Requires no ghosts materialized (callers clean up first). */
+void gizmo_hydro_corridor_import_gas_ghosts(double safety);
 
 /* Read the current corridor mode. Returns UNSET when called outside the
  * corridor span (before decide_mode or after end). */
@@ -130,6 +148,8 @@ void gizmo_hydro_corridor_begin(void);
  *                        TURB_DIFF_DYNAMIC the velocity filter's Norm_hat and
  *                        Velocity_bar.
  *   "mhd_cg_iter"      — slope-limited fields between gradient iterations.
+ *   "pre_mg"           — CellP.Gradients.B, which the MG matrix right-hand side
+ *                        reads on neighbours. MG steps only.
  *   "pre_dyndiff"      — gradients rewrote Velocity_hat, which the dynamic
  *                        diffusion pair kernel reads on neighbours.
  *                        TURB_DIFF_DYNAMIC only, first iteration only.
@@ -160,6 +180,11 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage);
  * fallback is retired). */
 struct nlr_external_csr;
 const nlr_external_csr * gizmo_hydro_corridor_external_csr(void);
+
+/* The same published view as plain arrays, for host consumers that do not include
+ * the runner header (the MG solve). Returns false when no view is published. The
+ * arrays are the corridor's; re-fetch after every refresh. */
+bool gizmo_hydro_corridor_csr_arrays(const int **rows, int *n_rows, const int64_t **offsets, const int **neighbors);
 
 /* Tear down the corridor at the end of hydro work for this step. Resets
  * the mode to UNSET so any unexpected read between steps is detectable.

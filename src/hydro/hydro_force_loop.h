@@ -272,6 +272,7 @@ struct HydroForceSpec
 #endif
 #ifdef MHD_MODIFIED_GRADIENT
         local.MG_cgcoeff = kc[i].MG_cgcoeff;
+        local.MG_piece_token = kc[i].MG_piece_token;
 #endif
 #endif
 #ifdef DOGRAD_INTERNAL_ENERGY

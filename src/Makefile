@@ -63,6 +63,8 @@ PERL     =  /usr/bin/perl
 
 RESULT     := $(shell CONFIG=$(CONFIG) PERL=$(PERL) make -f config-makefile)
 CONFIGVARS := $(shell cat GIZMO_config.h)
+# the MG solve (MHD_MODIFIED_GRADIENT) needs HYPRE unless the built-in CG or the PARDISO backend is chosen
+MG_USES_HYPRE := $(if $(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)),$(if $(findstring MHD_MODIFIED_GRADIENT_CG_ONLY,$(CONFIGVARS))$(findstring MHD_MODIFIED_GRADIENT_USE_PARDISO,$(CONFIGVARS)),,yes),)
 CONFIGVARS += OPENMP
 
 HG_COMMIT := $(shell git rev-parse --short HEAD 2>/dev/null)
@@ -131,7 +133,7 @@ ifeq (CHIMES,$(findstring CHIMES,$(CONFIGVARS)))
 CHIMESINCL = -I$(TACC_SUNDIALS_INC)
 CHIMESLIBS = -L$(TACC_SUNDIALS_LIB) -lsundials_cvode -lsundials_nvecserial
 endif
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 HYPRE_VERSION := $(shell ls /opt/homebrew/Cellar/hypre/ 2>/dev/null | sort -V | tail -n 1)
 HYPRE_INCL = -I/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/include/
 HYPRE_LIBS = -L/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/lib/ -lHYPRE
@@ -179,7 +181,7 @@ ifeq (CHIMES,$(findstring CHIMES,$(CONFIGVARS)))
 CHIMESINCL = -I$(TACC_SUNDIALS_INC)
 CHIMESLIBS = -L$(TACC_SUNDIALS_LIB) -lsundials_cvode -lsundials_nvecserial
 endif
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 ## Vista: `module load hypre` provides TACC_HYPRE_INC + TACC_HYPRE_LIB.
 ## TACC_HYPRE_GPU_DIR honored if set (future CUDA-Hypre build).
 ifdef TACC_HYPRE_GPU_DIR
@@ -249,7 +251,7 @@ GSL_INCL = -I$(OLCF_GSL_ROOT)/include
 GSL_LIBS = -L$(OLCF_GSL_ROOT)/lib
 MPICHLIB = #
 OPT     += -DHDF5_DISABLE_VERSION_CHECK
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 ## Frontier: `module load hypre/3.0.0-mpi` sets OLCF_HYPRE_ROOT (the OLCF module
 ## convention, as for gsl/kokkos above); its libraries are under lib64. That version
 ## builds against amd/6.4.2 + cray-mpich/9.0.1, which is the compiler the
@@ -316,7 +318,7 @@ FFTW_INCL=
 FFTW_LIBS=
 MPICHLIB = #
 OPT     += -DHDF5_DISABLE_VERSION_CHECK
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 ifdef OLCF_HYPRE_ROOT
 HYPRE_INCL = -I$(OLCF_HYPRE_ROOT)/include
 HYPRE_LIBS = -L$(OLCF_HYPRE_ROOT)/lib -L$(OLCF_HYPRE_ROOT)/lib64 -lHYPRE
@@ -411,7 +413,7 @@ ifeq (CHIMES,$(findstring CHIMES,$(CONFIGVARS)))
 CHIMESINCL = -I$(TACC_SUNDIALS_INC)
 CHIMESLIBS = -L$(TACC_SUNDIALS_LIB) -lsundials_cvode -lsundials_nvecserial -lsundials_core
 endif
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 HYPRE_INCL = -I$(TACC_HYPRE_INC)
 HYPRE_LIBS = -L$(TACC_HYPRE_LIB) -lHYPRE
 endif
@@ -452,7 +454,7 @@ ifeq (CHIMES,$(findstring CHIMES,$(CONFIGVARS)))
 CHIMESINCL = -I$(TACC_SUNDIALS_INC)
 CHIMESLIBS = -L$(TACC_SUNDIALS_LIB) -lsundials_cvode -lsundials_nvecserial -lsundials_core
 endif
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 HYPRE_INCL = -I$(TACC_HYPRE_INC)
 HYPRE_LIBS = -L$(TACC_HYPRE_LIB) -lHYPRE
 endif
@@ -491,7 +493,7 @@ ifeq (CHIMES,$(findstring CHIMES,$(CONFIGVARS)))
 CHIMESINCL = -I$(TACC_SUNDIALS_INC)
 CHIMESLIBS = -L$(TACC_SUNDIALS_LIB) -lsundials_cvode -lsundials_nvecserial
 endif
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 ## hypre module sets TACC_HYPRE_INC + TACC_HYPRE_LIB
 ifdef TACC_HYPRE_INC
 HYPRE_INCL = -I$(TACC_HYPRE_INC)
@@ -529,7 +531,7 @@ OPTIMIZE = -O2 -xCORE-AVX2
 ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
 OPTIMIZE += -qopenmp
 endif
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 HYPRE_VERSION := $(shell ls /opt/homebrew/Cellar/hypre/ 2>/dev/null | sort -V | tail -n 1)
 HYPRE_INCL = -I/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/include/
 HYPRE_LIBS = -L/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/lib/ -lHYPRE
@@ -618,12 +620,10 @@ KOKKOS_LIBS = -lkokkoscore -lkokkoscontainers
 GPU_CXX    = mpicxx -std=c++20
 GPU_CFLAGS = $(KOKKOS_INCL)
 GPU_LDFLAGS = $(KOKKOS_LIBS_PATH)
-ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
-ifneq (MHD_MODIFIED_GRADIENT_CG_ONLY,$(findstring MHD_MODIFIED_GRADIENT_CG_ONLY,$(CONFIGVARS)))
+ifeq (yes,$(MG_USES_HYPRE))
 HYPRE_VERSION := $(shell ls /opt/homebrew/Cellar/hypre/ 2>/dev/null | sort -V | tail -n 1)
 HYPRE_INCL = -I/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/include/
 HYPRE_LIBS = -L/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/lib/ -lHYPRE
-endif
 endif
 ifeq (CHIMES,$(findstring CHIMES,$(CONFIGVARS)))
 # NOTE: set these to a SUNDIALS install in the CHIMES-supported 2.7-5.x range (see the

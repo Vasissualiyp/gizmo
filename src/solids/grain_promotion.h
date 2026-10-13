@@ -68,6 +68,9 @@ static inline void grain_promotion_init_cellp(int i)
     CellP[i].ActiveCracks = 0.0;
     CellP[i].Distention   = All.Tillotson_EOS_params[ct][15]; /* alpha_0 */
 #endif
+#ifdef MHD_MODIFIED_GRADIENT
+    CellP[i].MG_cgcoeff = 0; CellP[i].MG_piece_token = 0;   /* a new gas cell has no MG state */
+#endif
 
     CellP[i].Mass = P[i].Mass;
 }

@@ -23,6 +23,18 @@
 #include "hydro_pair_types.h"
 #include "compute_finitevol_faces_functions.h"
 
+#ifdef MHD_MODIFIED_GRADIENT
+/* Set the face-normal B of both Riemann input states to one value (lab frame, n_unit along the face). */
+KOKKOS_INLINE_FUNCTION
+void mg_set_common_face_normal(struct Input_vec_Riemann &Riemann_vec, const Vec3<double> &n_unit, double Bn)
+{
+    double Bn_R = 0, Bn_L = 0;
+    for(int k=0; k<3; k++) {Bn_R += Riemann_vec.R.B[k] * n_unit[k]; Bn_L += Riemann_vec.L.B[k] * n_unit[k];}
+    for(int k=0; k<3; k++) {Riemann_vec.R.B[k] += (Bn - Bn_R) * n_unit[k]; Riemann_vec.L.B[k] += (Bn - Bn_L) * n_unit[k];}
+}
+#endif
+
+
 KOKKOS_INLINE_FUNCTION
 void hydro_core_meshless_compute_pair(
     const struct hydro_data_in &local,
@@ -173,32 +185,41 @@ void hydro_core_meshless_compute_pair(
                                 distance_from_i, distance_from_j, &Riemann_vec.L.B[k], &Riemann_vec.R.B[k], slim_mode);
     }
 #ifdef MHD_MODIFIED_GRADIENT
-    {
-        double A_dot_dp = dot(Face_Area_Vec, kernel.dp);
-        double mg_ci = local.MG_cgcoeff;
-        double mg_cj = CellP[j].MG_cgcoeff;
-        double mg_fac = 1.0;
-        if(All.Flag_SkipMGSolve) {
-            double dBn_before = 0, dBn_delta = 0;
-            for(k=0; k<3; k++) {
-                dBn_before += (Riemann_vec.R.B[k] - Riemann_vec.L.B[k]) * Face_Area_Vec[k];
-                dBn_delta  += (-mg_ci - mg_cj) * 0.25 * kernel.dp[k] * A_dot_dp * Face_Area_Vec[k];
-            }
-            double abs_before = fabs(dBn_before);
-            double dBn_after = dBn_before + dBn_delta;
-            double abs_after = fabs(dBn_after);
-            if(abs_after > abs_before && fabs(dBn_delta) > 1.0e-60) {
-                if(dBn_before * dBn_delta > 0) {
-                    mg_fac = 0.0;
-                } else {
-                    mg_fac = fabs(dBn_before) / fabs(dBn_delta);
-                    if(mg_fac > 1.0) mg_fac = 1.0;
-                }
-            }
-        }
+    double mg_face_Bn = 0; int mg_face_Bn_set = 0;   /* the corrected face-normal B on an MG-solve face (see below) */
+    if(!All.Flag_SkipMGSolve) {
+        /* On an MG-solve step the solve zeroed the face sum of (1/2)(B_L+B_R).A built from the
+         * unlimited linear extrapolation of the (once-limited) cell gradients, so the face-level
+         * limiter above may limit the tangential B components but must leave the normal one at
+         * that extrapolation. */
+        double dBn_R = 0, dBn_L = 0;
         for(k=0; k<3; k++) {
-            Riemann_vec.R.B[k] += mg_fac * (-mg_ci) * 0.25 * kernel.dp[k] * A_dot_dp;
-            Riemann_vec.L.B[k] += mg_fac * ( mg_cj) * 0.25 * kernel.dp[k] * A_dot_dp;
+            double B_R_linear = local.BPred[k], B_L_linear = BPred_j[k];
+            for(int k2=0; k2<3; k2++) {
+                B_R_linear += local.Gradients.B[k][k2] * distance_from_i[k2];
+                B_L_linear += CellP[j].Gradients.B[k][k2] * distance_from_j[k2];
+            }
+            dBn_R += (B_R_linear - Riemann_vec.R.B[k]) * n_unit[k];
+            dBn_L += (B_L_linear - Riemann_vec.L.B[k]) * n_unit[k];
+        }
+        for(k=0; k<3; k++) {Riemann_vec.R.B[k] += dBn_R * n_unit[k]; Riemann_vec.L.B[k] += dBn_L * n_unit[k];}
+    }
+    {
+        /* MG correction (Tu et al. 2026). The coefficients c are defined only up to a constant on each
+         * connected piece of the gas, so only c_j - c_i is physical: it shifts the face average of B along
+         * the face area vector A by (c_j - c_i)(r^2/8) A. Both face states take that shift, which leaves
+         * their jump as reconstructed. On a step without the solve the c of the last solve is used the same
+         * way, as the constrained-gradient correction of that step assumes. */
+        double mg_dc = mg_face_coefficient_difference(local.MG_cgcoeff, local.MG_piece_token, CellP[j].MG_cgcoeff, CellP[j].MG_piece_token);
+        Vec3<double> mg_dB_face = (0.125 * r2 * mg_dc) * Face_Area_Vec;
+        Riemann_vec.R.B += mg_dB_face; Riemann_vec.L.B += mg_dB_face;
+        if(!All.Flag_SkipMGSolve) {
+            /* The solve zeroes the divergence of the face AVERAGE of the normal field. The 1D Riemann problem
+             * has one normal field, and HLLD estimates its wavespeeds from the one-sided states before
+             * averaging, so both sides carry the corrected average, here and on the fallback paths below. */
+            double Bn_R = 0, Bn_L = 0;
+            for(k=0; k<3; k++) {Bn_R += Riemann_vec.R.B[k] * n_unit[k]; Bn_L += Riemann_vec.L.B[k] * n_unit[k];}
+            mg_face_Bn = 0.5 * (Bn_R + Bn_L); mg_face_Bn_set = 1;
+            mg_set_common_face_normal(Riemann_vec, n_unit, mg_face_Bn);
         }
     }
 #endif
@@ -244,6 +265,9 @@ void hydro_core_meshless_compute_pair(
         Riemann_vec.R.v = local.Vel - v_frame; Riemann_vec.L.v = VelPred_j - v_frame;
 #ifdef MAGNETIC
         Riemann_vec.R.B = local.BPred; Riemann_vec.L.B = BPred_j;
+#ifdef MHD_MODIFIED_GRADIENT
+        if(mg_face_Bn_set) {mg_set_common_face_normal(Riemann_vec, n_unit, mg_face_Bn);}
+#endif
 #ifdef DIVBCLEANING_DEDNER
         Riemann_vec.R.phi = local.PhiPred; Riemann_vec.L.phi = PhiPred_j;
 #endif
@@ -261,6 +285,9 @@ void hydro_core_meshless_compute_pair(
             Riemann_vec.R.v = {}; Riemann_vec.L.v = {};
 #ifdef MAGNETIC
             Riemann_vec.R.B = local.BPred; Riemann_vec.L.B = BPred_j;
+#ifdef MHD_MODIFIED_GRADIENT
+            if(mg_face_Bn_set) {mg_set_common_face_normal(Riemann_vec, n_unit, mg_face_Bn);}
+#endif
 #ifdef DIVBCLEANING_DEDNER
             Riemann_vec.R.phi = local.PhiPred; Riemann_vec.L.phi = PhiPred_j;
 #endif

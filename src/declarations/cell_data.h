@@ -92,6 +92,7 @@ extern struct gas_cell_data
 #endif
 #ifdef MHD_MODIFIED_GRADIENT
     MyDouble MG_cgcoeff;            /*!< scalar correction coefficient for modified-gradient (MG) exact div(B)=0 method (Tu et al. 2026) */
+    long long MG_piece_token;       /*!< connected piece the last applied MG solve put this cell in (its label + 1); 0 = no MG state */
 #endif
 #if defined(SPH_TP12_ARTIFICIAL_RESISTIVITY)
     MyFloat Balpha;                 /*!< effective resistivity coefficient */
