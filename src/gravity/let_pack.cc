@@ -56,9 +56,7 @@
 
 #include "gpu_pseudo_update.h"  /* gpu_scatter_foreign_to_soa */
 #include "forcetree.h"          /* force_tree_grow_foreign_storage */
-#if TREE_LEAF_BUCKET_SIZE > 1
-#include "gpu_gravity_tree.h"            /* suns_backup: the tree's own direct-child slots */
-#endif
+#include "gpu_gravity_tree.h"            /* suns_backup: the tree's own direct-child slots; the node mirror's foreign capacity */
 
 
 /* How long the tree being built here is expected to stand, as an INTEGER time interval.
@@ -1268,8 +1266,9 @@ static int let_realloc_fail_should_print(struct LETPackContext *pk)
 }
 
 /* Foreign-leaf identity sidecar arrays (declared in let_data.h).  Allocated and zeroed with the
- * foreign-node storage in force_tree_grow_foreign_storage, once the import has been counted, and
- * freed in force_treefree.  NULL whenever no import has been sized yet. */
+ * foreign-node storage -- in force_treeallocate for the storage it reserves, in
+ * force_tree_grow_foreign_storage for an import larger than that -- and freed in force_treefree.
+ * NULL whenever no foreign storage exists. */
 int     *ForeignLeafTag  = NULL;
 int     *ForeignLeafType = NULL;
 MyFloat *ForeignLeafZeta = NULL;
@@ -1920,8 +1919,9 @@ extern "C" let_exchange_status_t let_exchange_nodes(struct LETNodeWire **send_bu
 
     /* The complete receive vector is in hand, so this rank now knows EXACTLY how many foreign
      * nodes it is about to install -- and it knows it before a single one has been installed.
-     * That is what makes the foreign arena affordable: it is sized here, to this rank's own
-     * import, rather than at tree-allocation time to an index ceiling every rank shares.
+     * That is what makes the foreign arena affordable: it is sized from this rank's own
+     * import -- reserved at tree allocation from this rank's past demand, and grown
+     * here if this one is larger -- rather than to an index ceiling every rank shares.
      *
      * Two separate questions, in order.  First, does the import fit the INDEX range?  That is the
      * retryable case and only this one: force_treebuild raises the ceiling and rebuilds, which
@@ -1945,6 +1945,25 @@ extern "C" let_exchange_status_t let_exchange_nodes(struct LETNodeWire **send_bu
      * not retryable: the ceiling can be raised, node memory cannot, so it joins the hard-failure
      * statuses the caller already drains. */
     int grow_failed_local = (force_tree_grow_foreign_storage(foreign_needed) != 0) ? 1 : 0;
+    if(!grow_failed_local && AllocatedForeignNodes > 0)
+    {
+        /* Every foreign slot with storage must have its leaf identity on both sides before anything is installed: the
+           install and the scatter skip a missing sidecar silently, and the device walk then reads garbage tags. */
+        const struct gpu_gravity_tree_soa_t *mirror = gpu_gravity_tree_soa();
+        const int host_ok = (ForeignLeafTag && ForeignLeafType && ForeignLeafZeta && ForeignLeafSoft) ? 1 : 0;
+        const int mirror_ok = (!mirror || !mirror->center)
+                              || (mirror->foreign_leaf_tag && mirror->foreign_leaf_cap >= AllocatedForeignNodes
+                                  && gpu_gravity_tree_capacity() >= MaxNodes + AllocatedForeignNodes);
+        if(!host_ok || !mirror_ok)
+        {
+            printf("LET install: rank %d has %d foreign slots of storage but %s "
+                   "(host sidecar %d, mirror sidecar %d, mirror nodes %d of %d needed). Stopping.\n", ThisTask, AllocatedForeignNodes,
+                   host_ok ? "the GPU node mirror lacks room for them" : "the host lacks their foreign-leaf sidecar", host_ok,
+                   mirror ? mirror->foreign_leaf_cap : -1, gpu_gravity_tree_capacity(), MaxNodes + AllocatedForeignNodes);
+            fflush(stdout);
+            grow_failed_local = 1;
+        }
+    }
     int grow_failed_any   = 0;
     MPI_Allreduce(&grow_failed_local, &grow_failed_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     if(grow_failed_any)
@@ -2295,10 +2314,11 @@ extern "C" let_exchange_status_t let_unpack_and_install(const struct LETNodeWire
 
         /* This sender's slots come from the prefix over the receive counts, not from how many
          * senders happen to have been installed already, so a sender occupies the same slots no
-         * matter which exchange round carried it.  The storage was sized from that same complete
-         * receive vector, so the last sender's slots end exactly where the storage does and this
-         * can only fail if the two disagree -- an internal inconsistency, not a shortfall a larger
-         * tree would fix.  Say so and stop, rather than rebuilding three times to the same size. */
+         * matter which exchange round carried it.  The storage was checked against that same
+         * complete receive vector (and grown to it if short), so the last sender's slots end at or
+         * before the end of the storage and this can only fail if the two disagree -- an internal
+         * inconsistency, not a shortfall a larger tree would fix.  Say so and stop, rather than
+         * rebuilding three times to the same size. */
         if((long long) foreign_slot_prefix[r] + (long long) rcount > (long long) AllocatedForeignNodes)
         {
             printf("LET install FATAL: sender %d needs foreign slots up to %lld but only %d are allocated (rank %d).\n",
@@ -2433,11 +2453,10 @@ extern "C" let_exchange_status_t let_run_exchange(long long *foreign_needed_out)
     /* One collective, once per build: the horizon the import is pruned against. */
     let_compute_tree_lifetime();
 
-    /* The foreign-leaf identity sidecar needs no reset here: this exchange's sidecar is allocated
-     * and zeroed by force_tree_grow_foreign_storage below, once the import has been counted, and
-     * it is allocated to exactly that count -- so every slot in it is written by the install.
-     * Clearing a previous exchange's arrays would in any case be clearing arrays that are about to
-     * be replaced. */
+    /* The foreign-leaf identity sidecar needs no reset here: it is zeroed when it is allocated
+     * (with the tree, or by force_tree_grow_foreign_storage below for a larger import), the install
+     * writes every slot of this exchange's import, and a slot past the import is reachable from
+     * no node. */
 
     /* All-local receiver cover (WHICH particles): the payload worst-case scalars
      * (min_OldAcc/soft/sink) still cover ALL of R's particles, not just active ones,

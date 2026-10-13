@@ -2641,7 +2641,7 @@ int gx_device_tree_view_build(struct GxDeviceTreeView *out, int local_particle_s
     const int pseudo_start  = tree_base + MaxNodes + MaxForeignNodes;
     /* The walk may reach any foreign node that was installed, so the mirror has to
      * cover the foreign slots that have storage behind them -- AllocatedForeignNodes,
-     * this rank's actual import, which is what the mirror is sized to.  NOT
+     * this rank's own reserved or imported extent, which is what the mirror is sized to.  NOT
      * MaxForeignNodes: that is the shared INDEX ceiling used above to place the
      * pseudo-particle region, it is the worst rank's import rather than this one's,
      * and no node is ever installed in the gap between the two, so nothing points

@@ -746,7 +746,7 @@ void domain_Decomposition(int UseAllTimeBins, int SaveKeys, int do_particle_merg
   TopNodes = (struct topnode_data *) myrealloc(TopNodes, bytes = (NTopnodes * sizeof(struct topnode_data) + NTopnodes * sizeof(int)));
   PRINT_STATUS(" ..freed %g MByte in top-level domain structure", (MaxTopNodes - NTopnodes) * sizeof(struct topnode_data) / (1024.0 * 1024.0));
   DomainTask = (int *) (TopNodes + NTopnodes);
-  force_treeallocate(domain_tree_maxnodes(), All.MaxPartExpandable);
+  force_treeallocate(domain_tree_maxnodes(), All.MaxPartExpandable, -1, (UseAllTimeBins == 0) ? force_tree_remembered_foreign_slots() : 0);   /* group finding gets none */
   gizmo_exit_bad_stop_if_requested("domain:treeallocate"); /* drain a tree-alloc UVM OOM (all-rank) before any tree use */
   reconstruct_timebins();
   gpu_particles_arena_invalidate(); /* P[] reordered across ranks; arena stale */
@@ -1039,7 +1039,7 @@ void domain_Decomposition_light(int UseAllTimeBins, int do_particle_mergesplit_k
     }
     Key = NULL; /* no longer valid as a mymalloc pointer */
 
-    force_treeallocate(domain_tree_maxnodes(), All.MaxPartExpandable);
+    force_treeallocate(domain_tree_maxnodes(), All.MaxPartExpandable, -1, (UseAllTimeBins == 0) ? force_tree_remembered_foreign_slots() : 0);   /* group finding gets none */
     gizmo_exit_bad_stop_if_requested("domain:treeallocate_light"); /* drain a tree-alloc UVM OOM (all-rank) before any tree use */
     reconstruct_timebins();
     wakeup_sidecar_invalidate();   /* light repartition rearranged + exchanged particles → rebuild WakeupDirty next scan */

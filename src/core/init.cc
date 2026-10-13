@@ -898,7 +898,7 @@ void init(void)
     set_softenings();
 
     /* will build tree */
-    if(force_treebuild(NumPart, NULL) < 0) {endrun(91569);}
+    if(force_treebuild_gravity() < 0) {endrun(91569);}
 
     All.Ti_Current = 0;
 

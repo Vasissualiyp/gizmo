@@ -177,7 +177,7 @@ void gravity_tree(void)
         rearrange_particle_sequence(1);   /* the tree is rebuilt just below */
         refresh_old_acceleration_for_tree_opening();
         gizmo_exit_bad_stop_if_requested("gravtree:before_treebuild"); CPU_Step[CPU_DRIFT] += measure_time(); /* sync before we do the treebuild */
-        int build_status = force_treebuild(NumPart, NULL);
+        int build_status = force_treebuild_gravity();
         if(build_status == FORCE_TREE_NEEDS_DOMAIN_REBUILD)
         {
             /* A particle has left the extent the domain was built on.  A full decomposition re-measures
@@ -185,7 +185,7 @@ void gravity_tree(void)
              * suppressed: this is a recovery, not the step's merge/split. */
             domain_Decomposition(0, 0, 0, 1);
             gravity_clear_pending_motion_bounds();   /* noted against the top tree just replaced */
-            build_status = force_treebuild(NumPart, NULL);
+            build_status = force_treebuild_gravity();
             if(build_status == FORCE_TREE_NEEDS_DOMAIN_REBUILD) {endrun(91572);}
         }
         if(build_status == FORCE_TREE_NEEDS_OWNERSHIP_RESTORE)
@@ -198,7 +198,7 @@ void gravity_tree(void)
              * recovery, not the step's merge/split, and running it here would refine twice. */
             if(ThisTask == 0) {printf("Tree build: restoring geometric particle ownership before rebuilding.\n"); fflush(stdout);}
             domain_Decomposition_light(0, 0);
-            if(force_treebuild(NumPart, NULL) < 0) {endrun(91566);}
+            if(force_treebuild_gravity() < 0) {endrun(91566);}
         }
         /* The tree just built is current by construction: the build set every
          * node's Ti_current to All.Ti_Current and refilled the whole SoA mirror,
@@ -504,7 +504,7 @@ gravity_walk_attempt:
                 gizmo_exit_bad_stop_if_requested("gravtree:before_repair_treebuild");
                 /* This rebuild stands on the tree just built here, whose attachments are intact, so it
                  * cannot ask for ownership to be restored -- and must not, with a walk in progress. */
-                int repair_status = force_treebuild(NumPart, NULL);
+                int repair_status = force_treebuild_gravity();
                 if(repair_status == FORCE_TREE_NEEDS_DOMAIN_REBUILD)
                 {
                     /* A particle left the domain extent during this pass, so the build needs a full decomposition
@@ -517,7 +517,7 @@ gravity_walk_attempt:
 #endif
                     domain_Decomposition(0, 0, 0, 1);
                     gravity_clear_pending_motion_bounds();   /* noted against the top tree just replaced */
-                    repair_status = force_treebuild(NumPart, NULL);
+                    repair_status = force_treebuild_gravity();
                     if(repair_status == FORCE_TREE_NEEDS_DOMAIN_REBUILD) {endrun(91573);}
                     grav_work_at_call_start.resize(ActiveParticleList.size()); grav_work_bin_at_call_start.resize(ActiveParticleList.size());
                     for(size_t ii = 0; ii < ActiveParticleList.size(); ii++) {grav_work_at_call_start[ii] = P[ActiveParticleList[ii]].GravWork; grav_work_bin_at_call_start[ii] = P[ActiveParticleList[ii]].MinGravWorkBin;}
