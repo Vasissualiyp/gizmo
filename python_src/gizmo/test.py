@@ -163,13 +163,15 @@ def _current_systype():
     return ""
 
 
-def build_gizmo_for_test(test_name: str, num_openmp_threads: int = 0, extra_config_flags: tuple = ()):
+def build_gizmo_for_test(test_name: str, num_openmp_threads: int = 0, extra_config_flags: tuple = (), post_build=None):
     """Sets environment variables and runs a script for building gizmo for a given test.
     If num_openmp_threads > 0, appends OPENMP=<num_openmp_threads> to Config.sh before building.
     extra_config_flags is a tuple of strings to append to Config.sh (e.g. ("TRANSPORT_SUBCYCLE=10",)).
     On Kokkos systypes (MacBookCellar_Kokkos, Vista) auto-appends GIZMO_USE_NEIGHBOR_LIST_FOR_DENSITY
     if absent, so the Kokkos neighbor-list code path is actually exercised (the non-flag legacy tree
     walk is retained only for backward compat).
+    post_build, if given, is called with no arguments after the build, still under the build lock, so it
+    can use the repo-root object files before another build replaces them (e.g. to link a test driver).
     No-op when GIZMO_TEST_SKIP_BUILD_RUN is set (we're validating externally produced snapshots)."""
     if environ.get("GIZMO_TEST_SKIP_BUILD_RUN"):
         return
@@ -198,6 +200,8 @@ def build_gizmo_for_test(test_name: str, num_openmp_threads: int = 0, extra_conf
     with open(_BUILD_LOCK, "w") as _lock:
         fcntl.lockf(_lock, fcntl.LOCK_EX)
         _build_gizmo_locked(test_name, num_openmp_threads, extra_config_flags)
+        if post_build is not None:
+            post_build()
 
 
 def _build_gizmo_locked(test_name: str, num_openmp_threads: int, extra_config_flags: tuple):
