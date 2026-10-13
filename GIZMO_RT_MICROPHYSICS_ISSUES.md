@@ -254,6 +254,108 @@ Decision: regenerate that benchmark from ICs whose ionization matches their temp
 jaco variant to a same-IC legacy run. Until then its jaco variants are xfail with this reason.
 Decision (MYG, 2026-10-06): regenerate the gmc_cooling_rt benchmark from a cold neutral start (InitGasTemp ~100 K)
 with the option-2 fixes. The root-find fix itself (x-tolerance only) is deferred to a later batch.
+Update (2026-10-13): the unconverged root-find is not confined to the first call, and it now has a fix; see 2.2. A
+benchmark regenerated with the old `bracketed_rootfind.h` still encodes it.
+
+### 2.2 The root finder's early exit leaves DoCooling unconverged on nearly every call (fixed on `rootfind-brent-fix`)
+`system/bracketed_rootfind.h` is the Brent block behind DoCooling (`cooling.cc:421`), the H2-fraction solve (`:2136`)
+and `rt_ir_lambdadust`. Its use in `rt_eqm_dust_temp` sits inside `#if (0)`. Line numbers at 3b0923b5. Three defects:
+- **A sub-tolerance step was treated as convergence, and the unevaluated interpolant was returned.** This came in
+  with 8821246e (2024-07-02, "perf: ... quits if the interpolant iterate looks converged"). STARFORGE v1.3 (168cdb3d)
+  has it; v1.2 (30459741) does not.
+- The tolerance came from the proposed point and was not recomputed after a bisection, so the block could exit with
+  a wide bracket.
+- When the ends did not bracket the root, they were widened by /1.1 and *1.1, which walks away from the root for a
+  negative variable and ends in endrun.
+
+**Measured in gmc_cooling_rt** (logger after the DoCooling solve, no extra evaluations, about 36,000 solves per run):
+
+| | old header | fixed header |
+|---|---|---|
+| solves returning an unevaluated point | 99.9% | 0% |
+| final bracket width / u, median | 1.5% | 9e-5 |
+| solves uncertain by >1% of u | 60% | 0% |
+| solves uncertain by >10% of u | 8.7% (max 58%) | 0% (max 0.65%) |
+
+The step's own |du|/u is about 1.2%, so the old answer was usually uncertain by the whole step.
+
+**Effect on the snapshot at t_end:** the pristine build matches the benchmark to <1% in every density bin. The fix
+changes the binned medians:
+- T rises by 3-21%, most at n_H = 170-460 cm^-3.
+- x_e rises 4-5x at n_H = 280-770 cm^-3.
+- FUV energy density rises 2-18% and FIR 12-17%.
+- The test fails 3 of 9 T bins at its 10% tolerance.
+
+Swapping the header one call site at a time puts 100% of this on DoCooling; the H2 and dust sites change nothing.
+Earlier, from fresh cell states (dust-temperature harness), the old header put 17 of 150 sampled ionised cells
+(5e3-3e4 K) 10-25% too cold, up to 47% from the root in u.
+
+Not fixed by this: the stop is still on bracket width, so a sign change at a discontinuity of the residual is still
+accepted as a root (2.1). The same thing happens in strongly irradiated envelope cells, where the dust equilibrium
+switches branch as T changes. DoCooling lands on that jump in about half of 50 sampled envelope cells, whatever the
+dust solver.
+
+- Fix: commits 53efd51c and cf468206 on branch `rootfind-brent-fix`, both pushed.
+- Sensitive test: `test/rootfind_unit`, 17 bracketed problems, no GIZMO build. The pristine header fails 10-11 of
+  them; the fix passes all 17.
+- Cost: about 15% more cooling-function calls per gas solve.
+
+**Status: gmc_cooling_rt_exact must be regenerated with the fixed header (not done; MYG to decide).** Any comparison
+of cold-gas temperatures between v1.2 and v1.3/dev carries this difference.
+
+### 2.3 Equilibrium dust-temperature solvers miss their roots (fixes on `dust-solver-fullset`)
+Found with a stress harness that links the production objects and brute-force scans each solver's residual
+(`test/dust_temp_harness`, uncommitted, in `~/code/gizmo_starforge_dev`).
+
+**`rt_ir_lambdadust`** (the cooling-side solve, called inside DoCooling):
+- **It pins at MAX_DUST_TEMP = 1e4 K, returning LambdaDust = 0, although its residual has a root at 600-2000 K.**
+  This affects 17% of reachable protostellar-envelope states (n_H 1e7-1e11, T_eq ~ 300-3000 K) and 12% of a
+  20,000-state random scan.
+- Cause: the residual has a stable lower root and an unstable upper one. The solver starts above the upper root,
+  climbs to the ceiling and never searches downward. The upper root exists because non-IR absorption uses the dust
+  fraction at the *previous* Dust_Temperature, so absorption does not fall with sublimation while emission does.
+- **Its answer depends on the dust temperature it is entered with.** One cell (n_H = 1e10, T = 300 K,
+  u_opt = 1e8 eV/cm^3) gives 1e4 / 618 / 317 / 127 K when entered from 300 / 680 / 2000 / 9000 K. Inside DoCooling,
+  each call seeds the next, so the gas residual depends on the order of evaluation.
+
+**`rt_eqm_dust_temp`** (RT kick side; its result is what snapshots record):
+- 37% of random states end off the root.
+- In HII gas the cause is a step-size exit, |d(T-Tdust)| < 1e-3 |T-Tdust|, which allows ~10 K errors when T >> Tdust.
+- Below 3000 K the near bracket end is never tightened.
+- Consequence: snapshot Dust_Temperature in HII regions is unreliable at the factor-2 level.
+
+**Fixes on `dust-solver-fullset`** (62426f7f, with P5 dropped in 3495bca3; pushed):
+- P1: don't start from capped fixed points; walk down from the start point to the lowest root before declaring
+  sublimation.
+- P3: `rt_eqm_dust_temp` converges on bracket width.
+- P4: the residual uses the dust fraction at the trial Tdust. This is a physics change: 16% of previously converged
+  cooling-side answers move, mostly cold-biased hysteresis cases.
+- P6: cap the climb acceleration.
+
+Rejected, P5 (Brent on Tdust instead of Tdust - T): it resolves Tdust but not T - Tdust, which is what LambdaDust
+depends on. In tightly coupled gas T - Tdust is 1e-10 to 5e-3 K, and P5's errors were 0.015 to 3e5 times T - Tdust,
+including the sign.
+
+**Results on the 20,000-state scan:**
+- Spurious ceiling pins: 2391 -> 72.
+- `rt_eqm_dust_temp` off its root: 7431 -> 1.
+- No dependence on the entry dust temperature.
+- Cost: `rt_ir_lambdadust` goes from 13.4 to 17.8 us per call (measured with P5 in place).
+
+**Sensitive test: `test/dust_temp_solvers`.**
+- It runs 50 cell states against brute-force roots of each solver's own residual, so physics changes that move the
+  root do not break it. It takes about 10 s, including the GIZMO build.
+- It fails 36 cases on 3b0923b5, 34 with only the header fix, 8 with P5, and 0 on the branch.
+
+**Still open:**
+- The envelope discontinuity in 2.2.
+- `rt_eqm_dust_temp`'s residual contains the previous Tdust through `fac_abs` = fdust(Tdust)/fdust(Tdprev). This
+  rescales gas-floored absorption by up to 1.4e6 after a hot excursion: a cold ISRF cell entered from 1e4 K moves
+  from 16.3 K to 59 K.
+- The solvers' own NaN guards are dead under -ffast-math, like every isnan in the build.
+
+**Status: not merged.** Genoa sweep arm `rootfind_sweep/fullset_nop5` (job 7232422) is running against the
+header-only arm.
 
 ## 3. Idealized-test and build-system defects
 
