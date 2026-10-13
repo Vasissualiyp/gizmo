@@ -306,7 +306,7 @@ int rt_get_lum_band_stellarpopulation(int i, int mode, double *lum, struct parti
     SET_ACTIVE_RT_CHECK();
     double f_uv=All.PhotonMomentum_fUV, f_op=All.PhotonMomentum_fOPT;
     double L = evaluate_light_to_mass_ratio(star_age, i) * m_sol / UNIT_LUM_IN_SOLAR; if(L<=0 || isnan(L)) {L=0;}
-    double sigma_eff = evaluate_NH_from_GradRho(pp[i].GradRho,pp[i].KernelRadius,pp[i].DensityAroundParticle,pp[i].NumNgb,0,i); if((sigma_eff <= 0)||(isnan(sigma_eff))) {sigma_eff=0;} // sigma here is in code units
+    double sigma_eff = evaluate_NH_from_GradRho(pp[i].GradRho,pp[i].KernelRadius,pp[i].DensityAroundParticle,pp[i].NumNgb,0,i,pp); if((sigma_eff <= 0)||(isnan(sigma_eff))) {sigma_eff=0;} // sigma here is in code units
     if(star_age <= 0.0025) {f_op=0.09;} else {if(star_age <= 0.006) {f_op=0.09*(1+((star_age-0.0025)/0.004)*((star_age-0.0025)/0.004));} else {f_op=1-0.8410937/(1+sqrt((star_age-0.006)/0.3));}}
     /* note that the metallicity doing attenuation is the -gas- opacity around the star, while here we only know the stellar metallicity,
         so we use this as a guess, but this could substantially under-estimate opacities for old stars in MW-like galaxies. But for young stars (which dominate) this is generally ok. */
@@ -1592,7 +1592,7 @@ double dust_dEdt(int i, double T, double Tdust, double dust_absorption_rate, dou
     double kappa_emission = rt_kappa_adaptive_IR_band(i, Tdust, Tdust, 1, 1, pp, cell);
     double dust_emission = fac_emission * kappa_emission * pow(Tdust,4);
 #if defined(COOLING) && !defined(RT_INFRARED) // if we aren't doing RT self-consistently, approximate outward radiative transport rate in optically-thick regime
-    double column = evaluate_NH_from_GradRho(cell[i].Gradients.Density,pp[i].KernelRadius,cell[i].Density,pp[i].NumNgb,1,i);
+    double column = evaluate_NH_from_GradRho(cell[i].Gradients.Density,pp[i].KernelRadius,cell[i].Density,pp[i].NumNgb,1,i,pp);
     double tau = column * kappa_emission;
     dust_emission /= (1 + tau*tau); // e.g. Masunaha & Inutsuka 1999, Rafikov 2007
 #endif

@@ -60,8 +60,10 @@ def compute_test_statistic(f, save_reference_solution=False, plot=False):
 @pytest.mark.parametrize("num_omp_threads", (default_omp_threads(),))
 # jaco_legacy (the jaco transcription of the standard cooling module) is held to the benchmark; the jaco variant (the
 # physically preferred starforge model) only has to run to completion.
-@pytest.mark.parametrize("extra_config_flags", [(), ("JACO=starforge",), ("JACO=starforge_legacy",)],
-                         ids=["baseline", "jaco", "jaco_legacy"])
+# COOLING_COMPACT_CROSSCHECK aborts the run if the compact-array cooling chain reads the global
+# particle arrays instead of its arguments, so reaching TimeMax is that variant's pass condition.
+@pytest.mark.parametrize("extra_config_flags", [(), ("JACO=starforge",), ("JACO=starforge_legacy",), ("COOLING_COMPACT_CROSSCHECK",)],
+                         ids=["baseline", "jaco", "jaco_legacy", "compact_crosscheck"])
 def test_gmc_cooling(num_mpi_ranks, num_omp_threads, extra_config_flags):
     test_name = "gmc_cooling"
 
@@ -71,8 +73,8 @@ def test_gmc_cooling(num_mpi_ranks, num_omp_threads, extra_config_flags):
     final_snap = get_final_snapshot(test_name, extra_config_flags)
     assert_final_time(final_snap, test_name)
 
-    if extra_config_flags == ("JACO=starforge",):
-        return  # physics deliberately differs from the module that produced the benchmark
+    if extra_config_flags in (("JACO=starforge",), ("COOLING_COMPACT_CROSSCHECK",)):
+        return  # run-to-completion variants; jaco's physics deliberately differs from the benchmark's module
 
     output_dir = variant_output_dir(test_name, extra_config_flags)
     test_stats = compute_test_statistic(f"{output_dir}/snapshot_010.hdf5", plot=True)

@@ -432,7 +432,7 @@ double Get_DtB_FaceArea_Limiter(int i, struct particle_data *pp, struct gas_cell
     return 1;
 #else
     /* define some variables */
-    double dt_entr = get_particle_timestep_in_physical(i);
+    double dt_entr = get_particle_timestep_in_physical(i, pp);
     /* check the magnitude of the predicted change in B-fields, vs. B-magnitude */
     Vec3<double> dB = cell[i].DtB * (dt_entr / All.cf_atime); /* converts to code units of Vol_code*B_code = Vol_phys*B_phys/a */
     double dBmag = dB.norm(), Bmag = cell[i].BPred.norm();
