@@ -211,6 +211,32 @@ Q swept so that R_S,B/Δx = 0.1-10, at n_H = 1e2 and 1e5. Runs are in /mnt/ceph/
 
 Status: recorded, no decision.
 
+### 1.5 Under RT_INFRARED, CoolingRate's sub-cell IR self-absorption double-counts trapping (by reading, 2026-10-12)
+`cooling/cooling.cc:1540-1546`, under `RT_INFRARED`, multiplies every heating and cooling term by
+f = 1/(1+tau_self^2), with tau_self = kappa_gas(T,T) * rho * dx/2. The terms scaled are Heat, Lambda, LambdaMetal,
+LambdaExc, LambdaRec, LambdaIon, LambdaPElec, LambdaFF, LambdaMol, LambdaDust and LambdaCompton. It is meant to correct
+for trapping in unresolved optically thick cells. Two problems:
+- **Trapping is counted twice.** The emission that survives f still enters the M1 bands through the cooling return,
+  and the RT kick absorbs band energy in the same cell, partly through the same gas opacity (the gas share). The
+  `RT_INFRARED` build already sets `COOL_LOWTEMP_THIN_ONLY` "so as not to double-count trapping"
+  (precompiler_logic.h:811), but this factor escapes that guard.
+- **It scales terms that are not radiation:** photoelectric and cosmic-ray heating (Heat) and gas-dust collisional
+  exchange (LambdaDust).
+
+**Size.**
+- In molecular gas at 1e-3 Msun cells, GIZMO's gray kappa_gas (~7e-4 cm^2/g) gives tau_self <~ 1e-3, so f ~ 1 until
+  n_H ~ 1e13.
+- Not yet measured in warm, dense, partly ionized gas (2000-8000 K). There kappa_gas's H-/Kramers term is large, and
+  tau_self may reach order unity.
+
+jaco's `starforge_legacy_RT` reproduces f for parity (rule `GIZMO_IR_SELF_ABSORPTION`); `starforge_RT` has no f.
+Fix options:
+- (a) drop f under RT_INFRARED, consistent with the COOL_LOWTEMP_THIN_ONLY intent;
+- (b) restrict f to the radiative terms.
+Sensitive test: the LTE closed box, or a cell with tau_self ~ 1, comparing the net exchange with and without f.
+Status: recorded. The f distribution is to be measured on the M2e3 shakedown (Rusty 7222668) once sinks and HII
+regions exist.
+
 ## 2. Cooling solver
 
 ### 2.1 First cooling call from a warm neutral start
