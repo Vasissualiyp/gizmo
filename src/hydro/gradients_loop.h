@@ -352,9 +352,6 @@ struct GradientsSpec
 #ifdef MHD_MODIFIED_GRADIENT
         local.MG_cgcoeff = kc[i].MG_cgcoeff;
 #endif
-#ifdef MHD_CONSTRAINED_GRADIENT_FAC_MEDDEV
-        local.PhiGrad = kc[i].Gradients.Phi;
-#endif
 #endif
 
         if(active.sph_gradients_flag_i) { local.Mass *= -1; }    /* negate as flag */

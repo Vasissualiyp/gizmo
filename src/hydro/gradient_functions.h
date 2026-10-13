@@ -110,9 +110,6 @@ struct GasGraddata_in_
 #ifdef MHD_MODIFIED_GRADIENT
     MyFloat MG_cgcoeff;
 #endif
-#ifdef MHD_CONSTRAINED_GRADIENT_FAC_MEDDEV
-    Vec3<MyFloat> PhiGrad;
-#endif
 #endif
 #ifdef SPHAV_CD10_VISCOSITY_SWITCH
     MyFloat NV_DivVel;
@@ -199,6 +196,16 @@ int GasGrad_isactive_gpu(int j, struct particle_data *P, struct gas_cell_data *C
     return 1;
 }
 
+/* weight of neighbour j in i's least-squares gradient estimator (the gradient is the sum of -weight * dp * (f_j - f_i),
+   then multiplied by NV_T); sph-like weights only in the rare ill-conditioned fallback */
+KOKKOS_INLINE_FUNCTION
+double gradient_pair_weight(const struct kernel_GasGrad *kernel, int sph_gradients_flag_i, double mass_j)
+{
+    double wk_for_grad = kernel->wk_i;
+    if(sph_gradients_flag_i && kernel->r > 0) {wk_for_grad = -kernel->dwk_i/kernel->r * mass_j;}
+    return wk_for_grad;
+}
+
 
 #if defined(MHD_CONSTRAINED_GRADIENT)
 /* Constrained-gradient per-component FaceDotB contribution: B_L/B_R state
@@ -251,33 +258,30 @@ double constrained_facedotb_delta(int k, struct GasGraddata_in_ *local,
     return FA_k * (local->GQuant.B[k] + Q_L);
 }
 
-/* Constrained-gradient MIDPOINT Phi-gradient correction. Accumulates into
- * phigrad_out[3]; runs MINMAX_CHECK only when both min/max pointers are
- * non-null. Extracted verbatim from the main pass; pass-neutral. Body is the
- * legacy MIDPOINT-and-not-DEDNER block (structurally absent in DEDNER builds,
- * matching the legacy #if — the enclosing config always co-enables DEDNER, so
- * this is a faithful-but-inert translation preserved for non-DEDNER configs). */
+/* Constrained-gradient MIDPOINT Phi-gradient. Accumulates into phigrad_out[3];
+ * runs MINMAX_CHECK only when both min/max pointers are non-null. Fits the phi
+ * gradient of i to the value of phi extrapolated from j to the face mid-point
+ * (minimising phi_L - phi_R at the faces rather than at the neighbour positions).
+ * With dp = x_i - x_j and dphi = phi_j - phi_i, a linear field has
+ * (1/2) dp.grad(phi)_j = -dphi/2, so the j-side extrapolation is kept between 0
+ * and -dphi/2 (no overshoot past the mid-point, no wrong sign), and the target
+ * dphi + that extrapolation spans half the separation, so it takes twice the
+ * ordinary least-squares weight: linear fields are reproduced exactly. Each cell
+ * builds its own gradient here; j's comes from j's own pass. */
 KOKKOS_INLINE_FUNCTION
 void constrained_phigrad(struct GasGraddata_in_ *local, struct gas_cell_data *CPj,
                          struct particle_data *Pj, struct kernel_GasGrad *kernel,
                          int sph_gradients_flag_i, double phigrad_out[3],
                          MyDouble *minphi_or_null, MyDouble *maxphi_or_null)
 {
-#if defined(MHD_CONSTRAINED_GRADIENT_MIDPOINT) && !defined(DIVBCLEANING_DEDNER)
+#ifdef MHD_CONSTRAINED_GRADIENT_MIDPOINT
     double dphi = CPj->PhiPred / Pj->Mass - local->GQuant.Phi;
     if(minphi_or_null && maxphi_or_null) { MINMAX_CHECK(dphi, (*minphi_or_null), (*maxphi_or_null)); }
     double dphi_grad_j = 0.5 * dot(kernel->dp, CPj->Gradients.Phi);
-    double dphi_grad_i = -0.5 * dot(kernel->dp, local->PhiGrad);
-    if(dphi > 0) {
-        if(dphi_grad_j>0) {dphi_grad_j=0;} else {if(dphi_grad_j<0.5*dphi) dphi_grad_j=0.5*dphi;}
-        if(dphi_grad_i<0) {dphi_grad_i=0;} else {if(dphi_grad_i>0.5*dphi) dphi_grad_i=0.5*dphi;}
-    } else {
-        if(dphi_grad_j<0) {dphi_grad_j=0;} else {if(dphi_grad_j>0.5*dphi) dphi_grad_j=0.5*dphi;}
-        if(dphi_grad_i>0) {dphi_grad_i=0;} else {if(dphi_grad_i<0.5*dphi) dphi_grad_i=0.5*dphi;}
-    }
-    double dphi_j = dphi + dphi_grad_j;
-    if(sph_gradients_flag_i) {dphi_j *= -2*kernel->wk_i;} else {dphi_j *= kernel->dwk_i/kernel->r * Pj->Mass;}
-    for(int kk=0;kk<3;kk++) {phigrad_out[kk] += dphi_j * kernel->dp[kk];}
+    double dphi_grad_j_linear = -0.5 * dphi;
+    dphi_grad_j = DMIN(DMAX(dphi_grad_j, DMIN(0., dphi_grad_j_linear)), DMAX(0., dphi_grad_j_linear));
+    double dphi_mid_weighted = -2. * gradient_pair_weight(kernel, sph_gradients_flag_i, Pj->Mass) * (dphi + dphi_grad_j);
+    for(int kk=0;kk<3;kk++) {phigrad_out[kk] += dphi_mid_weighted * kernel->dp[kk];}
 #else
     (void)local; (void)CPj; (void)Pj; (void)kernel; (void)sph_gradients_flag_i;
     (void)phigrad_out; (void)minphi_or_null; (void)maxphi_or_null;
@@ -408,7 +412,7 @@ void gradient_accumulate_neighbor(struct GasGraddata_in_ *local, struct GasGradd
         }
 #endif
 
-#if defined(MHD_CONSTRAINED_GRADIENT_MIDPOINT) && !defined(DIVBCLEANING_DEDNER)
+#ifdef MHD_CONSTRAINED_GRADIENT_MIDPOINT
         {
             double phigrad_delta[3] = {0,0,0};
             constrained_phigrad(local, &CellP[j], &P[j], kernel, sph_gradients_flag_i,
@@ -572,8 +576,7 @@ void gradient_accumulate_neighbor(struct GasGraddata_in_ *local, struct GasGradd
     /* ---- GRADIENT ACCUMULATION ---- */
     if(kernel->r < kernel->h_i)
     {
-        double wk_for_grad = kernel->wk_i;
-        if(sph_gradients_flag_i && kernel->r > 0) {wk_for_grad = -kernel->dwk_i/kernel->r * P[j].Mass;}
+        double wk_for_grad = gradient_pair_weight(kernel, sph_gradients_flag_i, P[j].Mass);
         for(int k=0;k<3;k++)
         {
             double wk_xyz_i = -wk_for_grad * kernel->dp[k];
@@ -727,10 +730,7 @@ void gradient_accumulate_neighbor_iter(struct GasGraddata_in_ *local, struct Gas
 
 #ifdef MHD_CONSTRAINED_GRADIENT_MIDPOINT
         {
-            /* MIDPOINT PhiGrad correction. constrained_phigrad's body is the
-             * legacy !DEDNER block; in DEDNER configs it is inert, so PhiGrad
-             * stays 0 — bitwise-identical to the full path's out->Gradients[k].Phi
-             * (also unwritten under DEDNER). No MINMAX (min/max unused on iter>0). */
+            /* mid-point phi-gradient fit, as in the main pass. No MINMAX (min/max unused on iter>0). */
             double phigrad_delta[3] = {0,0,0};
             constrained_phigrad(local, &CellP[j], &P[j], kernel, sph_gradients_flag_i,
                                 phigrad_delta, nullptr, nullptr);

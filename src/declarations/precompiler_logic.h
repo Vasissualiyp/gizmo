@@ -781,13 +781,6 @@
 #endif
 
 
-#ifdef MHD_CONSTRAINED_GRADIENT
-/* make sure mid-point gradient calculation for cleaning terms is enabled */
-#ifndef MHD_CONSTRAINED_GRADIENT_MIDPOINT
-#define MHD_CONSTRAINED_GRADIENT_MIDPOINT
-#endif
-#endif
-
 /* MHD_BATTERY_MECHANISMS: in-situ EMF generation. Bitfield, see Template_Config.sh.
    bit 0 (=1) Biermann, bit 1 (=2) radiative-ionization, bit 2 (=4) dust TVA, bit 3 (=8) dust-explicit. */
 #ifdef MHD_BATTERY_MECHANISMS
@@ -1290,6 +1283,16 @@
 #ifdef HYDRO_SPH /* MHD switches specific to SPH MHD */
 #define SPH_TP12_ARTIFICIAL_RESISTIVITY   /* turns on magnetic dissipation ('artificial resistivity'): uses tricco switch =h*|gradB|/|B| */
 #endif
+#endif
+
+/* constrained gradients (and MHD_MODIFIED_GRADIENT, which turns them on above) fit the cleaning-field gradient at the
+   face mid-points; that needs the Dedner field, so it is on exactly when both are, whatever the order they were set in */
+#if defined(MHD_CONSTRAINED_GRADIENT) && defined(DIVBCLEANING_DEDNER)
+#ifndef MHD_CONSTRAINED_GRADIENT_MIDPOINT
+#define MHD_CONSTRAINED_GRADIENT_MIDPOINT
+#endif
+#else
+#undef MHD_CONSTRAINED_GRADIENT_MIDPOINT
 #endif
 
 #if defined(TURB_DIFF_ENERGY) || defined(TURB_DIFF_VELOCITY) || defined(TURB_DIFF_MASS) || defined(TURB_DIFF_METALS)
