@@ -234,8 +234,14 @@ Fix options:
 - (a) drop f under RT_INFRARED, consistent with the COOL_LOWTEMP_THIN_ONLY intent;
 - (b) restrict f to the radiative terms.
 Sensitive test: the LTE closed box, or a cell with tau_self ~ 1, comparing the net exchange with and without f.
-Status: recorded. The f distribution is to be measured on the M2e3 shakedown (Rusty 7222668) once sinks and HII
-regions exist.
+Measured on the M2e3 shakedown (Rusty 7222668, 2026-10-13), at t ~ 0.79 when the first sink forms, with the factor
+validated to round-off against GIZMO's compiled opacity:
+- max 1 - f = 5e-9;
+- the cooling and heating removed are ~1e-14 of the totals;
+- a pre-sink core at n_H = 8e10 reached tau = 0.015.
+At 1e-3 Msun cells, tau ~ 1 needs n_H >~ 5e10 even in warm, partly ionized gas. So f matters only in dense protostellar
+envelopes, not in HII regions. Tool: `m2e3_jaco_shakedown/measure_selfabs.py`, also run by `watch_shakedown.py`.
+Status: recorded; negligible at production resolution so far. Recheck after HII regions form.
 
 ## 2. Cooling solver
 
