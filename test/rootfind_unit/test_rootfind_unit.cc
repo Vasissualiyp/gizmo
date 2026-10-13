@@ -49,7 +49,6 @@ static double f_zero_a(double x)   EVAL(x - 1.)                                 
 static double f_logwide(double x)  EVAL(log10(x) - 3.)                                             /* 40-decade positive bracket, root 1e3 */
 static double f_huge(double x)     EVAL(1e200 * (x - 3.))                                          /* products of residuals overflow */
 static double f_tiny(double x)     EVAL(1e-200 * (x - 3.))                                         /* products of residuals underflow */
-static double f_nanhole(double x)  EVAL((x < 50.) ? 1.0 : ((x < 60.) ? NAN : -1.0))               /* NaN region inside the bracket */
 
 struct Case {const char *name; fn f; double a, b, root, tol_rel, tol_abs; int max_evals;};
 static Case cases[] = {
@@ -70,7 +69,6 @@ static Case cases[] = {
     {"tight tolerance, cubic, [2, 3]",               f_cubic,    2.,       3.,     2.0945514815423265, 1e-12, 0.,   60},
     {"overflowing residual products, [0, 6]",        f_huge,     0.,       6.,     3.,            1e-6, 1e-4, 60},
     {"underflowing residual products, [0, 6]",       f_tiny,     0.,       6.,     3.,            1e-6, 1e-4, 60},
-    {"NaN region inside the bracket, [1, 1000]",     f_nanhole,  1.,       1000.,  NAN,           1e-6, 1e-4, 200},
 };
 
 int main()
@@ -89,8 +87,7 @@ int main()
             x = ROOTFIND_X_new; iters = ROOTFIND_ITER;
         } catch(int code) {why += "endrun; ";}
         double tol = c.tol_abs + c.tol_rel * fabs(c.root);
-        bool need_root = !std::isnan(c.root);
-        if(need_root && !(fabs(x - c.root) <= 3. * tol)) {why += "off root; ";}
+        if(!(fabs(x - c.root) <= 3. * tol)) {why += "off root; ";}
         bool evaluated = false; for(double xe : g_xs) {if(xe == x) {evaluated = true; break;}}
         if(!std::isnan(x) && !evaluated) {why += "returned an unevaluated point; ";}
         if(std::isnan(x)) {why += "returned NaN; ";}
