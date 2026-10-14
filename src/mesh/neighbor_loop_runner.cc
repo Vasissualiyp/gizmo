@@ -3914,7 +3914,7 @@ static void nlr_iter_dispatch_subgroup_mode_b_remote(NlrIterDriver<Spec>& drv, i
  * so the two cannot answer differently about the same pair.  The reach is the
  * query's alone, which is what makes this the ONEWAY case: no neighbour supply
  * radius is consulted, and none is mirrored to the device to consult. */
-template <typename Spec>
+template <typename Spec, bool ReadsLeafMirror = false>
 struct NlrModeDReduceLeaf {
     const typename Spec::DeviceContext *ctx;
     const typename Spec::ActiveData    *active;
@@ -3930,10 +3930,29 @@ struct NlrModeDReduceLeaf {
      * pointing at a host stack object and fault on device. */
     const typename Spec::CallScalars   *cs;
     struct GxMotionTargetSet            motion_targets{};   /* for a loop that writes neighbour motion */
+    GxLeafMirrorView                    leaf_mirror{};      /* read when ReadsLeafMirror: P[j].Pos and P[j].Type, exact, in device memory */
 
     KOKKOS_INLINE_FUNCTION
     void visit(int j, double qx, double qy, double qz, double reach)
     {
+        /* On a device batch the same three tests run in the order type -> geometry -> mass, the first two on the
+         * leaf mirror, so the particle record is read only for slots that already pass both.  The tests have no
+         * side effects and the mirror is an exact copy, so the accepted set is the same in either order. */
+        if constexpr (ReadsLeafMirror) {
+            if(!(supply_mask & (1u << (unsigned int)leaf_mirror.type[j]))) {return;}
+            const Vec3<MyDouble> &x = leaf_mirror.pos[j];
+            if(!gx_pair_accept_wrap_and_test(qx - (double)x[0], qy - (double)x[1], qz - (double)x[2],
+                                             reach, 0.0, NGB_SEARCH_ONEWAY)) {return;}
+            const struct particle_data &Pj = ctx->P[j];
+            /* A loop that never writes its neighbours has no concurrent Mass writer: a plain load is exact. */
+            if constexpr (nlr_spec_modeb_eval_omp<Spec>() == ModeBEvalOMP::BitwiseReadonly) {if(Pj.Mass <= 0) {return;}}
+            else {if(Kokkos::atomic_load(&Pj.Mass) <= 0) {return;}}
+            if constexpr (nlr_spec_writes_neighbour_motion_v<Spec>) {gx_motion_target_mark(motion_targets, j);}
+            IdentitySidecar id{};
+            typename Spec::NeighborData nb = Spec::load_neighbor(*ctx, j, id, *active);
+            Spec::pair_kernel(*active, nb, *accum, *scatter, *cs);
+            return;
+        }
         const struct particle_data &Pj = ctx->P[j];
         if(!(supply_mask & (1u << (unsigned int)Pj.Type))) {return;}
         /* Read atomically: a pair kernel that deposits mass into its neighbours
@@ -3949,6 +3968,34 @@ struct NlrModeDReduceLeaf {
         Spec::pair_kernel(*active, nb, *accum, *scatter, *cs);
     }
 };
+
+/* One query of a fused Mode-D batch: the batch's own locals [0, n_local) search the
+ * whole tree from the root; a received query kk resumes at the start nodes its
+ * sender's walk exported to this rank. */
+template <typename Leaf, typename ActiveData>
+KOKKOS_INLINE_FUNCTION
+void nlr_mode_d_walk_query(int kk, int n_local, const ActiveData &a, const int *nn_d, const int *nodes_d,
+                           const GxDeviceTreeView &tree, Leaf &leaf, int *anomaly_d, unsigned int type_mask)
+{
+    if(kk < n_local) {
+        gx_device_tree_walk_from_root((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
+                                      (double)a.h_search, tree, leaf, anomaly_d, type_mask);
+        return;
+    }
+    const int kr = kk - n_local;
+    /* No start nodes: nothing on this rank was exported to this query.
+     * ⚠ This is only correct because every Mode-B-wire query is
+     * TARGETED: a query carrying no start nodes reached nothing on this
+     * rank.  There is no broadcast query shape on this wire.  The host
+     * walker skips it rather than walking from anywhere, and so does
+     * this -- note it leaves the ZEROED accumulator in place,
+     * which is the right reply. */
+    if(nn_d[kr] <= 0) {return;}
+    gx_device_tree_walk((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
+                        (double)a.h_search,
+                        nodes_d + (size_t)kr * NODELISTLENGTH, nn_d[kr],
+                        tree, leaf, anomaly_d, type_mask);
+}
 
 
 /* What a walk's anomaly report means, for the three sites that stop the run on
@@ -4183,16 +4230,33 @@ static void nlr_mode_d_local_reduce(const typename Spec::DeviceContext &ctx,
         });
 
     const struct GxMotionTargetSet motion_targets = gx_motion_target_view();
-    nlr_walk_for_sources(Spec::loop_name, n, KOKKOS_LAMBDA(int kk) {
-        Spec::zero_accum(accums_out[kk]);
-        const int i = active_idx[kk];
-        ActiveData  a = Spec::load_active(ctx, active_slot[kk], i, radii[kk], cs);
-        ScatterData s{};
-        NlrModeDReduceLeaf<Spec> leaf{&ctx, &a, &accums_out[kk], &s, supply_mask, &cs};
-        leaf.motion_targets = motion_targets;
-        gx_device_tree_walk_from_root((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
-                                      radii[kk], tree, leaf, anomaly, supply_mask);
-    });
+    /* As on the multi-rank batch: the leaf mirror on a device batch when this rank has it, else the particle records. */
+    const GxLeafMirrorView leaf_mirror = (n >= GPU_MIN_SOURCES_FOR_WALK_OFFLOAD) ? gx_leaf_mirror_current(tree.local_particle_slots)
+                                                                                 : GxLeafMirrorView{};
+    if(leaf_mirror.pos && leaf_mirror.type) {
+        nlr_walk_for_sources(Spec::loop_name, n, KOKKOS_LAMBDA(int kk) {
+            Spec::zero_accum(accums_out[kk]);
+            const int i = active_idx[kk];
+            ActiveData  a = Spec::load_active(ctx, active_slot[kk], i, radii[kk], cs);
+            ScatterData s{};
+            NlrModeDReduceLeaf<Spec, true> leaf{&ctx, &a, &accums_out[kk], &s, supply_mask, &cs};
+            leaf.motion_targets = motion_targets;
+            leaf.leaf_mirror = leaf_mirror;
+            gx_device_tree_walk_from_root((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
+                                          radii[kk], tree, leaf, anomaly, supply_mask);
+        });
+    } else {
+        nlr_walk_for_sources(Spec::loop_name, n, KOKKOS_LAMBDA(int kk) {
+            Spec::zero_accum(accums_out[kk]);
+            const int i = active_idx[kk];
+            ActiveData  a = Spec::load_active(ctx, active_slot[kk], i, radii[kk], cs);
+            ScatterData s{};
+            NlrModeDReduceLeaf<Spec> leaf{&ctx, &a, &accums_out[kk], &s, supply_mask, &cs};
+            leaf.motion_targets = motion_targets;
+            gx_device_tree_walk_from_root((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
+                                          radii[kk], tree, leaf, anomaly, supply_mask);
+        });
+    }
 }
 
 /* Build this rank's queries where its particles already are.
@@ -4433,31 +4497,30 @@ struct NlrPeerAnswerDeviceFused {
             });
 
         const struct GxMotionTargetSet motion_targets = gx_motion_target_view();
-        nlr_walk_for_sources(Spec::loop_name, M, KOKKOS_LAMBDA(int kk) {
-            Spec::zero_accum(acc_d[kk]);
-            const ActiveData& a = (kk < n_local) ? ql[kk] : q_d[kk - n_local];
-            ScatterData s{};
-            NlrModeDReduceLeaf<Spec> leaf{&ctx, &a, &acc_d[kk], &s, neighbor_type_mask, &cs};
-            leaf.motion_targets = motion_targets;
-            if(kk < n_local) {
-                gx_device_tree_walk_from_root((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
-                                              (double)a.h_search, tree, leaf, anomaly_d, neighbor_type_mask);
-                return;
-            }
-            const int kr = kk - n_local;
-            /* No start nodes: nothing on this rank was exported to this query.
-             * ⚠ This is only correct because every Mode-B-wire query is
-             * TARGETED: a query carrying no start nodes reached nothing on this
-             * rank.  There is no broadcast query shape on this wire.  The host
-             * walker skips it rather than walking from anywhere, and so does
-             * this -- note it leaves the ZEROED accumulator above in place,
-             * which is the right reply. */
-            if(nn_d[kr] <= 0) {return;}
-            gx_device_tree_walk((double)a.pos[0], (double)a.pos[1], (double)a.pos[2],
-                                (double)a.h_search,
-                                nodes_d + (size_t)kr * NODELISTLENGTH, nn_d[kr],
-                                tree, leaf, anomaly_d, neighbor_type_mask);
-        });
+        /* A device batch reads type and position from the leaf mirror when this rank has it current; otherwise, and
+         * on the host tier, from the particle records.  Either source gives the same answer, so the choice is rank-local. */
+        const GxLeafMirrorView leaf_mirror = (M >= GPU_MIN_SOURCES_FOR_WALK_OFFLOAD) ? gx_leaf_mirror_current(tree.local_particle_slots)
+                                                                                     : GxLeafMirrorView{};
+        if(leaf_mirror.pos && leaf_mirror.type) {
+            nlr_walk_for_sources(Spec::loop_name, M, KOKKOS_LAMBDA(int kk) {
+                Spec::zero_accum(acc_d[kk]);
+                const ActiveData& a = (kk < n_local) ? ql[kk] : q_d[kk - n_local];
+                ScatterData s{};
+                NlrModeDReduceLeaf<Spec, true> leaf{&ctx, &a, &acc_d[kk], &s, neighbor_type_mask, &cs};
+                leaf.motion_targets = motion_targets;
+                leaf.leaf_mirror = leaf_mirror;
+                nlr_mode_d_walk_query(kk, n_local, a, nn_d, nodes_d, tree, leaf, anomaly_d, neighbor_type_mask);
+            });
+        } else {
+            nlr_walk_for_sources(Spec::loop_name, M, KOKKOS_LAMBDA(int kk) {
+                Spec::zero_accum(acc_d[kk]);
+                const ActiveData& a = (kk < n_local) ? ql[kk] : q_d[kk - n_local];
+                ScatterData s{};
+                NlrModeDReduceLeaf<Spec> leaf{&ctx, &a, &acc_d[kk], &s, neighbor_type_mask, &cs};
+                leaf.motion_targets = motion_targets;
+                nlr_mode_d_walk_query(kk, n_local, a, nn_d, nodes_d, tree, leaf, anomaly_d, neighbor_type_mask);
+            });
+        }
 
         const int anomaly_seen = *anomaly_d;
         /* The local half is ASSIGNED: a local query is evaluated exactly once per

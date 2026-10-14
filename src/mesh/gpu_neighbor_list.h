@@ -181,14 +181,25 @@ extern "C" {
 }
 #endif
 
-/* "P[i].KernelRadius (or another input of its reach) was just written": call after any
- * such write.  A kept owned segment holds each member's reach in its row and the largest
- * reach below each tile and node; the next gpu_ngb_list_build over it rewrites the marked
- * rows and raises the bands above them before it walks (a mark past a few million
- * particles rebuilds the segment instead).  The imported segment needs no marks: an
- * imported particle's radius does not change while it is imported. */
+/* "P[i] moved, or its KernelRadius (or another input of its reach) changed": call after any
+ * drift or other write of either.  A kept owned segment holds each member's position and
+ * reach in its row and the largest reach below each tile and node; the next gpu_ngb_list_build
+ * over it rewrites the marked rows and raises the bands above them before it walks (a mark
+ * past a few million particles rebuilds the segment instead).  The device leaf mirror below
+ * takes the position from the same mark.  The imported segment needs no marks: an imported
+ * particle's radius does not change while it is imported. */
 void gizmo_mark_kernel_radius_dirty_indices(const int *indices, int n);
 void gizmo_mark_kernel_radius_dirty_range(int start, int end);
+/* Only the radius changed; the position did not (a converged density, a radius initialised). */
+void gizmo_mark_kernel_radius_only_dirty_indices(const int *indices, int n);
+
+/* The device leaf mirror: each tree particle slot's position and type, in device memory, which the
+ * device neighbour walk reads in place of the particle records (gx_leaf_mirror_current, neighbor_list.h).
+ * Every write of a tree particle's position or type outside a drift must be announced here. */
+void gizmo_mark_position_dirty_indices(const int *indices, int n);   /* positions written outside a drift */
+void gizmo_mark_type_dirty(int particle);                           /* the particle's type changed */
+void gpu_leaf_mirror_note_slots_moved(void);   /* particles changed slots (decomposition, rearrangement): refill it whole */
+void gpu_leaf_mirror_release(void);            /* the tree is freed: the mirror goes with it */
 
 /* Build GPU-accelerated CSR neighbor list.
    If cached_idx is non-NULL and valid, reuses its tiles+BVH.

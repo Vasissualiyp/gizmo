@@ -78,18 +78,122 @@ gpu_spatial_index_t *gpu_step_sidx_ptr(void) { return &g_step_sidx; }
 gpu_spatial_index_t *gpu_step_sidx_alltypes_ptr(void) { return &g_step_sidx_alltypes; }
 
 
-/* A radius was written (gpu_neighbor_list.h).  Each kept owned segment registers its source range
- * with the dirty tracker, so a mark reaches every segment that holds the particle; the ghost-exchange
- * supply cache holds membership only and needs none. */
+/* A particle moved or its reach changed (gpu_neighbor_list.h).  Each kept owned segment registers its
+ * source range with the dirty tracker, so a mark reaches every segment that holds the particle, and the
+ * leaf mirror takes the position from it; the ghost-exchange supply cache holds membership only and
+ * needs none. */
 void gizmo_mark_kernel_radius_dirty_indices(const int *indices, int n)
 {
     if(!indices || n <= 0) return;
-    gpu_dirty_tracker_mark_indices(indices, n);
+    gpu_dirty_tracker_mark_indices(indices, n, GPU_DIRTY_FIELD_SPATIAL);
 }
 void gizmo_mark_kernel_radius_dirty_range(int start, int end)
 {
     if(end <= start) return;
-    gpu_dirty_tracker_mark_range(start, end);
+    gpu_dirty_tracker_mark_range(start, end, GPU_DIRTY_FIELD_SPATIAL);
+}
+void gizmo_mark_kernel_radius_only_dirty_indices(const int *indices, int n)
+{
+    if(!indices || n <= 0) return;
+    gpu_dirty_tracker_mark_indices(indices, n, GPU_DIRTY_FIELD_RADIUS);
+}
+void gizmo_mark_position_dirty_indices(const int *indices, int n)
+{
+    if(!indices || n <= 0) return;
+    gpu_dirty_tracker_mark_indices(indices, n, GPU_DIRTY_FIELD_POSITION);
+}
+void gizmo_mark_type_dirty(int particle)
+{
+    if(particle >= 0) {gpu_dirty_tracker_mark_indices(&particle, 1, GPU_DIRTY_FIELD_TYPE);}
+}
+
+/* ---- The device leaf mirror (neighbor_list.h).  Position and type of every tree particle slot, indexed by
+ * particle index, sized to All.TreeParticleSlots so that a live insertion lands inside it.  One dirty-tracker
+ * registration on POSITION|TYPE feeds it (drifts mark it through the spatial marks; non-drift position writers
+ * and type changes mark it explicitly), and a slots-moved count forces a whole fill after a decomposition or a
+ * rearrangement, steps which already pay O(N).  Every other refresh is O(marked slots), and nothing here runs
+ * until a device walk asks for the mirror, so a step whose walks all stay on the host never touches it. ---- */
+static Vec3<MyDouble>     *g_leaf_pos = nullptr;
+static unsigned char      *g_leaf_type = nullptr;
+static int                 g_leaf_capacity = 0;
+static gpu_dirty_handle_t  g_leaf_dirty = -1;
+static int                 g_leaf_unavailable = 0;      /* setup failed: not retried until the tree is released */
+static unsigned long long  g_leaf_slots_moved = 1;          /* bumped whenever particles change slots */
+static unsigned long long  g_leaf_slots_moved_filled = 0;   /* its value at the last whole fill */
+/* Marked slots above which the next use fills the mirror whole instead of slot by slot.  This is the value
+ * the mirror's performance was measured with end to end (upkeep well under 1% of the walk it serves); the
+ * crossover between the two refresh forms has not been priced on its own. */
+#define LEAF_MIRROR_WHOLE_FILL_THRESHOLD (1 << 18)
+
+void gpu_leaf_mirror_note_slots_moved(void) {g_leaf_slots_moved++;}
+
+void gpu_leaf_mirror_release(void)
+{
+    if(g_leaf_pos)  {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_leaf_pos);  g_leaf_pos = nullptr;}
+    if(g_leaf_type) {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_leaf_type); g_leaf_type = nullptr;}
+    gpu_dirty_tracker_unregister(g_leaf_dirty); g_leaf_dirty = -1;
+    g_leaf_capacity = 0;
+    g_leaf_slots_moved_filled = 0;
+    g_leaf_unavailable = 0;
+}
+
+struct LeafMirrorCollect {std::vector<int> *list; int limit;};
+static void leaf_mirror_collect_cb(int j, void *userdata)
+{
+    LeafMirrorCollect *c = (LeafMirrorCollect *) userdata;
+    if(j >= 0 && j < c->limit) {c->list->push_back(j);}
+}
+
+GxLeafMirrorView gx_leaf_mirror_current(int n_reachable)
+{
+    const GxLeafMirrorView none;
+    const int slots = All.TreeParticleSlots;
+    if(g_leaf_unavailable || slots <= 0 || n_reachable <= 0 || n_reachable > slots || n_reachable > NumPart) {return none;}
+    if(g_leaf_capacity < slots) {
+        /* Both arrays and the registration, or none of them: nothing partial is ever published.  A refusal
+         * (device memory, or no free tracker slot) leaves this rank on the particle records until the tree
+         * is next released, rather than retrying the same allocation on every batch. */
+        gpu_leaf_mirror_release();
+        Vec3<MyDouble> *pos  = (Vec3<MyDouble> *) gizmo_gpu_alloc_device((size_t)slots * sizeof(Vec3<MyDouble>), "leaf_mirror_pos");
+        unsigned char  *type = (unsigned char *) gizmo_gpu_alloc_device((size_t)slots * sizeof(unsigned char), "leaf_mirror_type");
+        const gpu_dirty_handle_t dirty = (pos && type) ?
+            gpu_dirty_tracker_register(0, slots, 0, GPU_DIRTY_FIELD_POSITION | GPU_DIRTY_FIELD_TYPE, LEAF_MIRROR_WHOLE_FILL_THRESHOLD) : -1;
+        if(dirty < 0) {
+            if(pos)  {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(pos);}
+            if(type) {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(type);}
+            g_leaf_unavailable = 1;
+            return none;
+        }
+        g_leaf_pos = pos; g_leaf_type = type; g_leaf_dirty = dirty; g_leaf_capacity = slots;
+        g_leaf_slots_moved_filled = 0;
+    }
+    struct particle_data *Pd = P;
+    Vec3<MyDouble> *lp = g_leaf_pos;
+    unsigned char  *lt = g_leaf_type;
+    const int n_live = (NumPart < slots) ? NumPart : slots;
+    if(g_leaf_slots_moved_filled != g_leaf_slots_moved || gpu_dirty_tracker_is_all_dirty(g_leaf_dirty)) {
+        Kokkos::parallel_for("leaf_mirror_fill", n_live, KOKKOS_LAMBDA(int j) {lp[j] = Pd[j].Pos; lt[j] = (unsigned char)Pd[j].Type;});
+        Kokkos::fence();
+        gpu_dirty_tracker_clear(g_leaf_dirty);
+        g_leaf_slots_moved_filled = g_leaf_slots_moved;
+    } else if(gpu_dirty_tracker_popcount(g_leaf_dirty) > 0) {
+        static std::vector<int> marked; marked.clear();
+        LeafMirrorCollect collect = {&marked, n_live};
+        gpu_dirty_tracker_consume(g_leaf_dirty, leaf_mirror_collect_cb, &collect);
+        const int n_marked = (int) marked.size();
+        if(n_marked > 0) {
+            int *idx = (int *) gizmo_gpu_alloc_shared((size_t)n_marked * sizeof(int), "leaf_mirror_marked");
+            if(!idx) {g_leaf_slots_moved_filled = 0; return none;}   /* the marks are consumed: the next use fills whole */
+            for(int k = 0; k < n_marked; k++) {idx[k] = marked[k];}
+            Kokkos::parallel_for("leaf_mirror_refresh", n_marked, KOKKOS_LAMBDA(int k) {
+                const int j = idx[k]; lp[j] = Pd[j].Pos; lt[j] = (unsigned char)Pd[j].Type;});
+            Kokkos::fence();
+            Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(idx);
+        }
+    }
+    GxLeafMirrorView view;
+    view.pos = g_leaf_pos; view.type = g_leaf_type;
+    return view;
 }
 
 /* The owned particles' epoch: bumped whenever an index's rows over the owned
@@ -111,7 +215,7 @@ static uint64_t g_sidx_member_loss_epoch = 0;
 void gpu_sidx_notify_member_lost(int particle)
 {
     g_sidx_member_loss_epoch++;
-    gpu_dirty_tracker_mark_indices(&particle, 1);   /* the gas index retires its slot at its next maintenance */
+    gpu_dirty_tracker_mark_indices(&particle, 1, GPU_DIRTY_FIELD_ALL);   /* the gas index retires its slot at its next maintenance */
 }
 
 /* The order peano_hilbert_order last left the rank's particles in, recorded with the layout change that
@@ -1454,7 +1558,8 @@ static int sidx_build_segment_now(const struct SidxParticleSource &src, int main
      * here can mutate it, so the range starts clean: the first refresh would
      * recompute values it already holds. */
     if(maintained) {
-        seg->dirty_handle = gpu_dirty_tracker_register(src.base, src.count, 1);
+        /* Rows are computed from positions and radii; a lost member arrives as an all-fields mark. */
+        seg->dirty_handle = gpu_dirty_tracker_register(src.base, src.count, 1, GPU_DIRTY_FIELD_SPATIAL, 0);
         if(seg->dirty_handle < 0) {seg->rebuild_needed = 1;}   /* untracked, it cannot be kept: rebuilt on its next use */
     }
     return SIDX_BUILT;

@@ -39,6 +39,7 @@ static void domain_particle_layout_changed(const char *reason, int particles_ord
      * particles_ordered: this decomposition also left them in curve order. */
     ghost_exchange_supply_identity_changed(reason);
     if(particles_ordered) {gpu_sidx_notify_owned_reordered();} else {gpu_sidx_notify_owned_changed();}
+    gpu_leaf_mirror_note_slots_moved();
 }
 
 

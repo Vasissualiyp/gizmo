@@ -1692,6 +1692,9 @@ void force_tree_note_type_presence(int particle)
     /* A type change moves the particle into or out of a kept neighbour index's pool.  Becoming gas (a grain
      * promoted) is a member the gas index does not hold, so it is rebuilt on next use; leaving gas (a star
      * or a sink formed) is one the gas index may keep (gpu_sidx_notify_member_lost). */
+    /* The device leaf mirror holds every slot's type, so it is told whether or not a standing tree needs its node
+     * bits -- bounded by the tree's slots, not NumPart: a spawned child is inserted before NumPart counts it. */
+    if(particle >= 0 && particle < All.TreeParticleSlots) {gizmo_mark_type_dirty(particle);}
     if(particle >= 0 && particle < NumPart && P[particle].Type != 0) {gpu_sidx_notify_member_lost(particle);}
     else {gpu_sidx_notify_owned_changed();}
     if(!force_tree_is_allocated() || particle < 0 || particle >= All.TreeParticleSlots) {return;}
@@ -1808,6 +1811,7 @@ void force_add_element_to_tree(int iparent, int ichild)
      * element into the new slot and only settles the type further on -- so the sites that assign a
      * final type call this as well; the raise is monotone, so the repeat can only over-claim. */
     force_tree_note_type_presence(ichild);
+    gizmo_mark_position_dirty_indices(&ichild, 1);   /* the child is now reachable at its position */
 
     /* Each insertion stales the LET / pseudo-particle
      * moments shipped on the last full build.  Mass+CoM remain conserved at
@@ -3936,6 +3940,7 @@ void force_treefree(void)
          * for the run. */
         gpu_gravity_tree_invalidate_currency();
         gpu_gravity_tree_release();
+        gpu_leaf_mirror_release();   /* the device leaf mirror lives and dies with the tree */
         if(Nextnode)      {gpu_tree_free_bytes(Nextnode);      Nextnode      = NULL;}
         if(Extnodes_base) {gpu_tree_free_bytes(Extnodes_base); Extnodes_base = NULL;}
         if(Nodes_base)    {gpu_tree_free_bytes(Nodes_base);    Nodes_base    = NULL;}
