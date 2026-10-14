@@ -16,10 +16,7 @@
 #include "ghost_exchange_spec.h"
 #include "ghost_writeback.h"
 #include "../hydro/hydro_corridor.h"   /* gizmo_hydro_corridor_import_gas_ghosts */
-
-extern void gpu_build_symmetric_neighbor_list(struct particle_data *P, int num_total,
-    int *active_indices, int num_active, neighbor_list_t *out,
-    double search_radius_factor);
+#include "gpu_neighbor_list.h"           /* gpu_build_symmetric_neighbor_list, gizmo_sym_neighbor_list_device */
 
 /* Forward declaration of the out-of-line host All accessor (defined in
  * core/predict.cc). Retained as a stylistic intent-tag for host-snapshot
@@ -249,7 +246,8 @@ static inline void gizmo_hydro_density_import_ghosts_fresh_no_drift(double safet
    external_csr and transport_subcycle, and TRANSPORT_SUBCYCLE forces Mode A).
    So on Mode B the ghost exchange + CSR build are pure dead work — skipped
    here; only the active-index list is built. */
-static inline void gizmo_gradients_prep_symlist(double safety, double search_fac, bool is_mode_b)
+static inline void gizmo_gradients_prep_symlist(double safety, double search_fac, bool is_mode_b,
+                                                gpu_neighbor_list_t *keep_device)   /* the list's device copy, for device consumers; or NULL */
 {
     /* active-index allocation (persists across gradients + hydro; used by the
        request-driven Mode B walkers as their active list) */
@@ -301,7 +299,8 @@ static inline void gizmo_gradients_prep_symlist(double safety, double search_fac
 
     /* build the symmetric CSR list (max(h_i,h_j) search radius) */
     double t_sym = my_second();
-    gpu_build_symmetric_neighbor_list(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac);
+    gpu_build_symmetric_neighbor_list(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac,
+                                      keep_device);
     if(ThisTask == 0) {PRINT_STATUS("Symmetric neighbor list: %d active, %lld pairs (%.4f s)",
                                     gizmo_sym_num_active, (long long)gizmo_sym_neighbor_list.total_pairs, timediff(t_sym, my_second()));}
 }
@@ -322,12 +321,13 @@ static inline void gizmo_gradients_refresh_symlist(double safety, double search_
     }
     if(NTask > 1) {
         double t_refresh = my_second();
-        free_neighbor_list(&gizmo_sym_neighbor_list);
+        gizmo_sym_csr_free();
         ghost_exchange_cleanup();
         const double t_gi_symm = my_second();
         gizmo_hydro_corridor_import_gas_ghosts(safety); /* active gas, or all gas on an MG step */
         cpu_charge_child(CPU_GHOSTIMPORT_SYMM, timediff(t_gi_symm, my_second()));
-        gpu_build_symmetric_neighbor_list(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac);
+        gpu_build_symmetric_neighbor_list(P, NumPart, gizmo_sym_active_indices, gizmo_sym_num_active, &gizmo_sym_neighbor_list, search_fac,
+                                          &gizmo_sym_neighbor_list_device);
         if(ThisTask == 0) {PRINT_STATUS("Ghost refresh + CSR rebuild after gradients: %lld pairs (%.4f s)",
                                         (long long)gizmo_sym_neighbor_list.total_pairs, timediff(t_refresh, my_second()));}
     }

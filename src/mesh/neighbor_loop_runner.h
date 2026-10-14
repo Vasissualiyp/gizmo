@@ -1288,6 +1288,10 @@ struct nlr_external_csr {
     int        *neighbors;       /* len total_pairs; 32-bit local indices */
     int64_t     total_pairs;
     const char *owner_name;      /* diagnostic, e.g. "corridor:gradients" */
+    const gpu_neighbor_list_t *device = nullptr;
+                                 /* optional: the same CSR already in device memory. Borrowed, read
+                                  * in place and never freed by the runner; nullptr => the runner
+                                  * uploads the host arrays above for the call. */
 };
 
 struct neighbor_loop_args {

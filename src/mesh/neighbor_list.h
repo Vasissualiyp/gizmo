@@ -249,5 +249,6 @@ extern int *gizmo_sym_active_indices;
 extern int gizmo_sym_num_active;
 extern int gizmo_sym_num_active_global;
 void gizmo_sym_neighbor_list_free(void);
+void gizmo_sym_csr_free(void);   /* the shared list's host CSR and its device twin, leaving the active indices */
 
 #endif /* NEIGHBOR_LIST_H */

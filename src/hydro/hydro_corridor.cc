@@ -209,7 +209,7 @@ void gizmo_hydro_corridor_begin(void)
      * build this list themselves. */
     const double gsl_safety = gizmo_ghost_safety_factor();
     if(g_corridor_mode == GizmoHydroCorridorMode::MODE_B) {
-        gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, true);
+        gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, true, NULL);
         return;
     }
 
@@ -217,7 +217,7 @@ void gizmo_hydro_corridor_begin(void)
      * active list + gizmo_sym_* CSR once for the whole corridor span. With one
      * task there is no import to carry the all-gas drift, so it is done here. */
     if(g_mg_needs_all_gas && NTask == 1) {drift_local_gas_to_current_time();}
-    gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false);
+    gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false, &gizmo_sym_neighbor_list_device);
 
     /* Publish the corridor's view ONLY when the runner's caller-owned-pool
      * contract can be satisfied: at NTask>1 that requires a LIVE ghost pool
@@ -233,6 +233,7 @@ void gizmo_hydro_corridor_begin(void)
     g_corridor_csr.neighbors      = gizmo_sym_neighbor_list.neighbors;
     g_corridor_csr.total_pairs    = gizmo_sym_neighbor_list.total_pairs;
     g_corridor_csr.owner_name     = "corridor:hydro";
+    g_corridor_csr.device         = &gizmo_sym_neighbor_list_device;
     g_corridor_csr_valid          = true;
     g_corridor_pool_epoch         = ghost_provenance_epoch();
 
@@ -293,6 +294,7 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage)
     g_corridor_csr.offsets     = gizmo_sym_neighbor_list.offsets;
     g_corridor_csr.neighbors   = gizmo_sym_neighbor_list.neighbors;
     g_corridor_csr.total_pairs = gizmo_sym_neighbor_list.total_pairs;
+    g_corridor_csr.device      = &gizmo_sym_neighbor_list_device;
     g_corridor_pool_epoch      = ghost_provenance_epoch();
 
 }

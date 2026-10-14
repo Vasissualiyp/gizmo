@@ -54,9 +54,7 @@
 
 #ifdef MHD_MODIFIED_GRADIENT
 
-extern void gpu_build_symmetric_neighbor_list(struct particle_data *P, int num_total,
-    int *active_indices, int num_active, neighbor_list_t *out,
-    double search_radius_factor);
+#include "../mesh/gpu_neighbor_list.h"   /* gpu_build_symmetric_neighbor_list */
 
 #if !defined(MHD_MODIFIED_GRADIENT_CG_ONLY) && !defined(MHD_MODIFIED_GRADIENT_USE_PARDISO)
 #include "HYPRE.h"
@@ -878,7 +876,7 @@ void mg_gradient_correction_calc(void)
         private_rows = (int *) mymalloc("mg_allgas_rows", (size_t)DMAX(n_eligible, 1) * sizeof(int));
         n_rows = 0;
         for(int i = 0; i < N_gas; i++) {if(P[i].Type == 0 && P[i].Mass > 0) {private_rows[n_rows++] = i;}}
-        gpu_build_symmetric_neighbor_list(P, NumPart, private_rows, n_rows, &private_list, 1.0);
+        gpu_build_symmetric_neighbor_list(P, NumPart, private_rows, n_rows, &private_list, 1.0, NULL);
         rows = private_rows; offsets = private_list.offsets; neighbors = private_list.neighbors;
     }
     mg_build_matrix(rows, n_rows, offsets, neighbors);

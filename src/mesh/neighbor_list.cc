@@ -20,6 +20,7 @@
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
 #include "neighbor_list.h"
+#include "gpu_neighbor_list.h"
 
 
 /* Axis periodicity flags (matching macros.h logic) */
@@ -336,8 +337,15 @@ int *gizmo_sym_active_indices = NULL;
 int gizmo_sym_num_active = 0;
 int gizmo_sym_num_active_global = 0; /* Allreduce'd in gizmo_gradients_prep_symlist; reused by refresh */
 
-void gizmo_sym_neighbor_list_free(void) {
+gpu_neighbor_list_t gizmo_sym_neighbor_list_device = {NULL, NULL, NULL, 0, 0};
+
+void gizmo_sym_csr_free(void) {
     if(gizmo_sym_neighbor_list.offsets) { free_neighbor_list(&gizmo_sym_neighbor_list); }
+    gpu_ngb_list_free(&gizmo_sym_neighbor_list_device);
+}
+
+void gizmo_sym_neighbor_list_free(void) {
+    gizmo_sym_csr_free();
     if(gizmo_sym_active_indices) { myfree(gizmo_sym_active_indices); gizmo_sym_active_indices = NULL; }
     gizmo_sym_num_active = 0;
 }

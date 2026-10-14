@@ -39,7 +39,7 @@ extern void hydro_evaluate_gpu(struct particle_data *, struct gas_cell_data *,
 void transport_subcycle_prepare_topology(void)
 {
     const double gsl_safety = gizmo_ghost_safety_factor();
-    gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false);
+    gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false, NULL);   /* the subcycle reads only the host list */
 }
 
 /* ======================================================================================== */

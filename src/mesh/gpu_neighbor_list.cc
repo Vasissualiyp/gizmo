@@ -2353,7 +2353,8 @@ void gpu_ngb_copy_neighbors_to_host(const gpu_neighbor_list_t *gnl, int *host_de
 void gpu_build_symmetric_neighbor_list(struct particle_data *P_host, int num_total,
                                        int *active_indices, int num_active,
                                        neighbor_list_t *out,
-                                       double search_radius_factor)
+                                       double search_radius_factor,
+                                       gpu_neighbor_list_t *keep_device)
 {
     /* Use the per-step particle arena instead of a dedicated full-NumPart memcpy.
      * The arena's fast path is a no-op when valid (e.g. when gradient/hydro
@@ -2402,10 +2403,15 @@ void gpu_build_symmetric_neighbor_list(struct particle_data *P_host, int num_tot
     }
 
 
-    /* Free the GPU list (the kept gas index is not the list's).
+    /* Keep the device list for the caller, or free it (the kept gas index is not the list's).
      * Arena is intentionally not released — subsequent gradient/hydro callers
      * benefit from the fast-path skip. */
-    gpu_ngb_list_free(&gpu_nl);
+    if(keep_device) {
+        gpu_ngb_list_free(keep_device);
+        *keep_device = gpu_nl;
+    } else {
+        gpu_ngb_list_free(&gpu_nl);
+    }
 
 }
 

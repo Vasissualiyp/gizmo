@@ -2357,6 +2357,7 @@ static void run_mode_a(const neighbor_loop_args& args, const double *radii)
      * the caller has already built a symmetric gas CSR — stage it into gnl
      * shape and skip the build. Contract: GasOnly Specs only. */
     gpu_neighbor_list_t gnl;
+    bool gnl_borrowed = false;   /* the caller's device list, read in place: never freed here */
     gpu_spatial_index_t *sidx = nlr_resolve_sidx_cache(Spec::sidx_cache_kind,
                                                        Spec::loop_name);
     if(args.external_csr != nullptr) {
@@ -2407,7 +2408,12 @@ static void run_mode_a(const neighbor_loop_args& args, const double *radii)
             Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(radii_uvm);
             return;
         }
-        if(!nlr_stage_external_csr_into_gnl(ec, &gnl, Spec::loop_name)) {
+        const gpu_neighbor_list_t *dev = ec->device;
+        if(dev && dev->num_active == ec->num_active && dev->total_pairs == ec->total_pairs && dev->offsets && dev->d_active
+           && (dev->total_pairs == 0 || dev->neighbors)) {
+            gnl = *dev;
+            gnl_borrowed = true;
+        } else if(!nlr_stage_external_csr_into_gnl(ec, &gnl, Spec::loop_name)) {
             gpu_ngb_list_free(&gnl);
             Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(radii_uvm);
             gpu_particles_arena_release();
@@ -2429,7 +2435,7 @@ static void run_mode_a(const neighbor_loop_args& args, const double *radii)
      * this call's own buffers and return; no MPI has been issued here. */
     if(gnl.d_active == nullptr) {
         Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(radii_uvm);
-        gpu_ngb_list_free(&gnl);
+        if(!gnl_borrowed) {gpu_ngb_list_free(&gnl);}
         gpu_particles_arena_release();
         return;
     }
@@ -2470,7 +2476,7 @@ static void run_mode_a(const neighbor_loop_args& args, const double *radii)
         if(d_accums)  { Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(d_accums); }
         nlr_active_stage_free(d_actives);
         Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(radii_uvm);
-        gpu_ngb_list_free(&gnl);
+        if(!gnl_borrowed) {gpu_ngb_list_free(&gnl);}
         gpu_particles_arena_release();
         gizmo_request_controlled_stop(7710,
             "run_mode_a: Mode-A per-active staging out of memory (modea_active_data is device-resident, "
@@ -2503,7 +2509,7 @@ static void run_mode_a(const neighbor_loop_args& args, const double *radii)
         Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(d_accums);
         nlr_active_stage_free(d_actives);   /* device space, not shared -- see nlr_active_stage_alloc_bytes */
         Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(radii_uvm);
-        gpu_ngb_list_free(&gnl);
+        if(!gnl_borrowed) {gpu_ngb_list_free(&gnl);}
         gpu_particles_arena_release();
         return;
     }
@@ -2599,11 +2605,12 @@ static void run_mode_a(const neighbor_loop_args& args, const double *radii)
 
     /* Cleanup. The list holds no index memory, so the cached index stays for
      * the next loop; on the external-CSR path the free releases only what we
-     * staged (gnl offsets/neighbors/d_active), the caller owning its host CSR. */
+     * staged (gnl offsets/neighbors/d_active), the caller owning its host CSR
+     * and any device list it lent. */
     Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(d_accums);
     nlr_active_stage_free(d_actives);
     Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(radii_uvm);
-    gpu_ngb_list_free(&gnl);
+    if(!gnl_borrowed) {gpu_ngb_list_free(&gnl);}
     gpu_particles_arena_mark_clean_after_scatter(Spec::loop_name);
 }
 
