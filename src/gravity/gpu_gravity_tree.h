@@ -265,8 +265,8 @@ int gpu_gravity_tree_nodes_current_at(integertime ti);
  * runs from a host advance until that node's mirror repair completes, a different
  * lifetime from the particle set's one-call span.
  *
- * CAPACITY is MaxNodes + AllocatedForeignNodes -- this rank's LIVE installed
- * range, the same bound the device walk tests, and NOT the run-wide ceiling
+ * CAPACITY is MaxNodes + AllocatedForeignNodes -- this rank's foreign storage,
+ * which covers its live installed range; the same bound the device walk tests, and NOT the run-wide ceiling
  * MaxForeignNodes (the worst rank's import, deliberately generous). Foreign nodes
  * ARE dirtied in practice: 274 per rank per span, present in 91.5% of spans.
  * ========================================================================== */

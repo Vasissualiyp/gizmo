@@ -346,10 +346,10 @@ extern "C" void gpu_gravity_tree_acquire(int min_nodes,
      * [MaxNodes, MaxNodes+AllocatedForeignNodes).  Foreign nodes installed by
      * let_unpack_and_install are scattered into SoA at slot_base + j with
      * absolute index = TreeNodeIndexBase + MaxNodes + slot, so SoA index =
-     * (MaxNodes + slot).  This is zero until the exchange has counted this rank's
-     * import and gpu_gravity_tree_grow_foreign has extended the mirror -- deliberately
-     * NOT the index ceiling MaxForeignNodes, which every rank shares and which would
-     * reserve the whole run the worst rank's import. */
+     * (MaxNodes + slot).  That is the storage force_treeallocate reserved, until the
+     * exchange counts an import larger than it and gpu_gravity_tree_grow_foreign extends
+     * the mirror -- deliberately NOT the index ceiling MaxForeignNodes, which every rank
+     * shares and which would reserve the whole run the worst rank's import. */
     if(AllocatedForeignNodes > 0) {
         min_nodes += AllocatedForeignNodes;
     }
@@ -596,8 +596,8 @@ extern "C" void gpu_nextnode_backup_suns(int n)
      * free_arrays_(), and destroy the suns_backup we store below — corrupting
      * the nextnode kernel's input on the first treebuild. */
     int cap = (MaxNodes > 0) ? MaxNodes + 1 : n;
-    /* Include whatever foreign-node storage exists.  At build time that is normally none:
-     * the import is counted, and the mirror extended to fit it, only once the tree is built. */
+    /* Include whatever foreign-node storage exists: what force_treeallocate reserved.  An import
+     * larger than that is counted, and the mirror extended to fit it, only once the tree is built. */
     if(AllocatedForeignNodes > 0) {cap += AllocatedForeignNodes;}
     if(soa_capacity_ < cap || !soa_.suns_backup) {
         free_arrays_();

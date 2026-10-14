@@ -136,7 +136,8 @@ void   force_setupnonrecursive(int no);
  * which is what every normal caller wants.  Only the restart read passes a value: the node pointers
  * it is about to deserialize encode the writer's capacity (pseudo-particles start at
  * TreeNodeIndexBase + MaxNodes + MaxForeignNodes), so the reader has to reproduce it exactly. */
-void   force_treeallocate(int maxnodes, int tree_particle_slots, int foreign_node_slots_exact = -1);
+void   force_treeallocate(int maxnodes, int tree_particle_slots, int foreign_node_slots_exact = -1, int foreign_storage_slots = 0);
+int    force_tree_remembered_foreign_slots(void);   /* this rank's gravity-tree foreign reservation, derived from its past demand: what to pass above */
 /* Conservative per-particle radius used to seed Extnodes[no].hmax_per_type[Type]
  * bands. Mode B SYMMETRIC tree-prune reads these bands as an upper bound on
  * any leaf-policy-selectable reach for that type, so the band must dominate
@@ -173,6 +174,7 @@ void   force_bump_hmax_refresh_generation(void);   /* called by force_update_hma
 #define FORCE_TREE_NEEDS_DOMAIN_REBUILD (-4)
 
 int    force_treebuild(int npart, struct unbind_data *mp);
+int    force_treebuild_gravity(void);   /* the whole gravity tree: the one build whose import sizes the next one's foreign storage */
 
 /* Whether the standing tree's Father[] links still describe the particles they were built for, which
    is what a whole-tree rebuild without a decomposition needs in order to keep a drifted particle under

@@ -156,7 +156,7 @@ void run(void)
          * drifted to the sync point. */
         set_softenings();
         gizmo_full_drift_to(All.Ti_Current);
-        int build_status = force_treebuild(NumPart, NULL);
+        int build_status = force_treebuild_gravity();
         if(build_status == FORCE_TREE_NEEDS_DOMAIN_REBUILD)
         {
             /* A particle lies outside the extent the restored domain was built on: re-measure it with a
@@ -164,7 +164,7 @@ void run(void)
             if(ThisTask == 0) {printf("Restart tree build: a particle lies outside the restored domain extent; doing a full domain decomposition first.\n"); fflush(stdout);}
             domain_Decomposition(0, 0, 0, 1);
             gravity_clear_pending_motion_bounds();   /* noted against the top tree just replaced */
-            build_status = force_treebuild(NumPart, NULL);
+            build_status = force_treebuild_gravity();
             if(build_status == FORCE_TREE_NEEDS_DOMAIN_REBUILD) {endrun(91574);}
         }
         if(build_status == FORCE_TREE_NEEDS_OWNERSHIP_RESTORE)
@@ -175,7 +175,7 @@ void run(void)
              * and rebuild. */
             if(ThisTask == 0) {printf("Restart tree build: restoring geometric particle ownership first.\n"); fflush(stdout);}
             domain_Decomposition_light(0, 0);
-            if(force_treebuild(NumPart, NULL) < 0) {endrun(91568);}
+            if(force_treebuild_gravity() < 0) {endrun(91568);}
         }
         /* Same proof as the main-step build in gravtree.cc: a full drift ran
          * immediately above, so this tree's node geometry describes this time and
@@ -249,7 +249,7 @@ void run(void)
         if(add_elem_calls_global > (long long)(0.01 * All.TotNumPart))
         {
             if(ThisTask == 0)
-                printf("Phase 9.6 LET guardrail: %lld force_add_element_to_tree insertions since last build "
+                printf("Tree insertion limit: %lld force_add_element_to_tree insertions since last build "
                        "(> 1%% of TotNumPart=%lld) -- forcing tree rebuild this step.\n",
                        add_elem_calls_global, (long long) All.TotNumPart);
             TreeReconstructFlag_local = 1;

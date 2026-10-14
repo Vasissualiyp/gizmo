@@ -278,9 +278,10 @@ static_assert(sizeof(struct LETNodeWire) % 8 == 0,
  * carry per-foreign-leaf particle identity (NODE is shared with the local tree and must not be
  * fattened).  These three parallel arrays hold the installed leaf identity for the foreign-node
  * range, sized AllocatedForeignNodes and indexed by foreign_slot = no - (TreeNodeIndexBase + MaxNodes) --
- * NOT the ordinary node SoA index no - TreeNodeIndexBase.  Allocated with the foreign-node storage in
- * force_tree_grow_foreign_storage, zeroed there, and freed in force_treefree; because they are sized to
- * the exact import, the install writes every slot.  The GPU mirror lives in the tree SoA
+ * NOT the ordinary node SoA index no - TreeNodeIndexBase.  Allocated and zeroed with the foreign-node
+ * storage (in force_treeallocate for the storage it reserves, in force_tree_grow_foreign_storage for a
+ * larger import) and freed in force_treefree; the install writes every slot of the import, and a slot
+ * past it is reachable from no node.  The GPU mirror lives in the tree SoA
  * (foreign_leaf_*), scattered from these in gpu_scatter_foreign_to_soa.
  * ---------------------------------------------------------------------- */
 extern int     *ForeignLeafTag;   /* one of LET_LEAF_TAG_* above: NODE (descendable), REAL_LEAF, or
@@ -406,7 +407,7 @@ typedef enum {
  *  allowance, which does not predict what a rank imports; this floor is what sizes the range
  *  thereafter.  Restart-persisted, since it co-determines the index layout a restart file's
  *  serialized node indices were written against.
- *  It does NOT hold node memory: the nodes are allocated to the exact import
+ *  It does NOT hold node memory: the nodes are allocated to this rank's own imports
  *  (AllocatedForeignNodes), so a generous ceiling costs only its Nextnode ints. */
 extern long long RuntimeMinLETForeignNodes;
 

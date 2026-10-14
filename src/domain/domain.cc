@@ -5,6 +5,7 @@
 #include <math.h>
 #include <algorithm>
 #include <vector>
+#include <set>
 
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
@@ -220,6 +221,9 @@ static double domain_assigned_objective = -1;      /*!< largest share of a balan
 static double domain_leaf_share_after_full = -1;   /*!< largest share of a balanced quantity in one refinable top leaf, after the last full decomposition */
 static double domain_largest_refinable_leaf_share(void);
 static void domain_light_free_work_arrays(void);
+static int domain_light_keep_owners(int multipledomains, const int *prev_start, const int *prev_end, const int *prev_owner);
+/* Share of a rank's particle (and gas-cell) capacity a domain assignment may fill, leaving room for what arrives before the next one. */
+static const double DOMAIN_MEMORY_SAFETY_FRACTION = 0.9;
 #define MAX_DOMAIN_CALLS_BETWEEN_PEANO_ORDERS 20 /*!< re-establish Peano-Hilbert order at most this far apart. The reorder moves nearly every element of P and CellP and is expensive, especially where those arrays are device-accessible, but particle exchange decays the ordering that the SFC tiles and the tree build rely on, so it cannot be dropped entirely */
 static int DomainCallsSincePeanoOrder = MAX_DOMAIN_CALLS_BETWEEN_PEANO_ORDERS; /*!< domain decompositions, full or lightweight, since the last ordering. Starts at the interval so the first decomposition of a run always orders, including after a restart, which does not take the startup one */
 
@@ -742,7 +746,7 @@ void domain_Decomposition(int UseAllTimeBins, int SaveKeys, int do_particle_merg
   TopNodes = (struct topnode_data *) myrealloc(TopNodes, bytes = (NTopnodes * sizeof(struct topnode_data) + NTopnodes * sizeof(int)));
   PRINT_STATUS(" ..freed %g MByte in top-level domain structure", (MaxTopNodes - NTopnodes) * sizeof(struct topnode_data) / (1024.0 * 1024.0));
   DomainTask = (int *) (TopNodes + NTopnodes);
-  force_treeallocate(domain_tree_maxnodes(), All.MaxPartExpandable);
+  force_treeallocate(domain_tree_maxnodes(), All.MaxPartExpandable, -1, (UseAllTimeBins == 0) ? force_tree_remembered_foreign_slots() : 0);   /* group finding gets none */
   gizmo_exit_bad_stop_if_requested("domain:treeallocate"); /* drain a tree-alloc UVM OOM (all-rank) before any tree use */
   reconstruct_timebins();
   gpu_particles_arena_invalidate(); /* P[] reordered across ranks; arena stale */
@@ -925,6 +929,12 @@ void domain_Decomposition_light(int UseAllTimeBins, int do_particle_mergesplit_k
 
     domain_compute_local_caps(0);	/* light repartition: same caps, silent (matches historical no-report here) */
 
+    /* the segments the particles sit on now, and their owners, for domain_light_keep_owners below */
+    const int n_segments_light = multipledomains * NTask;
+    int *prev_segments = (int *) mymalloc("prev_segments", 3 * (size_t) n_segments_light * sizeof(int));
+    int *prev_start = prev_segments, *prev_end = prev_segments + n_segments_light, *prev_owner = prev_segments + 2 * (size_t) n_segments_light;
+    for(int s = 0; s < n_segments_light; s++) {prev_start[s] = DomainStartList[s]; prev_end[s] = DomainEndList[s]; prev_owner[s] = DomainTask[prev_start[s]];}
+
     /* re-split and re-assign */
     domain_findSplit_work_balanced(multipledomains * NTask, NTopleaves);
     domain_assign_load_or_work_balanced(1, multipledomains);
@@ -947,6 +957,12 @@ void domain_Decomposition_light(int UseAllTimeBins, int do_particle_mergesplit_k
                         && (leaf_share >= LIGHT_REPARTITION_LEAF_LIMITED_FRACTION * domain_assigned_objective)
                         && (leaf_share > LIGHT_REPARTITION_LEAF_SHARE_GROWTH * domain_leaf_share_after_full);
     }
+
+    /* The fresh assignment above sets the balance to meet; keep the particles where they are if that can be met (it reads the
+       timebin costs freed just below, and runs only when the fresh assignment stands). */
+    int kept_owners = 0;
+    if(status == 0 && !give_way_to_full) {kept_owners = domain_light_keep_owners(multipledomains, prev_start, prev_end, prev_owner);}
+    myfree(prev_segments);
 
 #if (DOMAIN_TIMEBINS == 1)
     /* Freed only after the memory-bound retry above, which calls
@@ -1010,7 +1026,7 @@ void domain_Decomposition_light(int UseAllTimeBins, int do_particle_mergesplit_k
     domain_light_free_work_arrays();
 
     t1 = my_second();
-    PRINT_STATUS(" ..lightweight domain repartition done. (took %g sec)", timediff(t0, t1));
+    PRINT_STATUS(" ..lightweight domain repartition done. (took %g sec%s)", timediff(t0, t1), kept_owners ? "; segments kept with their owners" : "");
     CPU_Step[CPU_DOMAIN] += measure_time();
 
     /* update persistent keys for moved particles */
@@ -1023,7 +1039,7 @@ void domain_Decomposition_light(int UseAllTimeBins, int do_particle_mergesplit_k
     }
     Key = NULL; /* no longer valid as a mymalloc pointer */
 
-    force_treeallocate(domain_tree_maxnodes(), All.MaxPartExpandable);
+    force_treeallocate(domain_tree_maxnodes(), All.MaxPartExpandable, -1, (UseAllTimeBins == 0) ? force_tree_remembered_foreign_slots() : 0);   /* group finding gets none */
     gizmo_exit_bad_stop_if_requested("domain:treeallocate_light"); /* drain a tree-alloc UVM OOM (all-rank) before any tree use */
     reconstruct_timebins();
     wakeup_sidecar_invalidate();   /* light repartition rearranged + exchanged particles → rebuild WakeupDirty next scan */
@@ -1032,6 +1048,182 @@ void domain_Decomposition_light(int UseAllTimeBins, int do_particle_mergesplit_k
     if(UseAllTimeBins == 0) {domain_reset_work_history();}
 }
 
+
+/* One rank's worst holding relative to its bound in domain_light_keep_owners, ordered worst first: the larger excess, then the
+   lower quantity, then the lower rank. */
+struct keep_owners_rank {double excess; int quantity, task;};
+static bool keep_owners_rank_worse(const keep_owners_rank &a, const keep_owners_rank &b)
+{
+    return (a.excess > b.excess) || (a.excess == b.excess && (a.quantity < b.quantity || (a.quantity == b.quantity && a.task < b.task)));
+}
+
+/* A lightweight repartition re-splits the segments and deals every one of them out again, so nearly every particle changes
+ * rank even when the balance has barely moved.  This keeps the segments the particles already sit on, with their current
+ * owners, and swaps whole segments between ranks only until no balanced quantity -- work, particle count, active gas work, gas
+ * cell count, and each balanced timebin's gravity and hydro cost -- is held more heavily by any rank than in the fresh
+ * assignment just made (within roundoff), with both memory bounds respected.  A swap keeps every rank's segment count, which
+ * the domain code relies on.  If that balance is not reached within a bounded search, or the result breaks a memory bound,
+ * the fresh assignment stands unchanged.  Every rank runs this on the same globally reduced costs with the same deterministic
+ * draws, so all reach the same answer, as the fresh assignment does.  Returns 1 if the kept assignment was installed. */
+static int domain_light_keep_owners(int multipledomains, const int *prev_start, const int *prev_end, const int *prev_owner)
+{
+    const int n_segments = multipledomains * NTask;
+#if (DOMAIN_TIMEBINS == 1)
+    const int n_quantities = 4 + 2 * NumTimeBinsToBeBalanced;
+#else
+    const int n_quantities = 4;
+#endif
+    auto leaf_quantity = [&](int leaf, int q) -> double {
+        if(q == 0) {return domainWork[leaf];}
+        if(q == 1) {return domainCount[leaf];}
+        if(q == 2) {return domainWorkGas[leaf];}
+        if(q == 3) {return domainCountGas[leaf];}
+#if (DOMAIN_TIMEBINS == 1)
+        const int k = (q - 4) % NumTimeBinsToBeBalanced;
+        return (q - 4 < NumTimeBinsToBeBalanced) ? domainBinGravCost[k * NTopleaves + leaf] : domainBinHydroCost[k * NTopleaves + leaf];
+#else
+        return 0;
+#endif
+    };
+
+    /* the current owners must give every rank its full share of segments */
+    std::vector<int> per_task(NTask, 0);
+    for(int s = 0; s < n_segments; s++) {if(prev_owner[s] < 0 || prev_owner[s] >= NTask) {return 0;} per_task[prev_owner[s]]++;}
+    for(int t = 0; t < NTask; t++) {if(per_task[t] != multipledomains) {return 0;}}
+
+    double *seg = (double *) mymalloc("keep_owners_seg", (size_t) n_segments * n_quantities * sizeof(double));   /* each segment's share of every quantity */
+    double *held = (double *) mymalloc("keep_owners_held", (size_t) NTask * n_quantities * sizeof(double));       /* each rank's holding of every quantity */
+    int *owner = (int *) mymalloc("keep_owners_owner", 3 * (size_t) n_segments * sizeof(int));
+    int *segments_of = owner + n_segments;   /* rank t's segments at t*multipledomains .. +multipledomains-1 */
+    int *slot = owner + 2 * (size_t) n_segments;   /* where segment s sits in its rank's list */
+
+    for(size_t i = 0; i < (size_t) n_segments * n_quantities; i++) {seg[i] = 0;}
+    for(int s = 0; s < n_segments; s++) {
+        for(int leaf = prev_start[s]; leaf <= prev_end[s]; leaf++) {for(int q = 0; q < n_quantities; q++) {seg[(size_t) s * n_quantities + q] += leaf_quantity(leaf, q);}}
+    }
+    /* the fresh assignment's largest per-rank holding of each quantity is the bound to meet */
+    std::vector<double> total(n_quantities, 0.0), bound(n_quantities, 0.0), roundoff(n_quantities, 0.0);
+    for(size_t i = 0; i < (size_t) NTask * n_quantities; i++) {held[i] = 0;}
+    for(int leaf = 0; leaf < NTopleaves; leaf++) {
+        for(int q = 0; q < n_quantities; q++) {const double v = leaf_quantity(leaf, q); total[q] += v; held[(size_t) DomainTask[leaf] * n_quantities + q] += v;}
+    }
+    for(int t = 0; t < NTask; t++) {for(int q = 0; q < n_quantities; q++) {bound[q] = DMAX(bound[q], held[(size_t) t * n_quantities + q]);}}
+    for(int q = 0; q < n_quantities; q++) {roundoff[q] = 1.0e-9 * bound[q] + 1.0e-12 * total[q];}
+
+    /* now what the current owners hold */
+    for(size_t i = 0; i < (size_t) NTask * n_quantities; i++) {held[i] = 0;}
+    for(int t = 0; t < NTask; t++) {per_task[t] = 0;}
+    for(int s = 0; s < n_segments; s++) {
+        const int t = owner[s] = prev_owner[s];
+        slot[s] = per_task[t]++; segments_of[(size_t) t * multipledomains + slot[s]] = s;
+        for(int q = 0; q < n_quantities; q++) {held[(size_t) t * n_quantities + q] += seg[(size_t) s * n_quantities + q];}
+    }
+
+    /* A rank's excess is its largest holding relative to the bound (roundoff allowed), with the lowest quantity reaching it; a
+     * rank with nothing above zero has none.  The worst excess over all ranks is the largest, ties going to the lower quantity
+     * and then the lower rank.  The ranks with an excess are kept in that order, so a trial swap is scored from the two ranks
+     * it changes and the worst rank it leaves alone. */
+    std::vector<double> rank_excess(NTask, 0.0);
+    std::vector<int> rank_quantity(NTask, -1);
+    auto excess_of = [&](int t, int &q_out) -> double {
+        double w = 0; q_out = -1;
+        for(int q = 0; q < n_quantities; q++) {
+            if(bound[q] <= 0) {continue;}
+            const double r = (held[(size_t) t * n_quantities + q] - roundoff[q]) / bound[q];
+            if(r > w) {w = r; q_out = q;}
+        }
+        return w;
+    };
+    std::set<keep_owners_rank, bool (*)(const keep_owners_rank &, const keep_owners_rank &)> ranked(keep_owners_rank_worse);
+    auto set_rank_excess = [&](int t, double r, int q) {
+        if(rank_quantity[t] >= 0) {ranked.erase(keep_owners_rank{rank_excess[t], rank_quantity[t], t});}
+        rank_excess[t] = r; rank_quantity[t] = q;
+        if(q >= 0) {ranked.insert(keep_owners_rank{r, q, t});}
+    };
+    for(int t = 0; t < NTask; t++) {int q; const double r = excess_of(t, q); set_rank_excess(t, r, q);}
+    double excess = 0; int q_worst = -1, t_worst = -1;
+    if(!ranked.empty()) {excess = ranked.begin()->excess; q_worst = ranked.begin()->quantity; t_worst = ranked.begin()->task;}
+
+    const double cap_particles = DOMAIN_MEMORY_SAFETY_FRACTION * DomainMaxPartLocal, cap_gas = DOMAIN_MEMORY_SAFETY_FRACTION * DomainMaxGasLocal;
+    unsigned long long seed = 1234567ULL + (unsigned long long) NTask;   /* any fixed value; every rank draws the same sequence */
+    auto draw = [&](int n) -> int {seed = seed * 6364136223846793005ULL + 1442695040888963407ULL; return (int) ((seed >> 33) % (unsigned long long) n);};
+    const int max_attempts = 200000;   /* bounds the search; a search that runs out leaves the fresh assignment */
+
+    /* Swap a segment off the rank holding the worst excess for one that holds less of that quantity, keeping a swap only if
+     * it lowers the worst excess; stop as soon as every bound is met. */
+    for(int attempt = 0; excess > 1.0 && q_worst >= 0 && attempt < max_attempts; attempt++) {
+        const int t1 = t_worst;
+        const int s1 = segments_of[(size_t) t1 * multipledomains + draw(multipledomains)];
+        const int t2 = draw(NTask);
+        if(t2 == t1) {continue;}
+        const int s2 = segments_of[(size_t) t2 * multipledomains + draw(multipledomains)];
+        if(seg[(size_t) s1 * n_quantities + q_worst] <= seg[(size_t) s2 * n_quantities + q_worst]) {continue;}
+        /* neither rank may go over a memory bound, nor further over one it already exceeds */
+        const double n1 = held[(size_t) t1 * n_quantities + 1] - seg[(size_t) s1 * n_quantities + 1] + seg[(size_t) s2 * n_quantities + 1];
+        const double n2 = held[(size_t) t2 * n_quantities + 1] - seg[(size_t) s2 * n_quantities + 1] + seg[(size_t) s1 * n_quantities + 1];
+        const double g1 = held[(size_t) t1 * n_quantities + 3] - seg[(size_t) s1 * n_quantities + 3] + seg[(size_t) s2 * n_quantities + 3];
+        const double g2 = held[(size_t) t2 * n_quantities + 3] - seg[(size_t) s2 * n_quantities + 3] + seg[(size_t) s1 * n_quantities + 3];
+        if((n1 > cap_particles && n1 > held[(size_t) t1 * n_quantities + 1]) || (n2 > cap_particles && n2 > held[(size_t) t2 * n_quantities + 1])
+           || (g1 > cap_gas && g1 > held[(size_t) t1 * n_quantities + 3]) || (g2 > cap_gas && g2 > held[(size_t) t2 * n_quantities + 3])) {continue;}
+        for(int q = 0; q < n_quantities; q++) {const double d = seg[(size_t) s2 * n_quantities + q] - seg[(size_t) s1 * n_quantities + q]; held[(size_t) t1 * n_quantities + q] += d; held[(size_t) t2 * n_quantities + q] -= d;}
+        int q1, q2;
+        const double r1 = excess_of(t1, q1), r2 = excess_of(t2, q2);
+        double excess_new = 0; int q_new = -1, t_new = -1;
+        auto consider = [&](double r, int q, int t) {
+            if(q >= 0 && (t_new < 0 || keep_owners_rank_worse(keep_owners_rank{r, q, t}, keep_owners_rank{excess_new, q_new, t_new}))) {excess_new = r; q_new = q; t_new = t;}
+        };
+        consider(r1, q1, t1);
+        consider(r2, q2, t2);
+        for(const keep_owners_rank &e : ranked) {if(e.task != t1 && e.task != t2) {consider(e.excess, e.quantity, e.task); break;}}
+        if(excess_new < excess) {
+            const int k1 = slot[s1], k2 = slot[s2];
+            segments_of[(size_t) t1 * multipledomains + k1] = s2; segments_of[(size_t) t2 * multipledomains + k2] = s1;
+            slot[s2] = k1; slot[s1] = k2; owner[s1] = t2; owner[s2] = t1;
+            set_rank_excess(t1, r1, q1); set_rank_excess(t2, r2, q2);
+            excess = excess_new; q_worst = q_new; t_worst = t_new;
+        } else {
+            /* undoing the trial can leave the two holdings an ulp off where they started; re-score them from what they hold now */
+            for(int q = 0; q < n_quantities; q++) {const double d = seg[(size_t) s2 * n_quantities + q] - seg[(size_t) s1 * n_quantities + q]; held[(size_t) t1 * n_quantities + q] -= d; held[(size_t) t2 * n_quantities + q] += d;}
+            for(const int t : {t1, t2}) {int q; const double r = excess_of(t, q); if(r != rank_excess[t] || q != rank_quantity[t]) {set_rank_excess(t, r, q);}}
+        }
+    }
+
+    int installed = 0;
+    if(excess <= 1.0)
+    {
+        /* install it, each rank's segments at t*multipledomains .. +multipledomains-1 as the domain code expects; if it breaks a
+           memory bound, the fresh assignment comes back with everything the memory check recorded about it */
+        int *fresh_layout = (int *) mymalloc("keep_owners_fresh_layout", (2 * (size_t) n_segments + NTopleaves) * sizeof(int));
+        std::copy(DomainStartList, DomainStartList + n_segments, fresh_layout);
+        std::copy(DomainEndList, DomainEndList + n_segments, fresh_layout + n_segments);
+        std::copy(DomainTask, DomainTask + NTopleaves, fresh_layout + 2 * (size_t) n_segments);
+        std::vector<int> fresh_load(list_load, list_load + NTask), fresh_loadgas(list_loadgas, list_loadgas + NTask);
+        std::vector<double> fresh_work(list_work, list_work + NTask), fresh_workgas(list_workgas, list_workgas + NTask);
+        const int fresh_bound_needed = domain_bound_needed, fresh_bound_limit = domain_bound_limit;
+
+        for(int t = 0; t < NTask; t++) {per_task[t] = 0;}
+        for(int s = 0; s < n_segments; s++) {
+            const int t = owner[s], k = t * multipledomains + per_task[t]++;
+            DomainStartList[k] = prev_start[s]; DomainEndList[k] = prev_end[s];
+            for(int leaf = prev_start[s]; leaf <= prev_end[s]; leaf++) {DomainTask[leaf] = t;}
+        }
+        installed = 1;
+        if(domain_check_memory_bound(multipledomains) != 0)
+        {
+            std::copy(fresh_layout, fresh_layout + n_segments, DomainStartList);
+            std::copy(fresh_layout + n_segments, fresh_layout + 2 * (size_t) n_segments, DomainEndList);
+            std::copy(fresh_layout + 2 * (size_t) n_segments, fresh_layout + 2 * (size_t) n_segments + NTopleaves, DomainTask);
+            std::copy(fresh_load.begin(), fresh_load.end(), list_load); std::copy(fresh_loadgas.begin(), fresh_loadgas.end(), list_loadgas);
+            std::copy(fresh_work.begin(), fresh_work.end(), list_work); std::copy(fresh_workgas.begin(), fresh_workgas.end(), list_workgas);
+            domain_bound_needed = fresh_bound_needed; domain_bound_limit = fresh_bound_limit;
+            installed = 0;
+            if(ThisTask == 0) {printf("Lightweight repartition: keeping the segments with their owners would exceed that memory bound, so the fresh assignment stands.\n");}
+        }
+        myfree(fresh_layout);
+    }
+    myfree(owner); myfree(held); myfree(seg);
+    return installed;
+}
 
 /* Free what a lightweight repartition allocated for its split and assignment, in LIFO order. */
 static void domain_light_free_work_arrays(void)
@@ -2093,9 +2285,8 @@ void domain_assign_load_or_work_balanced(int mode, int multipledomains)
   int i, n, q, ta;
 
   /* memory limits: reject assignments that would push a rank above this fraction of max capacity */
-  double memory_safety_frac = 0.9;
-  double max_load_per_task = memory_safety_frac * DomainMaxPartLocal;
-  double max_gasload_per_task = memory_safety_frac * DomainMaxGasLocal;
+  double max_load_per_task = DOMAIN_MEMORY_SAFETY_FRACTION * DomainMaxPartLocal;
+  double max_gasload_per_task = DOMAIN_MEMORY_SAFETY_FRACTION * DomainMaxGasLocal;
 
   domain_assigned_objective = -1;
   domainAssign = (struct domain_segments_data *) mymalloc("domainAssign",
