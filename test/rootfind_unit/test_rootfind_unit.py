@@ -1,4 +1,5 @@
-"""Unit test for system/bracketed_rootfind.h (the Brent block used by DoCooling and the dust-temperature solvers).
+"""Unit test for brent_rootfind() in system/bracketed_rootfind_functions.h (used by DoCooling, the H2 solve and
+rt_ir_lambdadust).
 
 Compiles test_rootfind_unit.cc against the header in this checkout, once with plain -O2 and once with the
 production optimisation flags (-O3 -ffast-math), and runs it. No GIZMO build or simulation is needed.
