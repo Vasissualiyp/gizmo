@@ -9,6 +9,7 @@
 #include <gsl/gsl_eigen.h>
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
+#include "../declarations/resolvedism_dgr.h"
 #include "../mesh/kernel.h"
 #include "./analytic_gravity.h"
 
@@ -113,6 +114,9 @@ void gravity_tree(void)
 {
 #ifdef TREE_RAY_PI
     if(!TRPI_bands_ready) {treeray_pi_init_bands();}   /* MUST precede the walk: deposits read TRPI_lumfrac */
+#if (N_TRPI_BANDS == 1) && defined(GALSF_RESOLVEDISM_SAMPLE_IMF) && defined(GALSF_RESOLVEDISM_STELLAR_TABLES)
+    TRPI_Eev[0] = Resolvedism_Eion_eff_eV;  /* must match the <hnu> Ion_luminosity was built with, else Q is rescaled */
+#endif
 #endif
 #if defined(GALSF_RESOLVEDISM_G0_VARIABLE) && defined(GALSF_RESOLVEDISM_ISOLATED_FB_TEST)
     {extern double G0DBG_fluxP, G0DBG_fluxN; extern long long G0DBG_nN, G0DBG_nNzero;
@@ -475,7 +479,7 @@ void gravity_tree(void)
 #endif
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #ifdef TREE_RAD
-                if(P[place].Type == 0) {int kp; for(kp=0; kp<NPIX; kp++) CellP[place].Projection[kp] += GravDataOut[j].Projection[kp];}
+                if(P[place].Type == 0) {int kp; for(kp=0; kp<NPIX; kp++) {CellP[place].Projection[kp] += GravDataOut[j].Projection[kp]; CellP[place].ProjectionDust[kp] += GravDataOut[j].ProjectionDust[kp];}}
 #endif
 #ifdef TREE_RAD_H2
                 if(P[place].Type == 0) {int kp; for(kp=0; kp<NPIX; kp++) {CellP[place].ProjectionH2[kp] += GravDataOut[j].ProjectionH2[kp]; CellP[place].ProjectionCO[kp] += GravDataOut[j].ProjectionCO[kp];}}
@@ -691,7 +695,12 @@ void gravity_tree(void)
                  * sigma_eff = sigma_cgs*DGR * N_H(cell) / UNIT_LENGTH^2 */
                 double F_tot = 0; int pfx2; for(pfx2 = 0; pfx2 < NPIX; pfx2++) {F_tot += CellP[i].UV_flux[pfx2] + CellP[i].LW_flux[pfx2];}
                 double NH_cell = P[i].Mass * UNIT_MASS_IN_CGS * HYDROGEN_MASSFRAC / PROTONMASS_CGS;
-                double sigma_eff_code = 2.0e-21 * tr_dgr * NH_cell / (UNIT_LENGTH_IN_CGS * UNIT_LENGTH_IN_CGS);
+                /* per-cell DGR (2026-07-28): the implied absorption of each cell uses ITS
+                 * OWN dust content, consistent with the per-cell leaf weighting in the
+                 * dust column and the per-cell radp absorber. (tr_dgr kept for the
+                 * TREE_RAY shell sweep above: shell-resolved dust columns are a
+                 * documented follow-up -- TREE_RAY is off in production.) */
+                double sigma_eff_code = 2.0e-21 * resolvedism_cell_DGR_solar(i) * NH_cell / (UNIT_LENGTH_IN_CGS * UNIT_LENGTH_IN_CGS);
                 A_abs_uv += F_tot * sigma_eff_code / (4.0 * M_PI); /* flux stored without 1/4pi; restore for luminosity */
             }
             double glob[2], loc[2]; loc[0] = L_emit_uv; loc[1] = A_abs_uv;

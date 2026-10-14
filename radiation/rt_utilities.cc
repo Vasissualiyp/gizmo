@@ -326,6 +326,26 @@ int rt_get_lum_band_resolvedism(int i, int mode, double *lum)
 #endif
     if(Mstar <= 0) return 0;
 
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+    /* StarBench fixed-Q test (2026-07-14): pin the ionizing photon rate to
+     * TestFixedQion and ZERO all other bands, bypassing table lookups AND the
+     * PMS dark-phase delay (mirrors the subgrid/TreeRay pin in
+     * recompute_resolvedism_fuv_luminosities, which never reached this M1 path:
+     * the 2026-07-09 M1 matrix silently ran at table Q = 10^48.1 for the 15 Msun
+     * carrier instead of the pinned 1e49). lum = Q * rt_nu_eff_eV[RT_FREQ_BIN_H0]
+     * (table-driven since 2026-07-29; was hard-wired 27.2 eV -> 3x photoheating)
+     * so the consumption side recovers exactly Q photons/s at the population
+     * hardness. */
+    if(All.TestFixedQion > 0) {
+        SET_ACTIVE_RT_CHECK();
+        int kb_pin; for(kb_pin = 0; kb_pin < N_RT_FREQ_BINS; kb_pin++) {lum[kb_pin] = 0;}
+#if defined(RT_CHEM_PHOTOION)
+        lum[RT_FREQ_BIN_H0] = All.TestFixedQion * rt_nu_eff_eV[RT_FREQ_BIN_H0] * ELECTRONVOLT_IN_ERGS / UNIT_LUM_IN_CGS;
+#endif
+        return active_check;
+    }
+#endif
+
     double logM = log10(Mstar);
 #ifdef GALSF_RESOLVEDISM_STELLAR_TABLES
     double logZ = log10(DMAX(P[i].BirthMetallicity, 1e-10));
@@ -338,7 +358,7 @@ int rt_get_lum_band_resolvedism(int i, int mode, double *lum)
     double log_age = log10(DMAX(star_age_yr, 100.0));
 
     /* check if star is still alive */
-    double lifetime_yr = stellar_lifetime(logM, logZ);
+    double lifetime_yr = stellar_t_PMS(logM, logZ) + stellar_lifetime(logM, logZ);
     if(star_age_yr > lifetime_yr) return 0; /* dead star — no luminosity */
 
     /* PMS feedback delay: stars younger than min(t_KH, t_ff) do not emit ionizing radiation */

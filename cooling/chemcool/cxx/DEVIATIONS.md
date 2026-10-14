@@ -1,0 +1,457 @@
+# CHEMCOOL C++/CVODE port — conscious deviations register
+
+Every place the port does something the canonical Fortran does not, with the
+reason. Anything NOT listed here is intended to be behaviour-identical.
+Reference: `stella/CHEMCOOL_CONTROL_FLOW_AUDIT.md` §7 (R1–R10) and
+`stella/CHEMICAL_MODEL_NETS_5_17.md`.
+
+Canonical source of truth: `/orion/ptmp/uli/orion/test/gizmo` (branch
+`uli-singlestar-galaxy`). **Zero edits** were made there at any point.
+
+---
+
+## D-0. SCOPE (SUPERSEDED BY GATE 3 — kept for the record)
+
+**What.** The C++ side implements: `evolve_abundances.F` (driver loop, TNOCHEM
+bypass, `check_abundances`, `init_tolerances`) → `cvode_driver.cc`;
+`rate_eq_simple.F` / `rate_eq_ulli.F` (RHS assembly + `comp_equilib`) →
+`chem_rhs_net5.cc` / `chem_rhs_net17.cc`; `validate_rates.F` →
+`chem_rhs_common.h`; `spline.F` + the cl1/cl2/cl3/cl6 table construction →
+`chem_spline.cc`; the 346 analytic rate coefficients → `rates_gen.cc` (Gate 1).
+
+Everything strictly BELOW the RHS is still the canonical Fortran, reached
+through thin shims in `chem_backend_fortran.cc`:
+`cool_func`, `calc_dust_temp`, `calc_H2_shielding_factor`,
+`lookup_temp_gamma`, and the table builders `coolinmo`/`cheminmo`.
+
+**Why.** This is what makes the Gate-2 benchmark meaningful. Both backends run
+inside the *same binary*, link the *same* `coolinmo`-built `/coolr/` tables and
+call the *same* cooling function; the only things that differ are the
+integrator, the RHS assembly and the driver policy. Any deviation observed in
+GATE2_ACCEPTANCE.md is therefore attributable to the ported layer and nothing
+else. Porting `cool_func` (1329 lines) in the same step would have confounded
+solver deviations with cooling-function deviations.
+
+**STATUS 2026-07-29: Gate 3 closed this.** `cool_func`, `calc_dust_temp`,
+`calc_H2_shielding_factor`, `lookup_temp_gamma`, `calc_photo`, `calc_temp`,
+`compute_gamma` and the table builders `coolinmo`/`cheminmo`/`photoinit`/
+`const_rates`/`read_wss_collis_table`/`load_H2_table`/`init_temperature_lookup`
+are all C++ now (`chem_cool_func.cc`, `chem_cool_util.cc`, `chem_calc_photo.cc`,
+`chem_calc_temp.cc`, `chem_tables_build.cc`). `chem_backend_fortran.cc` is
+retained ONLY as the golden harness's reference side (`fort_*` wrappers).
+`golden/build_purecxx.sh` links the path with g++, no Fortran object and no
+`-lgfortran`, and audits the binary with `nm`. The paragraph below describes
+the Gate-2 state.
+
+**Consequence / what Gate 3 had to do.** The shims write `COOLR.tdust` before each
+leaf call and read it back after (`tdust` is a genuine in/out algebraic state,
+audit §3.1 item 2). The leaves still read per-cell inputs from COMMON, so the
+Gate-2 backend inherits the Fortran's thread-unsafety (audit R2). One-zone has
+exactly one cell, so nothing can leak; production use requires Gate 3.
+
+---
+
+## D-1. (R3) `validate_input` no longer mutates the integrator's state vector
+
+**Fortran** (`validate_rates.F:35-72`): writes into `y` in place — negatives →
+`0d0`, non-H2 species > 1 → 1, H2 > 0.5 → 0.5 — while `y` is DVODE's own state
+echo. Legal-ish for DVODE, explicitly forbidden by CVODE.
+
+**Port** (`chem_rhs_common.h:chem_validate_input`): `y` is `const` in the RHS
+signature; the identical floors are applied to a local copy and the RHS is
+evaluated from the copy. **Values and ordering of the floors are unchanged**
+(neg→0, cap 1 / cap 0.5, `EPS_MAX = 1e-4` reject threshold) — they are
+load-bearing stiffness control, not cosmetics.
+
+**Signalling change.** A gross violation (NaN, or excess > `EPS_MAX`) returns
+`CHEM_RHS_RECOVERABLE` (positive) instead of setting `ipar(1)=1` and returning
+`ydot = 0`. CVODE reacts by cutting its internal step and retrying; if it cannot
+recover it returns a negative flag and the driver's restore/halve/re-init path
+runs — i.e. the Fortran's outcome is still reachable, with an extra
+recovery layer in front of it. This makes the port *more* robust, not less;
+it is the one place where the port can succeed where DVODE would have halved.
+
+## D-2. `temp <= 0` poisoned-input path returns immediately
+
+**Fortran** (`rate_eq_simple.F:150-168`, `rate_eq_ulli.F:230-248`): sets
+`ipar(1)=1` AND continues to build a full `ydot` evaluated at `tmin`; the
+substep is rejected only after `dvode` returns.
+
+**Port:** returns `CHEM_RHS_RECOVERABLE` at that point. The `ydot` computed
+at `tmin` in the Fortran is discarded by the rejection anyway, so the accepted
+trajectory is unaffected; only the wasted work differs.
+
+## D-3. net-5 `validate_output` NaN-ydot ABORT(1) → recoverable return
+
+**Fortran:** net 5 aborts the whole run on a NaN `ydot`
+(`validate_rates.F:100-115`); net 17 prints, sets `ipar(1)=1`, zeroes `ydot`
+and returns (`rate_eq_ulli.F:1014-1032`). The audit flags this as an
+inconsistency (R7) and recommends unifying on the net-17 behaviour.
+
+**Port:** unified on net-17 — both nets print loudly and return recoverable.
+`DECIDE-WITH-ULI` item: this converts a hard abort into a step rejection on
+net 5. It cannot mask a real problem silently (the print is unconditional and
+a persistent NaN still collapses dt to 1e-8 s → return code 100).
+
+## D-4. (R7 cleanup) the two bare Fortran `stop`s are not ported
+
+`rate_eq_simple.F:505-511` (`temp < 0` debug) and `calc_photo.F:706` are bare
+`stop`s that would kill one MPI rank and deadlock the job — the exact failure
+mode the `ABORT` macro exists to prevent. Both are unreachable in practice
+(step 5 clamps `temp<=0` to `tmin` first). Not ported.
+
+## D-5. (R9) dead modes and dead flags dropped
+
+Not ported: `do_chemcool_step` modes 1/2/3 (no callers; mode 3 returns a stale
+energy), `ipar(2)` (write-only), `CHEM_EQ_H2` (contains an out-of-bounds `y(0)`
+store), `column_est` / the `iphoto=3/4/5` potential-column paths (always 0),
+`NO_CO_FORM`, `BS19_XH2`, `ADIABATIC_DENSITY_THRESHOLD`,
+`CONST_NCRIT_UVPUMP`, `H2_FORM_TEST`. `pdv_term` is hard-zeroed per cell in
+production (`chemcool.cc:721`) so net-5's `+ pdv_term` is not carried.
+
+## D-6. `no_dchem` made explicit
+
+Audit §3.1 item 4: for net 17 `no_dchem` is read at six sites and written by
+nothing — the deuterium network is enabled purely by Fortran BSS zero-init.
+`chem_bind_cell()` sets `c.no_dchem = 0` explicitly.
+
+## D-7. Solver-workspace lifetime (fair timing, identical semantics)
+
+DVODE reuses static `rwork/iwork` across cell calls and re-initialises with
+`istate=1`. Allocating a fresh `SUNContext` + CVode memory per cell call would
+charge the port a malloc/free cost DVODE never pays and would corrupt the
+wall-time comparison. The port caches one workspace per `nspec`
+(`cvode_driver.cc:CvWork`) and calls `CVodeReInit` — the exact `istate=1`
+equivalent. Like the Fortran side, this is **not thread-safe**.
+
+## D-8. `ChemTables` index layout corrected
+
+The Gate-2 scaffold declared `chtab[NCHTAB][NMD]` and indexed
+`chtab[k-1][itemp-1]`. `cool.h:244,255` declares `chtab(nchtab, nmd)` —
+species index FAST — so the correct element is at `(itemp-1)*NCHTAB + (k-1)`;
+the scaffold was transposed and would have read garbage rate coefficients.
+`ChemTables` is now a view over the Fortran `/coolr/` arrays with the accessor
+`chem_CH/chem_CL` indexing `[itemp-1][k-1]`. Fixed before any benchmark ran.
+
+## D-9. The "8 TABLE splines" are 4 splines + 4 classification artifacts
+
+`RATE_AUDIT.md` classified 8 `cltab` entries as `kind=TABLE` (cl1-3, cl6,
+cl52, cl59, cl60, cl61) because the extractor saw each assigned both in
+coolinmo's analytic temperature loop and in a later residual loop. Reading the
+residual loop (`coolinmo.F:1520-1590`) resolves it:
+
+| entry | verdict |
+|---|---|
+| cl1, cl2, cl3 | genuinely TABLE — analytic outside [1e2, 1e4] K, natural-cubic spline over the 41 `mol_data.h` points inside. **Ported** (`chem_spline.cc`). |
+| cl6 | genuinely TABLE — `iflag_atom=2` (the production setting) splines the 76-point `ca2` DATA array, zero below 10^4.3 K. **Ported**. |
+| cl52, cl59, cl60, cl61 | **not table-driven in the production config.** The residual loop zeroes them only under `iflag_atom==1`; under `iflag_atom==2` the zeroing is additionally `#ifndef WSS_CIE_COOL`, and `WSS_CIE_COOL` is ON in every Stella build. They keep their analytic main-loop values, which are already in `RATE_AUDIT.md` and covered by the Gate-1 rate goldens. Nothing to port. |
+
+The claim in the last row is *tested*, not asserted: `golden/test_splines.cc`
+reports how many grid points of each are nonzero after the real `COOLINMO` runs
+(all four are nonzero over 5000-7500 of 10000 points ⇒ not zeroed ⇒ analytic).
+
+**Spline semantics note.** `spline.F` evaluates the cubic in the *normalized*
+local coordinate `dpt = (x-x_i)/(x_{i+1}-x_i)` while `spline_derivatives` solves
+the *uniform-knot* Bartels tridiagonal system — the knot spacing never enters
+the derivative solve. That is not a standard non-uniform natural cubic spline.
+Both cl1-3 and cl6 have non-uniform knots, so a "corrected" spline would give
+different numbers. The port reproduces the Fortran literally
+(`chem_spline.cc:chem_spline_derivatives`), including this quirk.
+
+## D-10. Physical constants are the float32-rounded values (**not** a cosmetic)
+
+`chemcool_consts.h` spells its constants as `1.38066e-16`, `1.60219e-12`,
+`1.6726e-24`, `6.672e-8` — Fortran **default REAL** (single-precision)
+literals. `cool.h:204` does `REAL kboltz; parameter (kboltz = BOLTZMANN)`, and
+the build carries no `-fdefault-real-8` (`tests/onezone/Makefile` FFLAGS:
+`-O2 -cpp -ffixed-line-length-none -fno-second-underscore`). The literal is
+therefore rounded to float32 and only then widened to `real*8`. What the
+running Fortran actually holds is up to **5e-8 relative** away from the decimal:
+
+| macro | decimal | value in the running Fortran | rel |
+|---|---|---|---|
+| `BOLTZMANN` | 1.38066e-16 | 1.3806599982553653e-16 | 1.26e-09 |
+| `ELECTRON_VOLT` | 1.60219e-12 | 1.6021899518908755e-12 | 3.00e-08 |
+| `PROTONMASS` | 1.6726e-24 | 1.6726000836652178e-24 | 5.00e-08 |
+| `GRAVITY` | 6.672e-8 | 6.6719998415010195e-08 | 2.38e-08 |
+
+The same applies to every bare-decimal `DATA` array (`h2_lte`, `h2_h_rate`,
+`h2_h2_rate`, `coolatom`, `ca2`, …): each element is float32-rounded.
+
+**Attribution.** The Gate-1 rate generator already got this right —
+`rates_gen.cc:40-41` emits `1.38066e-16f` / `1.60219e-12f` with the comment
+"default-real literal", which is why the 346 rate goldens passed at 1e-12. What
+was *missed* was (a) the hand-written constants in `chem_types.h`, which used
+the exact decimals, and (b) `tables_extract.py`, which parsed every `DATA`
+literal as a Python double. Both are now fixed: `chem_types.h` uses the
+float32-widened values, and `tables_extract.py` reproduces the compiler's
+literal-kind rule (a `D` exponent ⇒ double, everything else ⇒ float32).
+**This is a deviation from the printed decimals in order to be faithful to the
+compiled code.**
+
+Caught by golden-testing the cl1-3 splines: the worst relerr was exactly
+`float32(kboltz)`, 1.264e-09. Progression of the spline goldens:
+
+| state | result | worst relerr |
+|---|---|---|
+| `DATA` as doubles, `kboltz` exact | 23102/40000 | 2.55e-06 |
+| `DATA` float32-rounded, `kboltz` exact | 35227/40000 | 1.26e-09 |
+| both faithful | **40000/40000** | **1.65e-14** (roundoff) |
+
+Physically the effect is negligible. Operationally it is not: reading the
+decimals would have "silently improved" the tables by ~2e-6 and left an
+unexplained floor under every future A/B comparison.
+
+## D-11. GIZMO integration: what was changed in the canonical tree
+
+The port is compiled INTO GIZMO behind the Gate-0 seam, selected by the
+`CHEMCOOL_CXX` compile flag (**default OFF**). Changes to canonical files:
+
+| file | change |
+|---|---|
+| `cooling/chemcool/chemcool.cc` | the single `EVOLVE_ABUNDANCES(...)` call is wrapped in `#ifdef CHEMCOOL_CXX` → `chem_evolve_cxx(...)`, `#else` → the Fortran call. Nothing else in the function changes. |
+| `cooling/chemcool/chem_interface.h` | declares `chem_evolve_cxx` under the same guard. |
+| `cooling/chemcool/cxx/` | new directory: the whole port. |
+| `Template_Config.sh` | new documented `#CHEMCOOL_CXX` entry (commented out). |
+| `Makefile` | new `ifeq (CHEMCOOL_CXX,...)` block inside the existing `CHEMCOOL` block: `SUNDIALS_DIR`/`SUNDIALS_INCL`/`SUNDIALS_LIBS`, `CHEMCXX_OBJS`, `INCL`. `$(SUNDIALS_INCL)` appended to `CFLAGS`, `$(SUNDIALS_LIBS)` to `LIBS`, `$(CHEMCXX_OBJS)` to both link rules and to `clean`. |
+
+`CHEMCXX_OBJS` is a **wildcard** over `cooling/chemcool/cxx/*.cc`, not a
+hand-maintained list. That is deliberate: this directory is under active
+development (Gate 3 is porting the leaf kernels), and a stale explicit list does
+not fail at parse time — it fails at LINK time with undefined `cxx_*`
+references, which is a much worse error to debug. `INCL` is wildcarded over
+`cxx/*.h` for the same reason. `clean` also removes `cooling/chemcool/cxx/*.o`
+unconditionally, because `CHEMCXX_OBJS` expands to empty when the flag is off
+and would otherwise leave objects from a flag-on build behind.
+
+**With the flag OFF all of this is inert**: `SUNDIALS_INCL`/`SUNDIALS_LIBS`/
+`CHEMCXX_OBJS` expand to empty, no cxx object is built, no SUNDIALS symbol is
+linked, and `chemcool.cc` compiles the Fortran branch. Verified: the OFF build
+links exactly the same object list as before the change.
+
+**Why `CHEMCXX_OBJS` is a separate list with its own recipe.** SUNDIALS'
+`sundials_context.hpp` uses `std::make_unique`, which needs C++14, while most
+SYSTYPE blocks pin GIZMO to `-std=c++11`. Rather than silently promoting the
+whole build to C++14 (which would happen if the flag were folded into `CFLAGS`,
+since the last `-std` on the command line wins), the six port sources get their
+own pattern rule that appends `-std=c++14 -I.` The rest of GIZMO keeps its
+SYSTYPE standard. The extra `-I.` is needed because GIZMO's `CFLAGS` carries no
+`-I.` and the port sources include `"GIZMO_config.h"` / `"cooling/chemcool/*.h"`
+by tree-root-relative path (the same convention the one-zone build uses, so one
+set of sources serves both).
+
+**Failure funnel.** `chem_evolve_cxx` maps a nonzero driver return code onto
+`chemcool_fatal_(code)` — the same `endrun(78100+code) → MPI_Abort` funnel and
+the same code numbers as the Fortran `ABORT(...)` macro (audit R7), so existing
+run-forensics knowledge transfers unchanged.
+
+**Network guard.** `#error` if `CHEMISTRYNETWORK` is not 5 or 17 — the other
+networks have no ported RHS and must build without the flag.
+
+## D-12. Source-of-truth layout (single copy, no divergence)
+
+The port lives at `cooling/chemcool/cxx/` inside the canonical tree, and the
+one-zone benchmark compiles **those exact files** — `src/build3.sh` sets
+`CXX_DIR` to `cooling/chemcool/cxx` inside the rsync'd build copy. There is no
+second copy of the port and no benchmark-only variant of any source file. That
+is what makes the Gate-2 numbers meaningful: what passes the benchmark is
+literally what GIZMO compiles.
+
+Per the standing rule, nothing is ever compiled inside `test/gizmo`: the tree is
+rsync'd to `fb_tests/_chemcool_cxx_build/gizmo/` and all objects, binaries,
+goldens, logs and CSVs live under `fb_tests/_chemcool_cxx_build/`.
+
+## D-13. (Gate 3) `co_cool` indexes the vibrational table with the ROTATIONAL column
+
+`cool_util.F:131` computes the vibrational column index as
+`iN_co = int((10 * N_co_eff) - 129)` — using `N_co_eff`, the *rotational*
+effective column, although the surrounding branch tests and interpolates with
+`N_co_eff_vib`. In production the two are equal (`cool_func.F:471-473` sets
+`N_co_eff_vib = N_co_eff` and the clamps are applied to each separately), so the
+bug is latent, but it is not always so: the two clamps differ
+(`maximum_CO_column_rot` = 20.0 vs `maximum_CO_column_vib` = 19.0), so a cell
+whose rotational column is clamped and whose vibrational column is not will pick
+a mismatched `iN_co`. **Reproduced literally** (`chem_cool_util.cc`), because
+Gate 3's contract is bit-identity, not correction. Flag to Uli as a separate
+physics decision.
+
+## D-14. (Gate 3) `calc_photo` is ported for networks 5 and 17 only
+
+`calc_photo.F` fills `phrates(11..54)` for networks 3/7/8/11/15 using dust
+factors (`df09`, `df12`, `df17`, `df18`, `df21`, `df23`, `df24`, `df28`,
+`df31`, `df37`, `df38`, `df39`, `dfsp1`) that are themselves only *computed*
+under those networks' own `#if CHEMISTRYNETWORK` guards. Porting them would
+mean carrying dead branches for networks Stella does not build. The C++ port
+covers nets 1/2/4/5/6/17 exactly and prints a loud
+`calc_photo: network N not ported` for the rest. Gate 4 must keep the Fortran
+path available for those networks (which it does — `CHEMCOOL_CXX` is opt-in).
+
+## D-15. (Gate 3, audit R2) shared mutable state is now thread_local
+
+Two objects in the C++ path are mutable and were process-global at Gate 2:
+the CVODE workspace cache (`cvode_driver.cc:g_work`, DEVIATIONS D-7) and the
+solver statistics counters. Both are now `thread_local`. Consequences:
+
+* an OpenMP loop over cells is race-free — proven, not asserted:
+  `golden/test_purecxx.cc` runs 64 concurrent solves on 8 threads and requires
+  the results to be **bit-identical** to the serial run;
+* the cost is one CVODE workspace per (thread, network) — a few kB per thread;
+* `chemcxx_stats()` now reports the **calling thread's** counters. Single-
+  threaded runs (every harness here) are unchanged; a future OpenMP production
+  path wanting global totals must reduce across threads.
+
+The remaining process-global object, `ChemTables`, is written once in
+`chem_cxx_tables_init()` and is `const` everywhere afterwards, so it is safe to
+share. `ChemCell` is per-cell and passed by reference to every kernel; the
+plain-C convenience API in `chem_backend_cxx.cc` keeps one per thread.
+
+## D-16. (Gate 3) five more default-REAL literals — and one build bug — found by the goldens
+
+D-10 established that Fortran literals *without* a `D` exponent are DEFAULT REAL
+(float32) and must be reproduced as such. Gate 3's kernel goldens found five
+more instances, each of which the golden localised precisely before it was
+fixed. They are listed here because each one is a place where "reading the
+printed decimal" silently changes an answer:
+
+| where | literal | effect if read as an exact double | golden signature |
+|---|---|---|---|
+| `cool_func.F:875` | `PEvar0**0.73` | 0.73 → 0.7300000190734863 | photoelectric heating |
+| `wss_z_collis.F:91` + the nine solar reference abundances | `lT_range = 6.98185`, `2.07e-3`, … | interpolation index shifts | **rates(3): 0/383880 passing**, worst 5.0e-6 |
+| `wss_z_collis.F:45-47` | `fac = 1e-20` clamp | log10 shifted by 1.378e-8 on every floored row | wss_* tables: exactly 59/352 rows failing (the 59 rows with T < 1473.6 K, i.e. the floored ones) |
+| `cool_util.F:857` | `chi_isrf / 1.7` | ISRF dust heating off by 2.8e-8 | `calc_dust_temp` tdust, 7.8e-9 |
+| `cool_util.F:539` | `(logT - 1.5) / 0.03` | H2 opacity index | (folded into the above) |
+| `calc_temp.F:185-186` | `abh2 / 0.1` **and** `0.1 * idx_h2` | see below | `lookup_temp_gamma`, 1.45e-8 |
+
+The `calc_temp.F` case is worth spelling out because it is two distinct traps in
+one line. `abh2 / 0.1` promotes the float32 literal to double — that fixed 9 of
+the 10 test values. `0.1 * idx_h2` is **REAL(4) × INTEGER**, so the *product* is
+rounded back to float32 before the REAL(8) subtraction; that extra rounding is
+visible only when `float32(0.1) * idx_h2` is not exactly representable, which on
+the test grid is `idx_h2 = 3` alone — and `abh2 = 0.4` was precisely the one
+value still failing. Diagnosis and fix confirmed by the per-`abh2` breakdown the
+golden prints.
+
+**The build bug.** The C++ TUs use GIZMO's own convention,
+`#include "../../../GIZMO_config.h"`, i.e. the config at the *root of the tree
+being compiled*. The Gate-3 harness compiled net 5 and net 17 out of one rsync'd
+tree whose root config was the canonical one (net 17), so the "net 5" objects
+were built with net-17 semantics: `#if CHEMISTRYNETWORK == 5` was false and
+`phrates(10)` (CO photodissociation) was never assigned. The golden caught it as
+19872 mismatches with `F = 1.235e-13, C = 0`. Fixed by copying the per-net
+`GIZMO_config.h` to the build-tree root before each net's compile
+(`golden/build_gate3.sh`, `golden/build_gate2_rerun.sh`,
+`golden/build_purecxx.sh`). **Any future harness that builds more than one
+network out of one tree must do the same.**
+
+## D-17. (Gate 3) leaf-kernel ABORTs become recoverable returns
+
+`cool_func`'s two `ABORT` cases (bad temperature index; `abh2 > 0.5 + eps`) and
+`calc_dust_temp`'s `ABORT(10)` (Newton budget exhausted) are, in the port,
+loud prints plus a flag on `ChemCell` (`cool_func_failed`, `dust_iter_failed`)
+and a nonzero return, which the RHS turns into `CHEM_RHS_RECOVERABLE`. This is
+the same treatment as D-3 and for the same reason: a hard abort inside an RHS
+evaluation kills the job on what may be a *rejected trial step*. A persistent
+failure still collapses `dt` to 1e-8 s and returns code 100, so nothing is
+masked. `cool_func`'s `temp < 0` path keeps the Fortran behaviour exactly —
+print and return **without touching** `ylam` or `rates`.
+
+## D-18. (Gate 3) not ported from `cool_util.F` / `calc_photo.F`
+
+* `compute_h2_heating_fraction` (and the whole `h2heat.h` 3509-element table):
+  its only call site, `rate_eq_simple.F:392`, is commented out. No live caller
+  in nets 5 or 17.
+* `dma_calc`: guarded by `#if defined DMA`, which no Stella build sets, and its
+  body returns hard zeros for both outputs anyway.
+* `chi`'s `index == 200` branch is a bare Fortran `stop` (D-4 class). The port
+  keeps the print and returns the AV>200 asymptote instead of killing the rank.
+  Unreachable: `AV > 200` already returned above it.
+* `column_est` / `iphoto = 3/4/5`: the code paths are ported (they are three
+  lines) but `column_est` is hard-zero in production, as D-5 records.
+
+---
+
+## KEPT deliberately (audit KEEP items — listed so they are not "fixed" later)
+
+* **R1/R4 — the outer substep loop is kept literally.** Safety factors 0.1
+  (species) / `DTCOOL_SCALE_FACTOR = 0.3` (energy), `ctrl_floor` pool gating
+  (`eps_ctrl = 1e-6` × elemental pool), `dt = min(dt_est, t_end - t_start)`.
+  Successful substeps *continue* the integrator (no re-init) ≡ DVODE
+  `istate=2`, so `check_abundances` clips modify the driver's `y` (the final
+  answer / the next `y_old`) but do **not** feed back into the integrator's
+  trajectory. That clip-no-feedback subtlety (audit §3.1, "Critical subtlety")
+  is reproduced exactly. Failures restore `y` *and* `tdust`, halve `dt`, and
+  `CVodeReInit` ≡ `istate=1`.
+* **R4 — tolerances.** `RTOL = 1e-4` (the "0.1%" comment in the Fortran is
+  stale — not "fixed"). Per-species `ATOL` via `CVodeSVtolerances`: H2 1e-7,
+  H+ 1e-12, CO 1e-14, and for net 17 He+ 1e-14, He++ 1e-14, D+ 1e-14, HD 1e-12.
+  `MXSTEP = 200000` via `CVodeSetMaxNumSteps`.
+* **R4 — `ATOL(energy) = 0` is kept as 0**, i.e. pure relative control on the
+  energy component, exactly as `ATOL_TMP = 0d0`
+  (`chemcool_consts.h:572`, `evolve_abundances.F:755`).
+  *Justification for keeping it rather than mapping it to a small positive
+  floor:* a zero `atol` component is legal in both DVODE and CVODE; it is only
+  unsafe if that component can pass through zero, because the error test then
+  has no scale. Here the energy component cannot: it is an internal-energy
+  **density**, floored at `rho*All.MinEgySpec` before entry
+  (`chemcool.cc:577-581`), bounded below physically by the CMB floor, and
+  strictly positive throughout. Substituting any positive `atol_E` would set an
+  absolute energy scale in `erg cm^-3` — a quantity that spans ~20 decades
+  across the (n, T) domain — so a single constant would be simultaneously
+  meaningless in diffuse gas and dominant in dense gas, and would change the
+  accepted step sequence in a resolution-dependent way. Pure relative control
+  is the only scale-free choice, and it is what has been validated.
+  CVODE raises `CV_TOO_MUCH_ACC`/`-6` if a pure-relative component ever
+  vanishes; that returns negative and lands in the normal restore/halve path,
+  so the failure mode is contained rather than silent.
+* **R4 — numerical Jacobian.** `MF = 22` maps to CVODE BDF + `SUNLinSol_Dense`
+  with the internal difference-quotient Jacobian. There is no analytic
+  Jacobian to port: `jac.F` is a dummy that DVODE never calls with `MF=22`.
+* **R6 — the TNOCHEM bypass is ported wholesale**: 5e5 K threshold, molecules
+  zeroed, hot-CIE ion set (`H+=1`, `He+=0`, `He++=abhe`, `D+=abundD`), explicit
+  energy-only forward-Euler subcycle at `dt = 0.1|e/edot|`, 100000-iteration
+  budget, mid-step hand-back to the stiff path when T drops below threshold,
+  the `1e-10*t_end` relative completion tolerance (WEDGEFIX 3), and the
+  `ipar`-clear semantics (RHS return value ignored inside the bypass loop).
+* **R7 — failure taxonomy and codes.** `dt < 1e-8 s` → return 100 (≡ ABORT(100),
+  with the same state dump); substep budget 9e6 exhausted → return 1
+  (≡ ABORT(0)); negative or bad-zero `dt` → return 2 (≡ ABORT(1)/(2)). The
+  harness maps any nonzero to the `chemcool_fatal` exit path.
+* **R5 — photorate freshness.** `calc_photo` runs exactly once per cell call;
+  `phrates`, `G_dust`, `chi_isrf`, `fshield_CO` and the dust factors are frozen
+  for the whole call (snapshotted into `ChemCell` by `chem_bind_cell()`), while
+  H2/HD self-shielding and the Doppler `b` are recomputed at every RHS
+  evaluation from the live `abh2`/`T`, and `tdust` is re-solved every RHS
+  evaluation and rolled back with `y` on retries.
+* **net-17 specifics kept:** the 25-pass `eqtol = 1e-3` algebraic sub-iteration
+  for H⁻/H2⁺/HeH⁺ with the 2026-07-07 WEDGEFIX 1/2 clamps; the
+  `2*NH*abHI < 1.6e17 → ch18 = 0` optically-thin switch (always taken with
+  `dl=0`); `abundances(2) = abo*(1-abhp)`; the second `cool_func` call at
+  `T_CMB` when `redshift > 0`.
+* **R10 is NOT applied, and Gate 3 decided to keep it that way — see D-19.**
+  `lambda`/`lambda_chem` keep the Fortran
+  "last RHS evaluation wins" semantics so the A/B stays comparable. The audit's
+  recommendation (a dedicated post-solve RHS evaluation at the accepted state)
+  is a Gate-3 change.
+
+---
+
+## Open / deferred
+
+* **R2 (per-cell context) is only half done.** `ChemCell` exists and the C++
+  RHS is reentrant, but the Fortran leaves still read COMMON, so the Gate-2
+  backend is single-threaded. Closing this requires Gate 3.
+* **R10** diagnostic-consistency change — deferred (above).
+* **`iflag_atom=1` cl6 branch** (`coolatom`, 81 points) is ported in
+  `chem_spline.cc` but not golden-tested; production uses `iflag_atom=2`.
+* **Gate 4** (`CHEMCOOL_CXX` compile flag in canonical, default OFF, Fortran
+  retained as the fallback) is untouched — Uli's standing requirement that the
+  Fortran path remains the reference implementation still holds.
+
+## Uli ruling 2026-07-29: "we trust the Glover code when in doubt"
+- D-20 NL97 Gamma_CHx normalization (audit provenance flag): KEEP the code-heritage
+  value (2.94e-10, as in Glover's own code) — do NOT adopt the GC12 paper
+  reinterpretation. Both backends unchanged.
+- D-21 co_cool vib/rot table column (cool_util.F:131, Gate-3 finding): inherited
+  from the Glover code — KEEP as-coded in both backends. Do not re-flag.
+Standing principle for all future paper-vs-code discrepancies in the chemistry:
+the Glover CODE is the reference implementation.

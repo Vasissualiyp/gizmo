@@ -11,6 +11,13 @@
 #include "../core/proto.h"
 #include "../mesh/kernel.h"
 
+/* CellP[].Temp exists only under CHEMCOOL; SFinfo logging stores 0 without it */
+#ifdef CHEMCOOL
+#define SF_LOG_TEMP(i) (CellP[i].Temp)
+#else
+#define SF_LOG_TEMP(i) (0.)
+#endif
+
 /*!
  *  routines for star formation in cosmological/galaxy/single-star/black hole simulations
  */
@@ -546,6 +553,14 @@ void star_formation_parent_routine(void)
                         Stars_converted++;
                         stars_converted++;
                         P[i].StellarAge = All.Time;
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+                        /* TestStarInitAgeYr>0 (B10 AGB test, 2026-07-28): back-date the birth
+                         * time so the star BEGINS at the given age -- evolution (winds, AGB
+                         * superwind, death) then proceeds NATURALLY from that phase. Campaign
+                         * rule honored: no force-firing of AGB events; we only move the clock. */
+                        if(All.TestStarInitAgeYr > 0) {P[i].StellarAge = All.Time - All.TestStarInitAgeYr / (UNIT_TIME_IN_GYR * 1.0e9);}
+#endif
+
                         
                         P[i].Sink_Mass = All.SeedSinkMass;
                         if(All.SeedSinkMassSigma > 0)
@@ -611,6 +626,14 @@ void star_formation_parent_routine(void)
                             P[ns].Type = 4;
                             P[ns].Mass = 1e-10 / UNIT_MASS_IN_SOLAR; /* tiny placeholder — filled by accretion walk */
                             P[ns].StellarAge = All.Time;
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+                        /* TestStarInitAgeYr>0 (B10 AGB test, 2026-07-28): back-date the birth
+                         * time so the star BEGINS at the given age -- evolution (winds, AGB
+                         * superwind, death) then proceeds NATURALLY from that phase. Campaign
+                         * rule honored: no force-firing of AGB events; we only move the clock. */
+                        if(All.TestStarInitAgeYr > 0) {P[ns].StellarAge = All.Time - All.TestStarInitAgeYr / (UNIT_TIME_IN_GYR * 1.0e9);}
+#endif
+
 #ifdef DO_DENSITY_AROUND_NONGAS_PARTICLES
                             P[ns].DensityAroundParticle = CellP[i].Density;
 #endif
@@ -641,11 +664,11 @@ void star_formation_parent_routine(void)
                             sf_x[n_sf_local]=P[ns].Pos[0]; sf_y[n_sf_local]=P[ns].Pos[1]; sf_z[n_sf_local]=P[ns].Pos[2];
                             sf_u[n_sf_local]=CellP[i].InternalEnergyPred; sf_rho[n_sf_local]=CellP[i].Density;
                             sf_mstar[n_sf_local]=M_drawn_imf; sf_Z[n_sf_local]=P[ns].Metallicity[0];
-                            sf_T[n_sf_local]=CellP[i].Temp; sf_id[n_sf_local]=(long long)P[ns].ID; n_sf_local++;
+                            sf_T[n_sf_local]=SF_LOG_TEMP(i); sf_id[n_sf_local]=(long long)P[ns].ID; n_sf_local++;
 #endif
                             /* defer tree insertion until after accretion walk sets real mass */
                             P[ns].MstarSampleIMF[1] = (double)i; /* store parent index for deferred tree insertion */
-                            P[ns].MstarSampleIMF[3] = CellP[i].Temp; /* formation temperature [K] for SFinfo log */
+                            P[ns].MstarSampleIMF[3] = SF_LOG_TEMP(i); /* formation temperature [K] for SFinfo log */
                             CellP[i].IMFSpawnBlock = 1; /* block SF on this cell until density is recomputed */
                             stars_spawned++;
                         }
@@ -661,6 +684,14 @@ void star_formation_parent_routine(void)
                             TimeBinSfr[P[i].TimeBin] -= CellP[i].Sfr;
                             
                             P[i].StellarAge = All.Time;
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+                        /* TestStarInitAgeYr>0 (B10 AGB test, 2026-07-28): back-date the birth
+                         * time so the star BEGINS at the given age -- evolution (winds, AGB
+                         * superwind, death) then proceeds NATURALLY from that phase. Campaign
+                         * rule honored: no force-firing of AGB events; we only move the clock. */
+                        if(All.TestStarInitAgeYr > 0) {P[i].StellarAge = All.Time - All.TestStarInitAgeYr / (UNIT_TIME_IN_GYR * 1.0e9);}
+#endif
+
 
 #ifdef DO_DENSITY_AROUND_NONGAS_PARTICLES
                             P[i].DensityAroundParticle = CellP[i].Density;
@@ -688,7 +719,7 @@ void star_formation_parent_routine(void)
                             sf_rho[n_sf_local] = CellP[i].Density;
                             sf_mstar[n_sf_local] = P[i].Mass;
                             sf_Z[n_sf_local] = P[i].Metallicity[0];
-                            sf_T[n_sf_local] = CellP[i].Temp; /* CHEMCOOL exact temperature from non-equilibrium abundances */
+                            sf_T[n_sf_local] = SF_LOG_TEMP(i); /* CHEMCOOL exact temperature from non-equilibrium abundances */
                             sf_id[n_sf_local] = (long long)P[i].ID;
                             n_sf_local++;
 #endif
@@ -906,7 +937,7 @@ void star_formation_parent_routine(void)
                                 sf_rho[n_sf_local] = CellP[i].Density;
                                 sf_mstar[n_sf_local] = P[ns].Mass;
                                 sf_Z[n_sf_local] = P[ns].Metallicity[0];
-                                sf_T[n_sf_local] = CellP[i].Temp; /* CHEMCOOL exact temperature from non-equilibrium abundances */
+                                sf_T[n_sf_local] = SF_LOG_TEMP(i); /* CHEMCOOL exact temperature from non-equilibrium abundances */
                                 sf_id[n_sf_local] = (long long)P[ns].ID;
                                 n_sf_local++;
                             }

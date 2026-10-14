@@ -164,7 +164,12 @@ c
 c
       abcp = max(0d0, abundc - abco)
 c
-      abe  = abhp + abhep + 2d0 * abhepp + abcp + abdp
+c METAL-ELECTRON FIX (2026-07-28, Uli directive: "network 17 should source the
+c metal electrons as well, like network 5"): Si (IP 8.2 eV) ionizes even more
+c easily than C (11.3 eV) in the FUV field -- counting C+ but not Si+ was
+c inconsistent; net 5 counts both. Affects cold-gas n_e (~10% metal-donor
+c share), grain PE-heating charging phi, grain recombination, H- formation.
+      abe  = abhp + abhep + 2d0 * abhepp + abcp + abdp + abundsi
 c
       abHI = 1d0 - 2d0 * abH2 - abhp
       abHI = max(0d0, abHI)
@@ -504,6 +509,13 @@ c
 c
 c Photodissociation rates
 c
+c UNINITIALIZED-NH FIX (2026-07-28, Uli sign-off): NH was first assigned ~90
+c lines BELOW this call (ionizing-opacity block) -- so the local intra-cell
+c H2 column NH2_local = abh2*NH inside calc_H2_shielding_factor read stack
+c garbage on the first RHS evaluation of every chemistry call (affects ykdis
+c AND the 0.4+2.0 eV photodissociation/pumping heating). Net 5 assigns NH
+c before use; net 17 now does too, keeping ITS half-length convention.
+      NH = 0.5d0 * dl * yn
       if (iphoto .eq. 0) then
          fshield = 1d0
       else

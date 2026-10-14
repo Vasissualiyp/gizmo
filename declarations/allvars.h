@@ -492,7 +492,12 @@ extern struct global_data_all_processes
   double TestSNSpacing;         /*!< code time between forced explosions (see TestSNTime0) */
   int TestFUVZero;              /*!< 1: zero ALL stellar radiation (UV/LW/NUV/OPT/Lyman) — quiescent-medium experiments (KO15 ladder) */
   double TestFixedQion;         /*!< >0: PIN the ionizing photon rate Q [phot/s] to this constant (no aging drift) + zero non-ionizing bands — clean StarBench PI ionization-front test (constant source vs Spitzer/HI); 0 = off (variable table Q) */
+  double TestStarBenchIso;      /*!< >0: StarBench BENCHMARK-MODE thermodynamics (2026-07-31): neutral gas held isothermal at this T [K], ionized gas pinned at T_II, NO radiative losses in between — the thermal conditions the StarBench codes and Smith+21/Hu+17 tests actually assume. Full thermochemistry radiates the D-type driving work away at the ionized/neutral interface at high n (measured: ALL methods -50%% at n=100 with chemistry on), which the analytic references exclude by construction. 0 = off (full chemistry) */
+  double TestFBNoGasUntilTime;  /*!< >0: FB weighting walks find no gas until this code time (no-gas event test) */
+  double TestStarInitAgeYr;     /*!< >0: back-date test-star birth time by this many years (B10 AGB test: star starts IN its late phase; evolution proceeds naturally); 0 = off */
   double TestFixedLbol;         /*!< >0: PIN bolometric luminosity [erg/s] constant, split UV/NUV/OPT, zero ionizing — clean radiation-pressure test (constant source vs momentum-driven shell); 0 = off */
+  double TestFixedWindMdot;     /*!< >0: PIN the stellar wind mass-loss rate [Msun/yr] constant (bypasses tables+PMS delay) — clean Weaver-bubble test; 0 = off (table wind) */
+  double TestFixedWindVel;      /*!< with TestFixedWindMdot: constant wind velocity [km/s]; L_w = 0.5*Mdot*v^2 known analytically for the Weaver comparison */
 #endif
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
   double ShieldingLength;       /*!< maximum distance for column density integration in tree walk (shared by TREE_RAD FUV-G0 and the standalone TREE_RAD_H2/CO line-shielding walks) */
@@ -1190,6 +1195,7 @@ extern struct gravdata_out
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #ifdef TREE_RAD
     MyDouble Projection[NPIX];            /*!< HEALPix column density per pixel */
+    MyDouble ProjectionDust[NPIX];        /*!< HEALPix DGR-weighted column per pixel (solar-DGR units; exact variable-dust attenuation) */
 #endif
 #ifdef TREE_RAD_H2
     MyDouble ProjectionH2[NPIX];          /*!< HEALPix H2 column density per pixel */
@@ -1613,6 +1619,9 @@ extern ALIGN(32) struct NODE
     MyFloat maxsoft;        /*!< hold the maximum gravitational softening of particle in the node */
 #if defined(GRAVTREE_CALCULATE_GAS_MASS_IN_NODE)
   MyFloat gasmass;
+#ifdef TREE_RAD
+  MyFloat dustmass;             /*!< DGR-weighted gas mass in node (solar-DGR units): variable dust cannot be pulled out of the column integral (Uli 2026-07-28) */
+#endif
 #ifdef TREE_RAD_H2
   MyFloat h2mass;               /*!< H2 mass in tree node */
 #endif

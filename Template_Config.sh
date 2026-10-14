@@ -233,6 +233,8 @@
 # ---- SN feedback, and optionally full Kroupa IMF sampling or stochastic single-star IMF assignment.
 #GALSF_RESOLVEDISM              # master switch: auto-enables GALSF, COOLING, METALS; undefs FIRE FB flags
 #GALSF_RESOLVEDISM_FB           # SN energy injection from resolved massive stars
+#GALSF_RESOLVEDISM_FB_HEALPIX   # solid-angle-uniform (HEALPix) FB weighting alternative to kernel wk; G17-matrix-validated; was undefinable before audit 2026-07-28
+#RESOLVEDISM_HOTSYNC_CLAMP      # hot-region timebin sync clamp (one-sided pair-flux guard, timestep.cc); was undefinable before audit 2026-07-28
 #GALSF_RESOLVEDISM_PHOTOION     # Stromgren-sphere photo-ionization around massive stars
 #GALSF_RESOLVEDISM_STOCHASTIC_IMF # quick-and-dirty: assign single massive-star mass per particle (Salpeter draw)
 #GALSF_RESOLVEDISM_SAMPLE_IMF   # full Kroupa IMF sampling into N_STELLAR_MASS slots (mutually exclusive with STOCHASTIC_IMF)
@@ -253,6 +255,14 @@
 #BS19_XH2                       # Bialy & Sternberg 2019 H2 prescription
 #CR_HEATING_DM72                # Dalgarno & McCray 1972 cosmic ray heating
 #CR_SCALE_WITH_G0               # cosmic ray ionization rate scales with G0
+#CHEMCOOL_CXX                   # use the C++/CVODE chemistry backend (cooling/chemcool/cxx/) instead
+                                #   of the Fortran DVODE driver. DEFAULT OFF: the Fortran path stays the
+                                #   reference implementation. Networks 5 and 17 only. Replaces the
+                                #   integrator + RHS assembly + driver policy; the RHS leaf kernels and
+                                #   the coolinmo/cheminmo tables are still Fortran (cxx/DEVIATIONS.md D-0).
+                                #   Needs SUNDIALS CVODE >= 6.x: set SUNDIALS_DIR in the Makefile.
+                                #   NOT thread-safe -- do not combine with OPENMP until Gate 3.
+                                #   Acceptance results: cooling/chemcool/cxx/GATE2_ACCEPTANCE.md
 ## ----------------------------------------------------------------------------------------------------
 # ----- TREE_RAD: HEALPix column density in gravity tree walk (replaces RT_USE_TREECOL_FOR_NH) ------
 #TREE_RAD                       # HEALPix angular binning for column density (mutually exclusive with RT_USE_TREECOL_FOR_NH)

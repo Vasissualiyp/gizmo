@@ -7,6 +7,8 @@
 #include <gsl/gsl_rng.h>
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
+#include "resolvedism_selfcheck.h"
+#include "resolvedism_fb_shared.h"
 #include "../mesh/kernel.h"
 
 /* LYRA-style single-star IMF sampling (Gutcke+ 2021).
@@ -89,6 +91,11 @@ void finalize_sampled_star(int i, double M_drawn)
 #endif
 #ifdef GALSF_RESOLVEDISM_TYPE_IA
     P[i].M_drawn_Ia = 0; /* set when star dies as WD */
+#endif
+#ifdef GALSF_RESOLVEDISM_FB
+    P[i].FB_Deposited = 0;
+    P[i].FB_NoDepositCount = 0;
+    {int k_; for(k_ = 0; k_ < 3; k_++) {P[i].FB_RecoilAccum[k_] = 0; P[i].FB_VecSum[k_] = 0;}}
 #endif
 
     /* Clear temporary storage */
@@ -199,7 +206,7 @@ void recompute_resolvedism_fuv_luminosities(void)
             P[i].Lyman_photons_per_sec = All.TestFixedQion;
 #endif
 #ifdef TREE_RAY_PI
-            P[i].Ion_luminosity = All.TestFixedQion * 27.2 * 1.60218e-12;
+            P[i].Ion_luminosity = All.TestFixedQion * Resolvedism_Eion_eff_eV * 1.60218e-12; /* table-driven <hnu> (was 27.2) */
 #endif
         }
         return;
@@ -251,6 +258,9 @@ void recompute_resolvedism_fuv_luminosities(void)
         return;
     }
 #endif
+#ifdef STELLA_SELFCHECK
+    int n_selfcheck_life = 0;
+#endif
     for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
     {
         if(P[i].Type != 4) continue;
@@ -270,6 +280,14 @@ void recompute_resolvedism_fuv_luminosities(void)
 #endif
         if(M_drawn <= All.IMFSampleStellarMassCut) continue;
         double star_age_yr = evaluate_stellar_age_Gyr(i) * 1.0e9;
+#if defined(STELLA_SELFCHECK) && defined(GALSF_RESOLVEDISM_STELLAR_TABLES) && defined(GALSF_RESOLVEDISM_FB)
+        { /* radiation and death must use the same lifetime */
+            double lM_ = log10(DMAX(M_drawn, 0.09)), lZ_ = log10(DMAX(P[i].BirthMetallicity, 1e-10));
+            double t_rad = get_lifetime(M_drawn, P[i].BirthMetallicity), t_die = get_star_lifetime(M_drawn, lM_, lZ_);
+            STELLA_CHECK("lifetime_consistent", fabs(t_rad - t_die) <= 1.0e-9 * t_die, "ID=%llu M=%g t_rad=%g t_die=%g", (unsigned long long)P[i].ID, M_drawn, t_rad, t_die);
+            n_selfcheck_life++;
+        }
+#endif
         if(star_age_yr >= get_lifetime(M_drawn, P[i].BirthMetallicity)) continue; /* dead */
 #ifdef GALSF_RESOLVEDISM_STELLAR_TABLES
         double logM = log10(M_drawn);
@@ -291,9 +309,11 @@ void recompute_resolvedism_fuv_luminosities(void)
 #endif
 #ifdef TREE_RAY_PI
             /* ionizing ENERGY luminosity for the TreeRay PI band: Q_ion [photons/s]
-             * from the table x <hnu> = 27.2 eV (matches the M1 rt_chem convention;
-             * chemcool converts back with the same energy). */
-            P[i].Ion_luminosity = pow(10., stellar_log_Q_ion(logM, logZ, log_age)) * 27.2 * 1.60218e-12;
+             * x the TABLE-DRIVEN population <hnu> (Resolvedism_Eion_eff_eV; was a
+             * hard-wired 27.2 eV = 13.6 eV heat/ionization, ~3x the real O-star
+             * photoelectron energy). chemcool converts back with the same energy,
+             * so the photon count is conserved. */
+            P[i].Ion_luminosity = pow(10., stellar_log_Q_ion(logM, logZ, log_age)) * Resolvedism_Eion_eff_eV * 1.60218e-12;
             if(!isfinite(P[i].Ion_luminosity) || P[i].Ion_luminosity < 0) P[i].Ion_luminosity = 0;
 #endif
         } /* else PMS: stays 0 */
@@ -312,6 +332,62 @@ void recompute_resolvedism_fuv_luminosities(void)
         if(!isfinite(P[i].OPT_luminosity) || P[i].OPT_luminosity < 0) P[i].OPT_luminosity = 0;
 #endif
     }
+#ifdef STELLA_SELFCHECK
+    STELLA_CHECK_RAN("lifetime_consistent", n_selfcheck_life);
+#endif
+}
+#endif
+
+
+#if defined(GALSF_RESOLVEDISM_SAMPLE_IMF) && defined(GALSF_RESOLVEDISM_STELLAR_TABLES) && (defined(RADTRANSFER) || defined(TREE_RAY_PI))
+/* Mean ionizing photon energy of the CURRENT living stellar population, from the
+ * stellar tables: E_eff = Sum L_ion_tot / Sum Q_ion (photon-flux weighted), i.e.
+ * the spectral hardness the tables actually assign to these stars.
+ *
+ * BUGFIX 2026-07-29: the M1/TreeRay ionizing band assumed a hard-wired
+ * <hnu> = 27.2 eV (upstream rt_chem.cc bookkeeping convention), so the chemcool
+ * seam deposited 27.2-13.6 = 13.6 eV of heat PER IONIZATION -- ~3x the real
+ * O-star photoelectron energy (~3-5 eV). Every M1/TreeRay-ionized cell
+ * equilibrated ~40% hot (14.5 kK measured vs ~10-11 kK expected at 0.1 Zsun).
+ * Emission (L_ion from tables) and consumption (Gamma, heating in
+ * chem_interface.cc) both read rt_nu_eff_eV[RT_FREQ_BIN_H0], so updating the
+ * single global keeps the photon count exactly conserved while fixing the
+ * hardness. Multifrequency builds derive per-band energies from the spectrum
+ * (rt_chem.cc) and are left untouched. */
+double Resolvedism_Eion_eff_eV = 27.2;   /* updated per step; startup fallback = old convention */
+void resolvedism_update_ion_photon_energy(void)
+{
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+    if(All.TestFixedQion > 0) {return;} /* pinned-Q test source: keep current <hnu>, skip table lookups on the synthetic star */
+#endif
+    int i; double sumL = 0, sumQ = 0, glob[2];
+    for(i = 0; i < NumPart; i++)
+    {
+        if(P[i].Type != 4 || P[i].sampled != 1) continue;
+        double M_drawn = P[i].MstarSampleIMF[0];
+        if(M_drawn <= DMAX(All.IMFSampleStellarMassCut, 8.0)) continue; /* only ionizing stars matter */
+        double star_age_yr = evaluate_stellar_age_Gyr(i) * 1.0e9;
+        if(star_age_yr >= get_lifetime(M_drawn, P[i].BirthMetallicity)) continue;
+        double logM = log10(M_drawn);
+        double logZ = log10(DMAX(P[i].BirthMetallicity, 1e-10));
+        double table_age = star_age_yr - stellar_t_PMS(logM, logZ);
+        if(table_age <= 0) continue;
+        double log_age = log10(DMAX(table_age, 100.0));
+        double L = pow(10., stellar_log_L_ion_tot(logM, logZ, log_age));
+        double Q = pow(10., stellar_log_Q_ion(logM, logZ, log_age));
+        if(isfinite(L) && isfinite(Q) && L > 0 && Q > 0) {sumL += L; sumQ += Q;}
+    }
+    double loc[2] = {sumL, sumQ};
+    MPI_Allreduce(loc, glob, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    if(glob[1] > 0)
+    {
+        double E_eV = glob[0] / glob[1] / ELECTRONVOLT_IN_ERGS;
+        if(isfinite(E_eV)) {Resolvedism_Eion_eff_eV = DMIN(DMAX(E_eV, 13.6), 100.0);}
+    } /* no living ionizing stars: keep previous value (no photons in flight anyway) */
+#if defined(RADTRANSFER) && defined(RT_CHEM_PHOTOION) && !defined(RT_PHOTOION_MULTIFREQUENCY)
+    rt_nu_eff_eV[RT_FREQ_BIN_H0] = Resolvedism_Eion_eff_eV;
+    rt_ion_G_HI[RT_FREQ_BIN_H0] = (rt_nu_eff_eV[RT_FREQ_BIN_H0] - 13.6) * ELECTRONVOLT_IN_ERGS / UNIT_ENERGY_IN_CGS;
+#endif
 }
 #endif
 
@@ -628,6 +704,9 @@ void assign_stellar_masses(void)
 
     /* Count unsampled stars (spawned by sfr_eff.cc with sampled=0) */
     int nstars_local = 0;
+#ifdef STELLA_SELFCHECK
+    int n_selfcheck_tree = 0;
+#endif
     for(i = 0; i < NumPart; i++)
         if(P[i].Type == 4 && P[i].sampled == 0 && P[i].MstarSampleIMF[0] > 0) nstars_local++;
 
@@ -845,16 +924,22 @@ void assign_stellar_masses(void)
         imf_T[nimf] = P[i].MstarSampleIMF[3]; /* CellP.Temp stored at spawn time */
         nimf++;
 
+        int iparent = (int)P[i].MstarSampleIMF[1]; /* read before finalize clears the temporary slots */
         finalize_sampled_star(i, M_drawn);
-
-        /* Deferred tree insertion: now the star has its real mass */
-        {
-            int iparent = (int)P[i].MstarSampleIMF[1];
-            force_add_element_to_tree(iparent, i);
-            P[i].MstarSampleIMF[1] = 0; /* clear temporary */
+        force_add_element_to_tree(iparent, i); /* deferred tree insertion beside the parent cell */
+#ifdef STELLA_SELFCHECK
+        { /* star must lie inside the tree node it was linked into */
+            int no = Father[i]; double dmax = 0;
+            if(no >= All.MaxPart) {for(k = 0; k < 3; k++) {dmax = DMAX(dmax, fabs(P[i].Pos[k] - Nodes[no].center[k]) / (0.5 * Nodes[no].len));}}
+            STELLA_CHECK("tree_insert", no >= All.MaxPart && dmax <= 1.5, "ID=%llu parent=%d node=%d dist_over_halflen=%g", (unsigned long long)P[i].ID, iparent, no, dmax);
+            n_selfcheck_tree++;
         }
+#endif
     }
 
+#ifdef STELLA_SELFCHECK
+    STELLA_CHECK_RAN("tree_insert", n_selfcheck_tree);
+#endif
     /* Gather SF info and write to SFinfo.txt on rank 0 */
     {
         int nimf_total = 0;

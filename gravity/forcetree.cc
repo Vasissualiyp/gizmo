@@ -6,6 +6,7 @@
 #include <time.h>
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
+#include "../declarations/resolvedism_dgr.h"
 #include "../mesh/kernel.h"
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #include "healpix_utils.h"     /* HEALPix pixel geometry: shared by FUV-G0 (TREE_RAD) and standalone H2/CO column walks */
@@ -495,6 +496,9 @@ void force_update_node_recursive(int no, int sib, int father)
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
         MyFloat gasmass = 0;
 #endif
+#ifdef TREE_RAD
+        MyFloat dustmass = 0;
+#endif
 #ifdef TREE_RAD_H2
         MyFloat h2mass = 0, comass = 0;
 #endif
@@ -596,6 +600,9 @@ void force_update_node_recursive(int no, int sib, int father)
                         vs[2] += (Nodes[p].u.d.mass * Extnodes[p].vs[2]);
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
                         gasmass += Nodes[p].gasmass;
+#endif
+#ifdef TREE_RAD
+                        dustmass += Nodes[p].dustmass;
 #endif
 #ifdef TREE_RAD_H2
                         h2mass += Nodes[p].h2mass;
@@ -709,6 +716,9 @@ void force_update_node_recursive(int no, int sib, int father)
                     if(pa->Type == 5) gasmass += P[p].Sink_Mass_Reservoir; // gas at the inner edge of a disk should not see a hole due to the sink
 #endif
 #endif
+#ifdef TREE_RAD
+                    if(pa->Type == 0) {dustmass += resolvedism_cell_DGR_solar(p) * pa->Mass;}
+#endif
 #ifdef TREE_RAD_H2
                     if(pa->Type == 0) {
                         h2mass += 2.0 * CellP[p].TracAbund[IH2] * HYDROGEN_MASSFRAC * pa->Mass;
@@ -719,7 +729,11 @@ void force_update_node_recursive(int no, int sib, int father)
 #endif
 #ifdef GALSF_RESOLVEDISM_G0_VARIABLE
                     if(pa->Type == 4 || pa->Type == 5) {uv_luminosity += P[p].UV_luminosity; lw_luminosity += P[p].LW_luminosity;
-                        {int kl; for(kl=0;kl<3;kl++) lum_s[kl] += (P[p].UV_luminosity + P[p].LW_luminosity) * P[p].Pos[kl];}
+                        {double w_lum = P[p].UV_luminosity + P[p].LW_luminosity;
+#ifdef TREE_RAY_PI
+                         w_lum += P[p].Ion_luminosity; /* ion-only sources (fixed-Q PI test) must anchor the centroid: UV-only weight left them unpositioned -> zero ionizing flux (2026-07-14) */
+#endif
+                         int kl; for(kl=0;kl<3;kl++) lum_s[kl] += w_lum * P[p].Pos[kl];}
 #ifdef GALSF_RESOLVEDISM_NUV_VARIABLE
                         nuv_luminosity += P[p].NUV_luminosity;
 #endif
@@ -939,6 +953,9 @@ void force_update_node_recursive(int no, int sib, int father)
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
         Nodes[no].gasmass = gasmass;
 #endif
+#ifdef TREE_RAD
+        Nodes[no].dustmass = dustmass;
+#endif
 #ifdef TREE_RAD_H2
         Nodes[no].h2mass = h2mass;
         Nodes[no].comass = comass;
@@ -1098,6 +1115,9 @@ void force_exchange_pseudodata(void)
          * pseudo-node exchange (same bug class as the G0 fields below) — remote/top
          * nodes carried ZERO gas/H2/CO mass for the treecol column integrals. */
         MyFloat gasmass;
+#ifdef TREE_RAD
+        MyFloat dustmass;
+#endif
 #ifdef TREE_RAD_H2
         MyFloat h2mass, comass;
 #endif
@@ -1197,6 +1217,9 @@ void force_exchange_pseudodata(void)
 #endif
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
             DomainMoment[i].gasmass = Nodes[no].gasmass;
+#ifdef TREE_RAD
+            DomainMoment[i].dustmass = Nodes[no].dustmass;
+#endif
 #ifdef TREE_RAD_H2
             DomainMoment[i].h2mass = Nodes[no].h2mass; DomainMoment[i].comass = Nodes[no].comass;
 #endif
@@ -1327,6 +1350,9 @@ void force_exchange_pseudodata(void)
 #endif
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
                     Nodes[no].gasmass = DomainMoment[i].gasmass;
+#ifdef TREE_RAD
+                    Nodes[no].dustmass = DomainMoment[i].dustmass;
+#endif
 #ifdef TREE_RAD_H2
                     Nodes[no].h2mass = DomainMoment[i].h2mass; Nodes[no].comass = DomainMoment[i].comass;
 #endif
@@ -1432,6 +1458,9 @@ void force_treeupdate_pseudos(int no)
 #endif
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
     MyFloat gasmass_tp=0;
+#ifdef TREE_RAD
+    MyFloat dustmass_tp=0;
+#endif
 #ifdef TREE_RAD_H2
     MyFloat h2mass_tp=0, comass_tp=0;
 #endif
@@ -1535,6 +1564,9 @@ void force_treeupdate_pseudos(int no)
 #endif
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
             gasmass_tp += Nodes[p].gasmass;
+#ifdef TREE_RAD
+            dustmass_tp += Nodes[p].dustmass;
+#endif
 #ifdef TREE_RAD_H2
             h2mass_tp += Nodes[p].h2mass; comass_tp += Nodes[p].comass;
 #endif
@@ -1719,6 +1751,9 @@ void force_treeupdate_pseudos(int no)
 #endif
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
     Nodes[no].gasmass = gasmass_tp;
+#ifdef TREE_RAD
+    Nodes[no].dustmass = dustmass_tp;
+#endif
 #ifdef TREE_RAD_H2
     Nodes[no].h2mass = h2mass_tp; Nodes[no].comass = comass_tp;
 #endif
@@ -1942,6 +1977,8 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #ifdef TREE_RAD
     double treecol_Projection[NPIX] = {0};   /* total-H column: FUV-G0 dust shielding (TREE_RAD only) */
+    double treecol_ProjectionDust[NPIX] = {0}; /* DGR-weighted column (solar-DGR units): variable dust stays inside the path integral */
+    double dustmass = 0;
 #endif
 #ifdef TREE_RAD_H2
     double treecol_ProjectionH2[NPIX] = {0}, treecol_ProjectionCO[NPIX] = {0};
@@ -2229,10 +2266,25 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                 m_j_eff_for_df = mass;
 #endif
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
+                /* BUGFIX 2026-07-13: gasmass MUST be reset for every single-particle
+                 * interaction. It was only assigned for Type==0, so a star/BH leaf
+                 * inherited the STALE gasmass of the previously processed gas
+                 * particle/node (inherited upstream pattern). Any star within the
+                 * shielding length then deposited that phantom gas mass into the
+                 * TREE_RAD/TREE_RAY column arrays at ITS OWN r2 — a star roundoff-
+                 * coincident with its birth cell (r2~1e-25) produced a 1e40 cm^-2
+                 * poisoned column pixel -> CHEMCOOL DVODE code-100 fatal. Also the
+                 * likely root of the rank-dependent TreeRay/M1 column corruption
+                 * (stale value depends on walk order). */
+                gasmass = 0;
                 if(P[no].Type == 0) {gasmass = P[no].Mass;}
 #if defined(SINK_ALPHADISK_ACCRETION) && defined(RT_USE_TREECOL_FOR_NH)
                 if(P[no].Type == 5) {gasmass = P[no].Sink_Mass_Reservoir;} // gas at the inner edge of a disk should not see a hole due to the sink
 #endif
+#endif
+#ifdef TREE_RAD
+                dustmass = 0;
+                if(P[no].Type == 0) {dustmass = resolvedism_cell_DGR_solar(no) * P[no].Mass;}
 #endif
 #ifdef TREE_RAD_H2
                 h2mass = 0; comass = 0;
@@ -2556,6 +2608,9 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 #ifdef GRAVTREE_CALCULATE_GAS_MASS_IN_NODE
                 gasmass = nop->gasmass;
 #endif
+#ifdef TREE_RAD
+                dustmass = nop->dustmass;
+#endif
 #ifdef TREE_RAD_H2
                 h2mass = nop->h2mass;
                 comass = nop->comass;
@@ -2575,13 +2630,18 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                  * can sit tens of pc from its stars: measured 0.67x flux deficit at 113 pc
                  * (windres single-star box) purely from the COM offset. lum_s is the
                  * unnormalized Sum (L_uv+L_lw)*pos over the node's stars. */
-                if(uv_lum + lw_lum > 0) {
+                {
                     double wl = uv_lum + lw_lum;
-                    g0_flux_dx = nop->lum_s[0]/wl - pos_x;
-                    g0_flux_dy = nop->lum_s[1]/wl - pos_y;
-                    g0_flux_dz = nop->lum_s[2]/wl - pos_z;
-                    GRAVITY_NEAREST_XYZ(g0_flux_dx, g0_flux_dy, g0_flux_dz, -1);
-                    g0_flux_r2 = g0_flux_dx*g0_flux_dx + g0_flux_dy*g0_flux_dy + g0_flux_dz*g0_flux_dz;
+#ifdef TREE_RAY_PI
+                    wl += ion_lum; /* include ionizing band: ion-only nodes (fixed-Q PI test) otherwise get no centroid (2026-07-14) */
+#endif
+                    if(wl > 0) {
+                        g0_flux_dx = nop->lum_s[0]/wl - pos_x;
+                        g0_flux_dy = nop->lum_s[1]/wl - pos_y;
+                        g0_flux_dz = nop->lum_s[2]/wl - pos_z;
+                        GRAVITY_NEAREST_XYZ(g0_flux_dx, g0_flux_dy, g0_flux_dz, -1);
+                        g0_flux_r2 = g0_flux_dx*g0_flux_dx + g0_flux_dy*g0_flux_dy + g0_flux_dz*g0_flux_dz;
+                    }
                 }
 #if defined(GALSF_RESOLVEDISM_G0_VARIABLE) && defined(GALSF_RESOLVEDISM_ISOLATED_FB_TEST)
                 g0dbg_node = 1;
@@ -2960,6 +3020,7 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                     double area = (4.0*M_PI / NPIX) * r2;
 #ifdef TREE_RAD
                     treecol_Projection[iheal] += gasmass / area;   /* total-H column: TREE_RAD (FUV-G0) only */
+                    treecol_ProjectionDust[iheal] += dustmass / area;
 #endif
 #ifdef TREE_RAD_H2
                     treecol_ProjectionH2[iheal] += h2mass / area;
@@ -2987,18 +3048,34 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 
                 }
 #endif
-                if((uv_lum > 0 || lw_lum > 0) && g0_flux_r2 > 0)
+                if((uv_lum > 0 || lw_lum > 0
+#ifdef TREE_RAY_PI
+                    || ion_lum > 0 /* ion-only sources must open the deposit gate (fixed-Q PI test, 2026-07-14) */
+#endif
+                    ) && g0_flux_r2 > 0)
                 {
                     long iheal;
                     double vec_hp[3] = {g0_flux_dx, g0_flux_dy, g0_flux_dz};
                     vec2pix_ring(NSIDE, vec_hp, &iheal);
-                    double inv_r2 = 1.0 / g0_flux_r2;
+                    /* BUGFIX 2026-07-13: FLOOR the flux dilution radius at the target's
+                     * Plummer-equivalent softening (in-file convention, cf. r2soft above:
+                     * KERNEL_FAC_FROM_FORCESOFT_TO_PLUMMER * soft ~ H_kernel/2.8 ~ 0.7x the
+                     * interparticle spacing for adaptive gas softening). A source EXACTLY
+                     * coincident with a cell (odd-N lattice ICs place a cell at the star
+                     * position; roundoff separation r2~1e-25) otherwise receives F = L/r2
+                     * ~ 1e63 -> photoionization rate ~1e12 s^-1 -> CHEMCOOL DVODE code-100
+                     * fatal. Pure floor (DMAX): bit-identical for every source further than
+                     * the floor; caps only sub-resolution separations at the physical
+                     * "source inside the cell" flux. */
+                    double r2_flux = g0_flux_r2;
+                    {double r_floor = KERNEL_FAC_FROM_FORCESOFT_TO_PLUMMER * soft; if(r2_flux < r_floor*r_floor) {r2_flux = r_floor*r_floor;}}
+                    double inv_r2 = 1.0 / r2_flux;
 #ifdef TREE_RAY
                     /* source deposit: exact 1/r^2 dilution at lum-centroid distance;
                      * only the attenuation ordering is shell-binned. Direct (unattenuated)
                      * treecol_*_flux arrays stay zero under TREE_RAY — the post-walk
                      * sweep in gravtree.cc writes the attenuated CellP fluxes. */
-                    {int is_tr = iheal*TREE_RAY_NSHELL + TREERAY_SHELL_OF(g0_flux_r2);
+                    {int is_tr = iheal*TREE_RAY_NSHELL + TREERAY_SHELL_OF(r2_flux); /* bin at the floored radius (2026-07-13) */
                      treeray_shell_uv[is_tr] += uv_lum * inv_r2;
                      treeray_shell_lw[is_tr] += lw_lum * inv_r2;
 #ifdef TREE_RAY_PI
@@ -3193,7 +3270,7 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 #endif
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #ifdef TREE_RAD
-        if(P[target].Type == 0) {int kp; for(kp=0; kp<NPIX; kp++) CellP[target].Projection[kp] = treecol_Projection[kp];}
+        if(P[target].Type == 0) {int kp; for(kp=0; kp<NPIX; kp++) {CellP[target].Projection[kp] = treecol_Projection[kp]; CellP[target].ProjectionDust[kp] = treecol_ProjectionDust[kp];}}
 #endif
 #ifdef TREE_RAD_H2
         if(P[target].Type == 0) {int kp; for(kp=0; kp<NPIX; kp++) {CellP[target].ProjectionH2[kp] = treecol_ProjectionH2[kp]; CellP[target].ProjectionCO[kp] = treecol_ProjectionCO[kp];}}
@@ -3319,7 +3396,7 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 #endif
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #ifdef TREE_RAD
-        {int kp; for(kp=0; kp<NPIX; kp++) GravDataResult[target].Projection[kp] = treecol_Projection[kp];}
+        {int kp; for(kp=0; kp<NPIX; kp++) {GravDataResult[target].Projection[kp] = treecol_Projection[kp]; GravDataResult[target].ProjectionDust[kp] = treecol_ProjectionDust[kp];}}
 #endif
 #ifdef TREE_RAD_H2
         {int kp; for(kp=0; kp<NPIX; kp++) {GravDataResult[target].ProjectionH2[kp] = treecol_ProjectionH2[kp]; GravDataResult[target].ProjectionCO[kp] = treecol_ProjectionCO[kp];}}

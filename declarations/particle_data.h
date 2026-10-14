@@ -162,6 +162,10 @@ extern ALIGN(32) struct particle_data
      * actual ejecta mass (M_at_SN_trigger - rem_mass) rather than the post-walk
      * residual (~0).  Reset to -1 when bookkeeping is done. */
     MyFloat M_at_SN_trigger;
+    MyDouble FB_VecSum[3];  /* Σ_j Mass_j W_j r̂_j from the momentum weighting pass (direction symmetrisation) */
+    MyDouble FB_RecoilAccum[3]; /* momentum deposited this walk (all returns); applied once after the walk */
+    char FB_Deposited;      /* this step's flagged event reached gas (set by the FB passes) */
+    short FB_NoDepositCount; /* consecutive steps an event found no gas; reset on success */
 #ifdef GALSF_RESOLVEDISM_SN_SPAWN
     /* SN ejecta-spawn prototype (2026-07-05): when the FB kernel holds less gas than
      * ~f*Mej (f = flag value), the SN is NOT kernel-deposited; instead the payload is

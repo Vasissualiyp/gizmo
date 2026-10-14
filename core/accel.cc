@@ -79,11 +79,16 @@ void compute_hydro_densities_and_forces(void)
 #if defined(RT_OPACITY_FROM_EXPLICIT_GRAINS)
         interpolate_fluxes_opacities_gasgrains(); /* this must be called here for the computation of opacities and radiative quantity gradients below to be correct */
 #endif
-#ifdef GALSF /* PFH set of feedback routines; here because for e.g. strong SNe, obtain better stability if they are coupled discretely just -before- the hydro force is computed */
+#if defined(GALSF) && !defined(FB_G17_BOUNDARY_INJECTION) /* PFH set of feedback routines; here because for e.g. strong SNe, obtain better stability if they are coupled discretely just -before- the hydro force is computed */
         MCBAL_LOG("pre_FB");
         compute_stellar_feedback();
         MCBAL_LOG("post_FB");
 #endif
+        /* FB_G17_BOUNDARY_INJECTION: compute_stellar_feedback() moved to the sync boundary
+         * (run.cc calculate_non_standard_physics, gizmo2017 run.c:220 slot).  At that position
+         * the weighting inputs are FRESH -- density()/ags_density() above ran THIS step, so
+         * DensityAroundParticle/KernelRadius/NumNgb are current and the 2026-05-07
+         * stale-density concern (which motivated the mid-step placement) does not apply. */
 
         MCBAL_LOG("pre_grad");
         hydro_gradient_calc(); /* calculates the gradients of hydrodynamical quantities  */

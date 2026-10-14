@@ -1,0 +1,8940 @@
+{
+ "counts": {
+  "generated": 346,
+  "TABLE": 8,
+  "SPECIAL": 0,
+  "RHS_INLINE": 201
+ },
+ "records": [
+  {
+   "rate_id": "ch1",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    199,
+    231
+   ],
+   "comment": "Inverse of PSS83 three-body rate",
+   "expression": [
+    "if (iflag_3bh2a == 1):",
+    "  if (temp <= 3d2):",
+    "    chtab(1,itemp) = ((1.1d-9*(temp**0.135d0))*dexp((-(5.2d4/temp))))",
+    "  else:",
+    "    chtab(1,itemp) = ((3.7d-8/(temp**0.485d0))*dexp((-(5.2d4/temp))))",
+    "elseif (iflag_3bh2a == 2):",
+    "  chtab(1,itemp) = ((5.24d-7/(temp**0.485d0))*dexp((-(5.2d4/temp))))",
+    "elseif (iflag_3bh2a == 3):",
+    "  chtab(1,itemp) = ((8.4d-11*(temp**0.515))*dexp((-(5.2d4/temp))))",
+    "elseif (iflag_3bh2a == 4):",
+    "  chtab(1,itemp) = ((1.38d-4/(temp**1.025d0))*dexp((-(5.2d4/temp))))",
+    "elseif (iflag_3bh2a == 5):",
+    "  if (temp <= 4.5e4):",
+    "    chtab(1,itemp) = (1d1**((((((-178.4239d0)-(68.42243d0*log10(temp)))+(43.20243d0*(dlog10(temp)**2)))-(4.633167d0*(dlog10(temp)**3)))+(69.70086d0*dlog10((1d0+(40870.38d0/temp)))))-(23705.7/temp)))",
+    "  else:",
+    "    chtab(1,itemp) = (1d1**((((((-178.4239d0)-(68.42243d0*log10(tfix)))+(43.20243d0*(dlog10(tfix)**2)))-(4.633167d0*(dlog10(tfix)**3)))+(69.70086d0*dlog10((1d0+(40870.38d0/tfix)))))-(23705.7/tfix)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch2",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    272,
+    280
+   ],
+   "comment": "From PSS83",
+   "expression": [
+    "if (iflag_3bh2b == 1):",
+    "  chtab(2,itemp) = ((6.5d-8*dexp((-(5.2d4/temp))))/(temp**0.485))",
+    "elseif (iflag_3bh2b == 2):",
+    "  chtab(2,itemp) = ((2.67d-9*dexp((-(5.2d4/temp))))/(temp**0.085))",
+    "elseif (iflag_3bh2b == 3):",
+    "  chtab(2,itemp) = ((1.71d-5*dexp((-(5.2d4/temp))))/(temp**1.025))",
+    "elseif (iflag_3bh2b == 4):",
+    "  chtab(2,itemp) = (chtab(1,itemp)/8d0)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch3",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    256,
+    258
+   ],
+   "comment": "",
+   "expression": [
+    "if (h2_high_n < 1d-100):",
+    "  chtab(3,itemp) = 1d-100",
+    "else:",
+    "  chtab(3,itemp) = max((h2_low_n/h2_high_n),1d-100)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch4",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    290,
+    292
+   ],
+   "comment": "",
+   "expression": [
+    "if (h2_high_n < 1d-100):",
+    "  chtab(4,itemp) = 1d-100",
+    "else:",
+    "  chtab(4,itemp) = max((h2_low_n/h2_high_n),1d-100)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch5",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    308,
+    308
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(5,itemp) = (1d0/yncrh)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch6",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    310,
+    310
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(6,itemp) = (1d0/yncrh2)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch7",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    319,
+    319
+   ],
+   "comment": "(ch7) -- from HM79\ndeff is a free parameter, representing the efficiency of\nH_2 reformation on dust. Remainder of HM79 expression is calculated\nwhen we actually use the rate. [We can't pre-calculate it as it depends\non tdust, which may vary]",
+   "expression": [
+    "chtab(7,itemp) = (((dust_to_gas_ratio*deff)*3d-17)*(temp2**.5d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch8",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    326,
+    330
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 2d4):",
+    "  chtab(8,itemp) = ((2.32d-7*(temp3**(-0.52d0)))*exp((temp/2.24d4)))",
+    "else:",
+    "  chtab(8,itemp) = ((2.32d-7*(temp3**(-0.52d0)))*exp((2d4/2.24d4)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch9",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    339,
+    341
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp >= 3d0):",
+    "  chtab(9,itemp) = (3.7d-14*dexp((-(3.5d1/temp))))",
+    "else:",
+    "  chtab(9,itemp) = (3.7d-14*dexp((-(3.5d1/3d0))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch10",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    411,
+    411
+   ],
+   "comment": "Dielectronic recombination of HeII at high T can be a significant source\nof cooling, so we need to store this part of the rate, as well as the total\nrate below.",
+   "expression": [
+    "chtab(10,itemp) = heii_rec_di"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch11",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    349,
+    357
+   ],
+   "comment": "(ch10) -- see HeII recombination below\nCollisional ionization of HI (H + e => H+ + 2e)\nFrom A97; based on data from J87",
+   "expression": [
+    "chtab(11,itemp) = dexp((((((((((-32.71396786d0)+(13.5365560d0*lnte))-(5.73932875d0*(lnte**2)))+(1.56315498d0*(lnte**3)))-(0.28770560d0*(lnte**4)))+(3.48255977d-2*(lnte**5)))-(2.63197617d-3*(lnte**6)))+(1.11954395d-4*(lnte**7)))-(2.03914985d-6*(lnte**8))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch12",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    365,
+    366
+   ],
+   "comment": "Recombination of HII  (H+ + e => H)\nFrom F92.\nCase A:",
+   "expression": [
+    "chtab(12,itemp) = ((1.269d-13*((315614d0*tinv)**1.503d0))/((1d0+((604625d0*tinv)**0.47d0))**1.923d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch13",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    370,
+    371
+   ],
+   "comment": "Case B:",
+   "expression": [
+    "chtab(13,itemp) = ((2.753d-14*((315614d0*tinv)**1.500d0))/((1d0+((115188d0*tinv)**0.407d0))**2.242d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch14",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    377,
+    385
+   ],
+   "comment": "Collisional ionization of HeI\nFrom A97; based on data from J87",
+   "expression": [
+    "chtab(14,itemp) = dexp((((((((((-44.09864886d0)+(23.91596563d0*lnte))-(10.7532302d0*(lnte**2)))+(3.05803875d0*(lnte**3)))-(0.56851189d0*(lnte**4)))+(6.79539123d-2*(lnte**5)))-(5.00905610d-3*(lnte**6)))+(2.06723616d-4*(lnte**7)))-(3.64916141d-6*(lnte**8))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch15",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    390,
+    398
+   ],
+   "comment": "Collisional ionization of HeII\nFrom A97; based on data from J87",
+   "expression": [
+    "chtab(15,itemp) = dexp((((((((((-68.71040990d0)+(43.93347633d0*lnte))-(18.4806699d0*(lnte**2)))+(4.70162649d0*(lnte**3)))-(0.76924663d0*(lnte**4)))+(8.113042d-2*(lnte**5)))-(5.32402063d-3*(lnte**6)))+(1.97570531d-4*(lnte**7)))-(3.16558106d-6*(lnte**8))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch16",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    431,
+    431
+   ],
+   "comment": "Optically thin rate",
+   "expression": [
+    "chtab(16,itemp) = (heii_rec_di+heii_rec_a)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch17",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    435,
+    436
+   ],
+   "comment": "Optically thick rate",
+   "expression": [
+    "chtab(17,itemp) = (((0.677d0*heii_rec_gs)+heii_rec_b)+heii_rec_di)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch18",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    441,
+    442
+   ],
+   "comment": "HI ionization due to HeII recombination emission.\n(NB This assumes gas is optically thick to ionizing radiation)",
+   "expression": [
+    "chtab(18,itemp) = ((0.96d0*chtab(17,itemp))+(0.677d0*heii_rec_gs))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch19",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    450,
+    452
+   ],
+   "comment": "(NB For the derivation of these formulae, and a detailed discussion,\nsee Osterbrock, 1989, 'Astrophysics of Gaseous Nebulae and AGN')\nRecombination of HeIII -- appropriately scaled versions of HII rates\nCase A:",
+   "expression": [
+    "chtab(19,itemp) = (((2d0*1.269d-13)*(((4d0*315614d0)*tinv)**1.503d0))/((1d0+(((4d0*604625d0)*tinv)**0.47d0))**1.923d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch20",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    456,
+    458
+   ],
+   "comment": "Case B:",
+   "expression": [
+    "chtab(20,itemp) = (((2d0*2.753d-14)*(((4d0*315614d0)*tinv)**1.5d0))/((1d0+(((4d0*115188d0)*tinv)**0.407d0))**2.242d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch21",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    474,
+    482
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 6000):",
+    "  chtab(21,itemp) = (10d0**((((-17.845d0)+(0.762d0*dlog10(temp)))+(0.1523d0*(dlog10(temp)**2)))-(3.274d-2*(dlog10(temp)**3))))",
+    "else:",
+    "  chtab(21,itemp) = (10d0**((((-16.4199d0)+(0.1998d0*(dlog10(temp)**2)))-(5.447d-3*(dlog10(temp)**4)))+(4.0415d-5*(dlog10(temp)**6))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch22",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    490,
+    503
+   ],
+   "comment": "Largest theoretical value -- from Daniel Savin",
+   "expression": [
+    "if (iflag_ad == 1):",
+    "  if (temp <= 3d2):",
+    "    chtab(22,itemp) = 1.5d-9",
+    "  else:",
+    "    chtab(22,itemp) = (4.0d-9/(temp**0.17d0))",
+    "elseif (iflag_ad == 2):",
+    "  chtab(22,itemp) = 5.0d-9",
+    "elseif (iflag_ad == 3):",
+    "  chtab(22,itemp) = 1.3d-9",
+    "elseif (iflag_ad == 4):",
+    "  chtab(22,itemp) = 0.65d-9",
+    "else:"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch23",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    512,
+    515
+   ],
+   "comment": "H_2+ formation from HI (H + H+ => H_2+)\nFit by GP98, data from RP76",
+   "expression": [
+    "chtab(23,itemp) = (10d0**((((-19.38d0)-(1.523d0*dlog10(temp)))+(1.118d0*(dlog10(temp)**2)))-(0.1269d0*(dlog10(temp)**3))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch24",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    531,
+    541
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 3d4):",
+    "  chtab(24,itemp) = (((((((((-3.3232183d-7)+(3.3735382d-7*dlog(temp)))-(1.4491368d-7*(dlog(temp)**2)))+(3.4172805d-8*(dlog(temp)**3)))-(4.7813720d-9*(dlog(temp)**4)))+(3.9731542d-10*(dlog(temp)**5)))-(1.8171411d-11*(dlog(temp)**6)))+(3.5311932d-13*(dlog(temp)**7)))*dexp((-(2.1237150d4/temp))))",
+    "else:",
+    "  chtab(24,itemp) = (3.7289d-10*dexp((-(2.1237150d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch25",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    548,
+    549
+   ],
+   "comment": "CID of H_2 by electrons (H_2 + e => 2H + e)\nv=0 rate from TT02a",
+   "expression": [
+    "chtab(25,itemp) = ((4.4886d-9*(temp**0.109127d0))*dexp((-(1.01858d5/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch26",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    554,
+    562
+   ],
+   "comment": "Destruction of H- by electrons (H- + e => H + 2e)\nFit by A97, data from J87",
+   "expression": [
+    "chtab(26,itemp) = exp((((((((((-18.01849334d0)+(2.3608522d0*lnte))-(0.28274430d0*(lnte**2)))+(1.62331664d-2*(lnte**3)))-(3.36501203d-2*(lnte**4)))+(1.17832978d-2*(lnte**5)))-(1.65619470d-3*(lnte**6)))+(1.06827520d-4*(lnte**7)))-(2.63128581d-6*(lnte**8))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch27",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    568,
+    579
+   ],
+   "comment": "",
+   "expression": [
+    "if (te <= 1d-1):",
+    "  chtab(27,itemp) = (2.5634d-9*(te**1.78186d0))",
+    "else:",
+    "  chtab(27,itemp) = exp(((((((((((-20.37260896d0)+(1.13944933d0*lnte))-(0.14210135d0*(lnte**2)))+(8.4644554d-3*(lnte**3)))-(1.4327641d-3*(lnte**4)))+(2.0122503d-4*(lnte**5)))+(8.6639632d-5*(lnte**6)))-(2.5850097d-5*(lnte**7)))+(2.4555012d-6*(lnte**8)))-(8.0683825d-8*(lnte**9))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch28",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    586,
+    596
+   ],
+   "comment": "From GP98, based on data from MAP70.",
+   "expression": [
+    "if (iflag_mn == 1):",
+    "  chtab(28,itemp) = ((((5.7d-6/dsqrt(temp))+6.3d-8)-(9.2d-11*dsqrt(temp)))+(4.4d-13*temp))",
+    "elseif (iflag_mn == 2):",
+    "  chtab(28,itemp) = (7d-7/dsqrt(temp))",
+    "elseif (iflag_mn == 3):",
+    "  chtab(28,itemp) = (4d-6/dsqrt(temp))",
+    "elseif (iflag_mn == 4):",
+    "  chtab(28,itemp) = ((2.4d-6*(1d0+(temp/2d4)))/dsqrt(temp))",
+    "else:"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch29",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    606,
+    608
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 8d3):",
+    "  chtab(29,itemp) = (6.9d-9/(temp**0.35d0))",
+    "else:",
+    "  chtab(29,itemp) = (9.6d-7/(temp**0.9d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch30",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    626,
+    628
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 6.17d2):",
+    "  chtab(30,itemp) = 1d-8",
+    "else:",
+    "  chtab(30,itemp) = (1.32d-6/(temp**0.76d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch31",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    634,
+    634
+   ],
+   "comment": "H- electron detachment by He (H- + He -> H + He + e)\nFrom H82.",
+   "expression": [
+    "chtab(31,itemp) = ((4.1d-17*(temp**2))*dexp((-(19870d0/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch32",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    641,
+    641
+   ],
+   "comment": "Charge transfer, helium to hydrogen: (He+ + H -> He + H+)\nFit by SLD98 to data by Z89.\nWe assume that CT with DI has same rate as with HI",
+   "expression": [
+    "chtab(32,itemp) = (1.2d-15*((temp/3d2)**0.25d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch33",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    650,
+    653
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 1d4):",
+    "  chtab(33,itemp) = ((1.26d-9*exp((-(1.275d5/temp))))/(temp**0.75d0))",
+    "else:",
+    "  chtab(33,itemp) = (4d-37*(temp**4.74d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch34",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    675,
+    675
+   ],
+   "comment": "Grain assisted recombination. Rate from WD01.\nWD01 quote an accuracy of 20% for 10 < T < 10^3 K, 10^2 < phi < 10^6\n[where phi = G0 * sqrt(T) / ne]\nThe WD01 fitting formula is:\nalpha_g = 1e-14 * C0 * (1 + C1 * phi^C2 * (1 + C3 * T^C4 * phi *\n(- C5 - C6 ln T)))^-1\nWe tabulate (C3*T^C4) and (- C5 - C6 ln T) for each ion of interest\n(currently HII, HeII, CII, SiII). The other portions of the fit need to be\ncomputed on the fly in the chemistry routine, as they depend on the\nelectron density.\nThe grain recombination rate for OII can be obtained from that for\nHII by a simple rescaling and so we need ",
+   "expression": [
+    "chtab(34,itemp) = (5.087d2*(temp**1.586d-2))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch35",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    677,
+    677
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(35,itemp) = ((-0.4723d0)-(1.102d-5*log(temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch36",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    681,
+    681
+   ],
+   "comment": "CII:",
+   "expression": [
+    "chtab(36,itemp) = (4.331d2*(temp**4.845d-2))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch37",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    683,
+    683
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(37,itemp) = ((-0.8120d0)-(1.333d-4*log(temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch38",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    687,
+    687
+   ],
+   "comment": "SiII:",
+   "expression": [
+    "chtab(38,itemp) = (4.375d4*(temp**1.635d-6))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch39",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    689,
+    689
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(39,itemp) = ((-0.8964d0)-(7.538d-5*log(temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch40",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    708,
+    714
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 7.95d3):",
+    "  chtab(40,itemp) = (4.67d-12*(temp3**(-0.6d0)))",
+    "elseif (temp <= 2.114d4):",
+    "  chtab(40,itemp) = ((1.23d-17*(temp3**2.49d0))*exp((2.18456d4/temp)))",
+    "else:",
+    "  chtab(40,itemp) = ((9.62d-8*(temp3**(-1.37d0)))*exp((-(1.157862d5/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch41",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    733,
+    739
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d3):",
+    "  chtab(41,itemp) = (7.50d-12/(temp3**0.55))",
+    "elseif (temp <= 1d4):",
+    "  chtab(41,itemp) = (4.86d-12/(temp3**0.32))",
+    "elseif (temp <= 7.9d4):",
+    "  chtab(41,itemp) = (9.08d-14*(temp3**0.818))",
+    "else:",
+    "  chtab(41,itemp) = (5.89d-9/(temp3**1.17))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch42",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    751,
+    756
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 4d2):",
+    "  chtab(42,itemp) = (1.30d-10/(temp**0.64d0))",
+    "else:",
+    "  chtab(42,itemp) = ((1.41d-10/(temp**0.66d0))+(((7.4d-4*dexp((-(1.75d5/temp))))*(1d0+(6.2d-2*dexp((-(1.45d5/temp))))))/(temp**1.5)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch43",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    766,
+    769
+   ],
+   "comment": "",
+   "expression": [
+    "if (u > 1d2):",
+    "  chtab(43,itemp) = 0d0",
+    "else:",
+    "  chtab(43,itemp) = (((6.85d-8/(0.193d0+u))*(u**0.25d0))*dexp((-u)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch44",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    777,
+    780
+   ],
+   "comment": "",
+   "expression": [
+    "if (u > 1d2):",
+    "  chtab(44,itemp) = 0d0",
+    "else:",
+    "  chtab(44,itemp) = ((((1.88d-7*(1d0+dsqrt(u)))/(0.376d0+u))*(u**0.25d0))*dexp((-u)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch45",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    788,
+    791
+   ],
+   "comment": "",
+   "expression": [
+    "if (u > 1d2):",
+    "  chtab(45,itemp) = 0d0",
+    "else:",
+    "  chtab(45,itemp) = (((3.59d-8/(0.073d0+u))*(u**0.34d0))*dexp((-u)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch46",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    798,
+    799
+   ],
+   "comment": "Charge transfer:\nOII + HI  -> OI  + HII  -- from SS99; total for all three J states of OI",
+   "expression": [
+    "chtab(46,itemp) = ((2.08d-9*((temp/1d4)**0.405d0))+(1.11d-11*((temp/1d4)**(-0.458d0))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch47",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    809,
+    811
+   ],
+   "comment": "OI  + HII -> OII + HI  -- from SS99.\nAssumes LTE level populations; note that depopulating the upper levels\nrelative to LTE will alter the rate coefficient by 50%, at most -- the\nrate is significantly altered only if the upper levels can be\noverpopulated at low T (i.e. at temperatures where the 223K endothermicity\nof the CT reaction is a significant barrier).",
+   "expression": [
+    "chtab(47,itemp) = (((1.26d-9*((temp/1d4)**0.517d0))+(4.25d-10*((temp/1d4)**6.69d-3)))*dexp((-(227d0/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch48",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    818,
+    822
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 1d5):",
+    "  chtab(48,itemp) = (2.80d-15*((temp/1d4)**0.213d0))",
+    "else:",
+    "  chtab(48,itemp) = ((2.80d-15*((temp/1d4)**0.213d0))+((1.28d-15*((temp/1d4)**3.08d0))*dexp((-(2.19d6/temp)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch49",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    836,
+    838
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 1d4):",
+    "  chtab(49,itemp) = (5.88d-13*(temp**0.848d0))",
+    "else:",
+    "  chtab(49,itemp) = (1.45d-13*temp)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch50",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    843,
+    843
+   ],
+   "comment": "O + H  -> OH + gamma -- rate from UMIST99",
+   "expression": [
+    "chtab(50,itemp) = (9.90d-19/(temp3**0.38))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch51",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    847,
+    847
+   ],
+   "comment": "H + OH -> H2O + gamma -- rate from UMIST99, based on FAS80",
+   "expression": [
+    "chtab(51,itemp) = ((5.26d-18/(temp3**5.22))*exp((-(9d1/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch52",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    851,
+    851
+   ],
+   "comment": "O + H2 -> OH + H -- rate from UMIST99, based on NR87",
+   "expression": [
+    "chtab(52,itemp) = ((3.14d-13*(temp3**2.7))*exp((-(3.15d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch53",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    855,
+    855
+   ],
+   "comment": "H + OH  -> O + H2 -- rate from UMIST99, based on TH86",
+   "expression": [
+    "chtab(53,itemp) = ((6.99d-14*(temp3**2.8))*exp((-(1.95d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch54",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    859,
+    859
+   ],
+   "comment": "H2 + OH -> H2O + H -- rate from UMIST99, based on OLD92",
+   "expression": [
+    "chtab(54,itemp) = ((2.05d-12*(temp3**1.52))*exp((-(1.736d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch55",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    863,
+    863
+   ],
+   "comment": "H + H2O -> OH + H2 -- rate from UMIST99, based on CW79",
+   "expression": [
+    "chtab(55,itemp) = ((1.59d-11*(temp3**1.2))*exp((-(9.61d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch56",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    873,
+    873
+   ],
+   "comment": "Dissociative recombination of HOC+:  HOC+ + e -> CO + H\nRate from UMIST99, who assume that CO + H is the only outcome.\nGEP05 mention that it may also produce OH + C, but give no rate\nfor HOC+ DR (they're concerned only with HCO+ DR).\ncf. HCO+ dissociative recombination (ch87).",
+   "expression": [
+    "chtab(56,itemp) = (1.1d-7/temp3)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch57",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    880,
+    883
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 3d2):",
+    "  chtab(57,itemp) = 2.1d-19",
+    "else:",
+    "  chtab(57,itemp) = ((3.09d-17*(temp3**0.33))*exp((-(1.629d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch58",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    891,
+    892
+   ],
+   "comment": "C+ + H -> C + H+\nRate coefficient from SH98, with typo corrected. Claimed to be\naccurate to within 50%.",
+   "expression": [
+    "chtab(58,itemp) = ((6.08d-14*((temp/1d4)**1.96d0))*exp((-(1.7d5/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch59",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    898,
+    898
+   ],
+   "comment": "CH2+ formation by radiative association: C+ + H2 -> CH2+ + gamma\nRate from H85",
+   "expression": [
+    "chtab(59,itemp) = (4.0d-16/(temp3**0.2d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch60",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    904,
+    904
+   ],
+   "comment": "CH+ formation from endothermic reaction between C+ and H2: C+ + H2 -> CH+ + H\nRate from ASM84.",
+   "expression": [
+    "chtab(60,itemp) = (1.0d-10*exp((-(4.64d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch61",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    910,
+    910
+   ],
+   "comment": "CH+ dissociative recombination: CH+ + e- -> C + H\nRate from OSU2005; based on T91",
+   "expression": [
+    "chtab(61,itemp) = (7.0d-8/(temp3**0.5d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch62",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    916,
+    916
+   ],
+   "comment": "CH2+ destruction by reaction with H: CH2+ + H -> CH+ + H2\nRate from UMIST99",
+   "expression": [
+    "chtab(62,itemp) = (1.0d-9*exp((-(7.08d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch63",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    924,
+    924
+   ],
+   "comment": "CH2+ dissociative recombination\nFrom UMIST06, based on L98.\nXXX: Now that T dependence is the same, we could merge these rates",
+   "expression": [
+    "chtab(63,itemp) = (1.60d-7/(temp3**0.60d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch64",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    925,
+    925
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(64,itemp) = (4.03d-7/(temp3**0.60d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch65",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    926,
+    926
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(65,itemp) = (7.68d-8/(temp3**0.60d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch66",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    932,
+    932
+   ],
+   "comment": "CH3+ destruction by atomic H: CH3+ + H -> CH2+ + H2\nRate from UMIST99",
+   "expression": [
+    "chtab(66,itemp) = (7d-10*exp((-(1.056d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch67",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    939,
+    939
+   ],
+   "comment": "CH3+ dissociative recombination:\nRates for ch67, ch68 are from UMIST99, based on M90; rate for ch69 is\nfrom UMIST99 with no other source cited",
+   "expression": [
+    "chtab(67,itemp) = (7.75d-8/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch68",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    940,
+    940
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(68,itemp) = (1.95d-7/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch69",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    941,
+    941
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(69,itemp) = (2.00d-7/(temp3**0.4d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch70",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    948,
+    948
+   ],
+   "comment": "CH2 formation from CH:  CH + H2 -> CH2 + H\nFrom UMIST99, based on data from the NIST chemical kinetics database\n(exact source or sources unclear)",
+   "expression": [
+    "chtab(70,itemp) = (5.46d-10*exp((-(1.943d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch71",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    954,
+    954
+   ],
+   "comment": "H3O+ dissociative recombination, total rate; branching ratios in rate_eq\nRate from UMIST06, based on JBS00.",
+   "expression": [
+    "chtab(71,itemp) = (4.318d-7/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch72",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    960,
+    960
+   ],
+   "comment": "OH+ dissociative recombination:  OH+ + e- -> O + H\nFrom OSU2005, based on G95.",
+   "expression": [
+    "chtab(72,itemp) = (6.3d-9*(temp3**(-0.48d0)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch73",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    966,
+    966
+   ],
+   "comment": "H2O+ dissociative recombination, total rate; branching ratios in rate_eq\nRates from UMIST06, based on RDS00",
+   "expression": [
+    "chtab(73,itemp) = (4.3d-7/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch74",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    972,
+    972
+   ],
+   "comment": "SiH+ dissociative recombination: SiH+ + e -> Si + H\nRate from UMIST99",
+   "expression": [
+    "chtab(74,itemp) = (2d-7/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch75",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    978,
+    978
+   ],
+   "comment": "SiH2+ dissociative recombination, total rate; branching ratios in rate_eq\nCurrently not used.",
+   "expression": [
+    "chtab(75,itemp) = (5d-7/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch76",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    982,
+    982
+   ],
+   "comment": "ch76 -- formerly collisional dissoc. of OH by HI; currently unused",
+   "expression": [
+    "chtab(76,itemp) = 0d0"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch77",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    990,
+    992
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d3):",
+    "  chtab(77,itemp) = 6.6d-11",
+    "else:",
+    "  chtab(77,itemp) = (1.02d-10*exp((-(914d0/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch78",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    999,
+    999
+   ],
+   "comment": "CH formation from C and H2:  C + H2 -> CH + H\nRate from DDH91",
+   "expression": [
+    "chtab(78,itemp) = (6.64d-10*exp((-(1.17d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch79",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1005,
+    1006
+   ],
+   "comment": "C2 formation by RA of carbon: C + C -> C2 + gamma\nRate from AS97",
+   "expression": [
+    "chtab(79,itemp) = ((4.36d-18*(temp3**0.35d0))*exp((-(1.613d2/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch80",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1012,
+    1012
+   ],
+   "comment": "CH destruction by atomic H: CH + H -> C + H2\nRate from HGS93",
+   "expression": [
+    "chtab(80,itemp) = (1.31d-10*exp((-(8d1/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch81",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1024,
+    1026
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2.61d2):",
+    "  chtab(81,itemp) = 3.5d-11",
+    "else:",
+    "  chtab(81,itemp) = (1.77d-11*exp((1.78d2/temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch82",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1033,
+    1033
+   ],
+   "comment": "O2 formation by RA of oxygen:  O + O -> O2 + gamma\nRate from PH80",
+   "expression": [
+    "chtab(82,itemp) = (4.9d-20*(temp3**1.58d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch83",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1041,
+    1044
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2.95d2):",
+    "  chtab(83,itemp) = (4.7d-11*(temp3**(-0.34)))",
+    "else:",
+    "  chtab(83,itemp) = ((2.48d-12*(temp3**1.54d0))*exp((6.13d2/temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch84",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1051,
+    1051
+   ],
+   "comment": "O2+ dissociative recombination:  O2+ + e- -> O + O\nRate from UMIST99, based on AAS83.",
+   "expression": [
+    "chtab(84,itemp) = (1.95d-7/(temp3**0.7d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch85",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1058,
+    1058
+   ],
+   "comment": "O2 destruction by atomic hydrogen: O2 + H -> OH + O\nRate from UMIST99, based on NIST chemical kinetics database\n(exact sources unclear)",
+   "expression": [
+    "chtab(85,itemp) = (2.61d-10*exp((-(8.156d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch86",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1064,
+    1064
+   ],
+   "comment": "O2 destruction by H2:  O2 + H2 -> OH + OH\nRate from AAT75.",
+   "expression": [
+    "chtab(86,itemp) = (3.16d-10*exp((-(2.189d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch87",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1070,
+    1070
+   ],
+   "comment": "HCO+ dissociative recombination: HCO+ + e -> products.\nRate from GEP05. Branching ratios are given in rate_eq().",
+   "expression": [
+    "chtab(87,itemp) = (3.0d-7/(temp3**0.64))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch88",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1084,
+    1084
+   ],
+   "comment": "Mutual neutralization, generic rate.\nTaken from UMIST99.\nUsed for:\n1) H+   + C- -> C + H\n2) H+   + O- -> O  + H\n3) Mg+  + H- -> Mg + H  (currently unused)\nMutual neutralzation of H- with +ve ions such as O+, C+,\nHCO+, H3O+ etc. assumed negligible compared to MN with\nH+ or He+ & compared to DR of the +ve ions in question.",
+   "expression": [
+    "chtab(88,itemp) = (2.3d-7/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch89",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1090,
+    1091
+   ],
+   "comment": "CO destruction by atomic hydrogen:  CO + H -> C + OH\nRate from UMIST99",
+   "expression": [
+    "chtab(89,itemp) = ((1.1d-10*dsqrt(temp3))*exp((-(7.77d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch90",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1102,
+    1104
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 3d2):",
+    "  chtab(90,itemp) = (5d-11*dsqrt(temp3))",
+    "else:",
+    "  chtab(90,itemp) = (5d-11*(temp3**0.757d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch91",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1127,
+    1131
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp > 7d0):",
+    "  chtab(91,itemp) = ((3.9d-19*((temp/3d2)**1.8d0))*exp((2d1/temp)))",
+    "else:",
+    "  chtab(91,itemp) = ((3.9d-19*((7d0/3d2)**1.8d0))*exp((2d1/7d0)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch92",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1140,
+    1142
+   ],
+   "comment": "Dissociative charge transfer of CO:\nCO + He+ -> C+ + O + He\nRate from PDAN89",
+   "expression": [
+    "chtab(92,itemp) = (1.4d-9/dsqrt(temp3))",
+    "if (chtab(92,itemp) > 1.6d-9):",
+    "  chtab(92,itemp) = 1.6d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch93",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1149,
+    1149
+   ],
+   "comment": "CO + He+ -> C + O+ + He\nRate from PDAN89",
+   "expression": [
+    "chtab(93,itemp) = (1.4d-16/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch94",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1158,
+    1162
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d2):",
+    "  chtab(94,itemp) = (8.58d-17*(temp**0.757d0))",
+    "elseif (temp <= 2d3):",
+    "  chtab(94,itemp) = (3.25d-17*(temp**0.968d0))",
+    "else:",
+    "  chtab(94,itemp) = (2.77d-19*(temp**1.597d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch95",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1171,
+    1175
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 1d6):",
+    "  chtab(95,itemp) = ((1.23d-9*((temp/1d4)**0.24d0))*(1d0+(3.17d0*exp((4.18d-7*temp)))))",
+    "else:",
+    "  chtab(95,itemp) = chtab(95,ifix)"
+   ],
+   "note": "T>fit-range handled by re-evaluating at the fixed table temperature 10^6d0-ish (Fortran row-copy at ifix)",
+   "grid_only": true,
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch96",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1184,
+    1189
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 1d6):",
+    "  chtab(96,itemp) = (((4.10d-10*((temp/1d4)**0.24d0))*(1d0+(3.17d0*exp((4.18d-7*temp)))))*exp((-(3.178d0/te))))",
+    "else:",
+    "  chtab(96,itemp) = chtab(96,ifix)"
+   ],
+   "note": "T>fit-range handled by re-evaluating at the fixed table temperature 10^6d0-ish (Fortran row-copy at ifix)",
+   "grid_only": true,
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch97",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1203,
+    1209
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 1d6):",
+    "  chtab(97,itemp) = (((4.991d-15*((temp/1d4)**0.3794d0))*exp((-(temp/1.121d6))))+((2.780d-15*((temp/1d4)**(-0.2163d0)))*exp((temp/8.158d5))))",
+    "else:",
+    "  chtab(97,itemp) = chtab(97,ifix)"
+   ],
+   "note": "T>fit-range handled by re-evaluating at the fixed table temperature 10^6d0-ish (Fortran row-copy at ifix)",
+   "grid_only": true,
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch98",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1231,
+    1236
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2.7d0):",
+    "  chtab(98,itemp) = ((2d-10*(temp**0.402d0))*exp((-(37.1d0/temp))))",
+    "elseif (temp <= 2d5):",
+    "  chtab(98,itemp) = (((2d-10*(temp**0.402d0))*exp((-(37.1d0/temp))))-(3.31d-17*(temp**1.48d0)))",
+    "else:",
+    "  chtab(98,itemp) = (3.44d-10*(temp**0.35d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch99",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1244,
+    1245
+   ],
+   "comment": "D+ + H -> D + H+\nAlso from S02. This fit does not suffer from the same problems as the\nprevious one, and so does not need to be modified.",
+   "expression": [
+    "chtab(99,itemp) = (((2.06d-10*(temp**0.396d0))*exp((-(33d0/temp))))+(2.03d-9*(temp**(-0.332d0))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch100",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1253,
+    1254
+   ],
+   "comment": "HD formation:\nD+ + H2 -> HD + H+\nFrom G82, as quoted by GP02.",
+   "expression": [
+    "chtab(100,itemp) = (((0.417d0+(0.846d0*log10(temp)))-(0.137d0*(log10(temp)**2)))*1d-9)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch101",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1260,
+    1260
+   ],
+   "comment": "HD + H+ -> H2 + D+\nFrom G82, as quoted by GP02.",
+   "expression": [
+    "chtab(101,itemp) = (1.1d-9*exp((-(4.88d2/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch102",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1267,
+    1273
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d3):",
+    "  chtab(102,itemp) = (1d1**((((((-5.64737d1)+(5.88886*dlog10(temp)))+(7.19692d0*(dlog10(temp)**2)))+(2.25069d0*(dlog10(temp)**3)))-(2.16903d0*(dlog10(temp)**4)))+(3.17887d-1*(dlog10(temp)**5))))",
+    "else:",
+    "  chtab(102,itemp) = (3.17d-10*exp((-(5.207d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch103",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1283,
+    1286
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d2):",
+    "  chtab(103,itemp) = (5.25d-11*exp((-(4.43d3/temp))))",
+    "else:",
+    "  chtab(103,itemp) = (5.25d-11*exp(((-(4.43d3/temp))+(1.739d5/(temp**2)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch104",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1293,
+    1294
+   ],
+   "comment": "CH+ formation by RA: C+ + H -> CH+ + gamma\nRate from BvH06. Fit accurate to within 2% for 5 < T < 1000K",
+   "expression": [
+    "chtab(104,itemp) = ((4.46d-16*exp((-(4.93d0*(temp**(-(2d0/3d0)))))))/dsqrt(temp))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch105",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1300,
+    1301
+   ],
+   "comment": "H3+ formation: H2+ + H2 -> H3+ + H\nRate from SLD98, based on cross-section from LJB95",
+   "expression": [
+    "chtab(105,itemp) = ((2.24d-9*(temp3**0.042d0))*dexp((-(temp/4.66d4))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch106",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1308,
+    1308
+   ],
+   "comment": "H3+ destruction: H3+ DR  (total)\nFit from UMIST06, based on data from MAC04.\nBranching fractions are in rate_eq_mol.F",
+   "expression": [
+    "chtab(106,itemp) = (6.7e-8/(temp3**0.52))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch107",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1314,
+    1314
+   ],
+   "comment": "H3+ destruction:  H3+ + H -> H2+ + H2\nRate from GP98, fit to SMT92",
+   "expression": [
+    "chtab(107,itemp) = (7.7d-9*exp((-(1.756d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch108",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1325,
+    1340
+   ],
+   "comment": "From PSS83, based on JGC67",
+   "expression": [
+    "if (iflag_3bh2a == 1):",
+    "  if (temp <= 3d2):",
+    "    chtab(108,itemp) = (1.3d-32/(temp3**0.38d0))",
+    "  else:",
+    "    chtab(108,itemp) = (1.3d-32/temp3)",
+    "elseif (iflag_3bh2a == 2):",
+    "  chtab(108,itemp) = (5.5d-29/temp)",
+    "elseif (iflag_3bh2a == 3):",
+    "  chtab(108,itemp) = 8.8d-33",
+    "elseif (iflag_3bh2a == 4):",
+    "  chtab(108,itemp) = (1.44d-26/(temp**1.54d0))",
+    "elseif (iflag_3bh2a == 5):",
+    "  chtab(108,itemp) = (7.7d-31/(temp**0.464d0))",
+    "else:"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch109",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1351,
+    1361
+   ],
+   "comment": "From PSS83, based on JGC67",
+   "expression": [
+    "if (iflag_3bh2b == 1):",
+    "  chtab(109,itemp) = (6.875d-30/temp)",
+    "elseif (iflag_3bh2b == 2):",
+    "  chtab(109,itemp) = (2.8d-31/(temp**0.6d0))",
+    "elseif (iflag_3bh2b == 3):",
+    "  chtab(109,itemp) = (1.8d-27/(temp**1.54d0))",
+    "elseif (iflag_3bh2b == 4):",
+    "  chtab(109,itemp) = (chtab(108,itemp)/8d0)",
+    "else:"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch110",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1374,
+    1374
+   ],
+   "comment": "Three-body H2 formation: H + H + He -> H2 + He\nRate is from WK75, based on measurements between 77K and 298K.\nThe value quoted by MR77 at 297K is approx. 18% lower, but this\nis within the quoted errors on the latter measurement.",
+   "expression": [
+    "chtab(110,itemp) = (6.9d-32*(temp**(-0.4d0)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch111",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1394,
+    1398
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d3):",
+    "  chtab(111,itemp) = ((2.14d-29*(temp3**(-3.08d0)))*exp(1.057d0))",
+    "else:",
+    "  chtab(111,itemp) = ((2.14d-29*(temp3**(-3.08d0)))*exp((2.114d3/temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch112",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1410,
+    1414
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d3):",
+    "  chtab(112,itemp) = ((2.14d-27*(temp3**(-3.08d0)))*exp(1.057d0))",
+    "else:",
+    "  chtab(112,itemp) = ((2.14d-27*(temp3**(-3.08d0)))*exp((2.114d3/temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch113",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1421,
+    1421
+   ],
+   "comment": "Three-body OH formation: H + O + M -> OH + M\nRate from NIST chemical kinetics database, based on TH86",
+   "expression": [
+    "chtab(113,itemp) = (4.33d-32/temp3)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch114",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1427,
+    1427
+   ],
+   "comment": "Three-body H2O formation: H + OH + M -> H2O + M\nRate from BAU92. (NB Assumes a bath gas of Argon)",
+   "expression": [
+    "chtab(114,itemp) = (2.56d-31*(temp3**(-2.0d0)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch115",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1439,
+    1442
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 5d3):",
+    "  chtab(115,itemp) = (5.99d-33*((temp/5d3)**(-1.6)))",
+    "else:",
+    "  chtab(115,itemp) = ((5.99d-33*((temp/5d3)**(-0.64)))*exp((5.255d3/temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch116",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1452,
+    1452
+   ],
+   "comment": "Three-body formation of O2: O + O + M -> O2 + M\nRate from NIST chemical kinetics database, based on WAR84.\nNote that this process is generally unimportant in comparison\nto ch113, unless the HI fraction of the gas is very small,\nbut we include it here for completeness.",
+   "expression": [
+    "chtab(116,itemp) = (9.2d-34/temp3)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch117",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1458,
+    1458
+   ],
+   "comment": "HCO+ formation: O + CH -> HCO+ + e-\nRate from UMIST99, based on MB73",
+   "expression": [
+    "chtab(117,itemp) = (2d-11*(temp3**0.44))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch118",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1464,
+    1465
+   ],
+   "comment": "H2O formation from OH-OH collisions: OH + OH -> H2O + O\nRate from SHC04.",
+   "expression": [
+    "chtab(118,itemp) = ((1.65d-12*(temp3**1.14))*exp((-(5d1/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch119",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1471,
+    1471
+   ],
+   "comment": "CO+ dissociative recombination:  CO+ + e -> C + O\nRate from OSU2005, based on R98",
+   "expression": [
+    "chtab(119,itemp) = (2.75d-7*(temp3**(-0.55d0)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch120",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1479,
+    1479
+   ],
+   "comment": "C2+ formation from CH:  C+ + CH -> C2+ + H\nRate from UMIST06. OSU2005 quotes a rate that is ~ 10x larger at all T\nCurrently, we don't account for C2+ so we don't include this, but we now\nhave the rate handy should we choose to do so in the future.",
+   "expression": [
+    "chtab(120,itemp) = (3.8d-10/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch121",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1492,
+    1492
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(121,itemp) = (si2p_rec_rr+si2p_rec_dr)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch122",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1498,
+    1498
+   ],
+   "comment": "SiH+ formation by radiative association: Si+ + H -> SiH+ + gamma\nRate from STA00",
+   "expression": [
+    "chtab(122,itemp) = (1.17d-17*(temp3**(-0.14)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch123",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1502,
+    1502
+   ],
+   "comment": "Mg+ recombination -- currently unused",
+   "expression": [
+    "chtab(123,itemp) = (2.8d-12/(temp3**0.86))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch124",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1509,
+    1512
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 3d2):",
+    "  chtab(124,itemp) = 2.5d-18",
+    "else:",
+    "  chtab(124,itemp) = ((3.14d-18*(temp3**(-0.15d0)))*exp((6.8d1/temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch125",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1521,
+    1525
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 1d5):",
+    "  chtab(125,itemp) = ((2.7d-10*(temp3**(-0.485d0)))*dexp((temp/3.12d4)))",
+    "else:",
+    "  chtab(125,itemp) = ((2.7d-10*((1d5/3d2)**(-0.485d0)))*dexp((1d5/3.12d4)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch126",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1538,
+    1539
+   ],
+   "comment": "Dissociative attachment: H2 + e- -> H + H-\nRate from GP98, based on data from SA67.\nAssumes that the H2 is in its vibrational ground state and so\nunderestimates rate at high densities; however, since the\nelectron fraction will generally be very small at high n, this\nis probably not a major problem\nNot included in main molecular chem. network",
+   "expression": [
+    "chtab(126,itemp) = ((2.7d-8*(temp**(-1.27d0)))*dexp((-(4.3d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch127",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1547,
+    1547
+   ],
+   "comment": "Neutralization of H2+ with H-:  H2+ + H- -> H2 + H\n-> H + H + H\nSLD98 quote the same rate for both processes, taken from DL87\nProbably unimportant in comparison to DR",
+   "expression": [
+    "chtab(127,itemp) = (1.4d-7/dsqrt(temp3))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch128",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1553,
+    1554
+   ],
+   "comment": "HD+ formation from H2+ and D: H2+ + D -> HD+ + H\nRate from SLD98, based on cross-section of LJB95",
+   "expression": [
+    "chtab(128,itemp) = ((1.07d-9*(temp3**0.062d0))*exp((-(temp/4.14d4))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch129",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1564,
+    1564
+   ],
+   "comment": "HD+ dissociative recombination:  HD+ + e -> H + D\nRate from GP98, fit to cross-section of SSS95. Note that SLD98\nprovide an alternative fit to the same cross-section which\ndiffers by ~ 50-70% at low T, ~ 15% at high T. WFP04 quote a\nrate with a shallower T dependence that differs from the GP98\nrate by ~20% at 200K, but is almost the same at 3000K.",
+   "expression": [
+    "chtab(129,itemp) = (7.2d-8/sqrt(temp))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch130",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1570,
+    1570
+   ],
+   "comment": "H2+ formation from HD+ and H: HD+ + H -> H2+ + D\nRate from DM56, but scaled by D reduced mass",
+   "expression": [
+    "chtab(130,itemp) = (1.0d-9*exp((-(1.54d2/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch131",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1576,
+    1576
+   ],
+   "comment": "Collisional dissociation of OH by H: OH + H -> O + H + H\nRate from UMIST06.",
+   "expression": [
+    "chtab(131,itemp) = (6d-9*exp((-(5.09d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch132",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1582,
+    1582
+   ],
+   "comment": "Collisional dissociation of OH by H2: OH + H2 -> O + H + H2\nRate from UMIST06.",
+   "expression": [
+    "chtab(132,itemp) = (6d-9*exp((-(5.09d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch133",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1588,
+    1588
+   ],
+   "comment": "Collisional dissociation of H2O by H: H2O + H -> OH + H + H\nRate from UMIST06.",
+   "expression": [
+    "chtab(133,itemp) = (5.8d-9*exp((-(5.29d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch134",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1594,
+    1594
+   ],
+   "comment": "Collisional dissociation of H2O by H2: H2O + H2 -> OH + H + H2\nRate from UMIST06.",
+   "expression": [
+    "chtab(134,itemp) = (5.8d-9*exp((-(5.29d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch135",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    693,
+    693
+   ],
+   "comment": "HeII:",
+   "expression": [
+    "chtab(135,itemp) = (5.115d3*(temp**3.903d-7))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch136",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    695,
+    695
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(136,itemp) = ((-0.4956d0)-(5.494d-7*log(temp)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch137",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1612,
+    1621
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 1d4):",
+    "  chtab(137,itemp) = (1d1**(((3.801*log10(temp))-27.029)-(2.9487d4/temp)))",
+    "else:",
+    "  chtab(137,itemp) = (1d1**(((3.801*log10(tfix))-27.029)-(2.9487d4/tfix)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch138",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1609,
+    1609
+   ],
+   "comment": "ch135--ch136: used for HeII grain-surface recombination rate; see above\nH2 collisional dissociation by He: H2 + He -> H + H + He\nRate from DRCM87. ch137, ch138 & ch139 are low n limit,\nhigh n limit and critical density resp. Data valid for\n2000 < T < 10000K, but fit behaves OK at lower T; at higher\nT, we just use the 10000K value.\nNB. We now use rate for LTE limit determined by detailed balance\napplied to reverse reaction",
+   "expression": [
+    "chtab(138,itemp) = ((6.6d-10*(temp**0.115))*dexp((-(5.2d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch139",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1616,
+    1628
+   ],
+   "comment": "chtab(138, itemp) = 1d1**(-1.75 * log10(temp) - 2.729 -\n$                         2.3474d4 / temp)",
+   "expression": [
+    "if (temp <= 1d4):",
+    "  chtab(139,itemp) = (1d1**(5.0792d0*(1d0-(1.23d-5*(temp-2d3)))))",
+    "else:",
+    "  chtab(139,itemp) = (1d1**(5.0792d0*(1d0-(1.23d-5*(tfix-2d3)))))",
+    "chtab(139,itemp) = (1d0/chtab(139,itemp))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch140",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1632,
+    1633
+   ],
+   "comment": "CH3 formation from CH2: CH2 + H2 -> CH3 + H",
+   "expression": [
+    "chtab(140,itemp) = ((5.18d-11*(temp3**0.17d0))*exp((-(6.4d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch141",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1637,
+    1637
+   ],
+   "comment": "CH3 destruction: CH3 + H -> CH2 + H2",
+   "expression": [
+    "chtab(141,itemp) = (1.0d-10*exp((-(7.6d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch142",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1641,
+    1641
+   ],
+   "comment": "CH4 formation from CH3: CH3 + H2 -> CH4 + H",
+   "expression": [
+    "chtab(142,itemp) = ((6.86d-14*(temp3**2.74))*exp((-(4.74d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch143",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1645,
+    1646
+   ],
+   "comment": "CH4 destruction: CH4 + H -> CH3 + H2",
+   "expression": [
+    "chtab(143,itemp) = ((5.82d-13*(temp3**3.00))*exp((-(4.045d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch144",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1652,
+    1652
+   ],
+   "comment": "HI collisional ionization by HI: H + H -> H + H+ + e\nRate from GVZ87, as quoted by LCS91",
+   "expression": [
+    "chtab(144,itemp) = ((1.2d-17*(temp**1.2))*dexp((-(1.578d5/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch145",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1659,
+    1659
+   ],
+   "comment": "Surface chem:\nAccretion rate of CO (assuming standard dust properties); rates for other\nspecies then follow from simple rescaling (mco/mx)^1/2",
+   "expression": [
+    "chtab(145,itemp) = (1.1d-17*dsqrt(temp))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch146",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1663,
+    1663
+   ],
+   "comment": "Gas phase recombination of representative trace metal M (used in NL99 network)",
+   "expression": [
+    "chtab(146,itemp) = (3.8d-10/(temp**0.65))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch147",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1667,
+    1667
+   ],
+   "comment": "Formation of CO from OHx [NL99]: C + OHx -> CO + H",
+   "expression": [
+    "chtab(147,itemp) = (5.8d-12*dsqrt(temp))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch148",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1673,
+    1673
+   ],
+   "comment": "Collisional ionization of H by H: H + H -> H+ + e- + H\n(Dominates when fractional ionization v. small or zero)\nRate from Omukai, 2001; assumes only ground-state populated",
+   "expression": [
+    "chtab(148,itemp) = ((1.2d-17*(temp**1.2d0))*exp((-(1.5782d5/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch149",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1681,
+    1681
+   ],
+   "comment": "High-temperature collisional dissociation of H2+ into H + H+.\nApproximate rate (factor of a few uncertainty at least), based\non McClure, 1965, Phys. Rev. A, 140, 770. Not really important\nfor the H2+ chemistry itself, but useful for stabilizing the\nsolver at high T",
+   "expression": [
+    "chtab(149,itemp) = ((1d-12*dsqrt(temp))*exp((-(3.1d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch150",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1687,
+    1687
+   ],
+   "comment": "Formation of NO:  N + OH -> NO + H\nRate from Smith, Herbst & Chang (2004)",
+   "expression": [
+    "chtab(150,itemp) = (7.5d-11/(temp3**0.18))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch151",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1693,
+    1693
+   ],
+   "comment": "Formation of N2 from NO: NO + N -> N2 + O\nRate from NIST database",
+   "expression": [
+    "chtab(151,itemp) = (3.75d-11*dexp((-(26d0/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch152",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1705,
+    1705
+   ],
+   "comment": "Dissociative recombination of N2H+:  N2H+ + e -> N2 + H\nRate from Geppert et al (2004).\nNB: This rate is actually for the total DR rate: N2H+ + e -> products\nGeppert et al find a branching ratio of 36% to N2 + H, 64% to NH + H\nBecause our v. simple N chem. doesn't include NH, we assume that all\nof it is converted back to N2 by reactions with atomic N. In reality,\nsome will be photodissociated, and so will react with C to form CN...",
+   "expression": [
+    "chtab(152,itemp) = (1d-6/(temp3**0.51d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch153",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1712,
+    1712
+   ],
+   "comment": "HeH+ + e- -> He + H\nRate from G94. SLD98 recommend this rate (without rescaling) for\nHeD+ DR too.",
+   "expression": [
+    "chtab(153,itemp) = (3.0d-8*((temp/3d2)**(-0.47d0)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch154",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1716,
+    1716
+   ],
+   "comment": "He + H2+  -> HeH+ + H",
+   "expression": [
+    "chtab(154,itemp) = (3.0d-10*dexp((-(6.72d3/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch155",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1722,
+    1723
+   ],
+   "comment": "He + H+  -> HeH+ + PHOTON\nFit by SLD98 to JSK95.",
+   "expression": [
+    "chtab(155,itemp) = ((8.0d-20*((temp/3d2)**(-0.24d0)))*dexp((-(temp/4000))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch156",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1729,
+    1730
+   ],
+   "comment": "HeH+ + H -> H2+ + He\nRate from SLD98, based on cross-section from LJB95.",
+   "expression": [
+    "chtab(156,itemp) = ((1.04d-9*((temp/3d2)**0.13d0))*exp((-(temp/3.31d4))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch157",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1743,
+    1747
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(157,itemp) = (1d6*(((((4.2278d-14-(2.3088d-17*tfix))+(7.3428d-21*(tfix**2)))-(7.5474d-25*(tfix**3)))+(3.3468d-29*(tfix**4)))-(5.5280d-34*(tfix**5))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch158",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1752,
+    1752
+   ],
+   "comment": "Collisional ionization of H by He\nFrom Lenzuni et al (1991), based on Van Zyl et al (1981)",
+   "expression": [
+    "chtab(158,itemp) = ((1.75d-17*(temp**1.3))*dexp((-(1.578d5/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch159",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1757,
+    1757
+   ],
+   "comment": "Collisional dissociation of H2+ by H, low density limit\nMy fit, based on cross-sections from Krstic & Janev (2003)",
+   "expression": [
+    "chtab(159,itemp) = ((1.54d-12*(temp**0.45))*dexp((-(3.1d4/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch160",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1762,
+    1763
+   ],
+   "comment": "Collisional dissociation of H2+ by H, LTE limit\nFrom Coppola et al (2011), based on Krstic & Janev (2003)",
+   "expression": [
+    "chtab(160,itemp) = dexp(((((-32.912)+(6.9498d-5*temp))-(3.3248d4/temp))-(4.08d-9*(temp**2))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch161",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1778,
+    1782
+   ],
+   "comment": "High n CID rate",
+   "expression": [
+    "chtab(161,itemp) = (((((-178.4239d0)-(68.42243d0*log10(temp_msm)))+(43.20243d0*(dlog10(temp_msm)**2)))-(4.633167d0*(dlog10(temp_msm)**3)))+(69.70086d0*dlog10((1d0+(4.087038d4/temp_msm)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch162",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1783,
+    1783
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(162,itemp) = (-(2.370570d4/temp_msm))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch163",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1785,
+    1788
+   ],
+   "comment": "Low n CID rate",
+   "expression": [
+    "chtab(163,itemp) = (((1.288953d2-(5.391334d1*log10(temp_msm)))+(5.315517d0*(dlog10(temp_msm)**2)))-(1.973427d1*dlog10((1d0+(1.678095d4/temp_msm)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch164",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1789,
+    1789
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(164,itemp) = (-(2.578611d4/temp_msm))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch165",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1791,
+    1794
+   ],
+   "comment": "ncrit (CID)",
+   "expression": [
+    "chtab(165,itemp) = (1d1**(((1.482123d1-(4.890915d0*dlog10(temp_msm)))+(4.749030d-1*(dlog10(temp_msm)**2)))-(1.338283d2/temp_msm)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch166",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1795,
+    1797
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(166,itemp) = ((8.227443d-1+(5.864073d-1*dexp((-(temp_msm/1.85d3)))))-(2.056313d0*dexp((-(temp_msm/4.4d2)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch167",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1799,
+    1803
+   ],
+   "comment": "High n DT rate",
+   "expression": [
+    "chtab(167,itemp) = (((((-142.7664d0)+(42.70741d0*dlog10(temp_msm)))-(2.027365d0*(dlog10(temp_msm)**2)))-(2.582097d-1*(dlog10(temp_msm)**3)))+(2.136094d1*dlog10((1d0+(2.753531d4/temp_msm)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch168",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1804,
+    1804
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(168,itemp) = (-(2.146779d4/temp_msm))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch169",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1806,
+    1809
+   ],
+   "comment": "Low n DT rate",
+   "expression": [
+    "chtab(169,itemp) = (((60.34928d0-(27.43096d0*dlog10(temp_msm)))+(2.676150d0*(dlog10(temp_msm)**2)))-(11.28215d0*dlog10((1d0+(1.425455d4/temp_msm)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch170",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1810,
+    1810
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(170,itemp) = (-(23125.2d0/temp_msm))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch171",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1812,
+    1815
+   ],
+   "comment": "ncrit (DT)",
+   "expression": [
+    "chtab(171,itemp) = (1d1**(((9.305564d0-(2.464009d0*dlog10(temp_msm)))+(0.1985955d0*(dlog10(temp_msm)**2)))+(743.0600d0/temp_msm)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch172",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1816,
+    1818
+   ],
+   "comment": "",
+   "expression": [
+    "chtab(172,itemp) = ((7.502286d-1+(2.358848d-1*dexp((-(temp_msm/1.85d3)))))+(2.937507d0*dexp((-(temp_msm/4d2)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "ch173",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1822,
+    1823
+   ],
+   "comment": "H2 + H+ -> H2+ + H, LTE limit; from Coppola et al 2011",
+   "expression": [
+    "chtab(173,itemp) = (1d6*dexp(((((-33.081)+(6.3173d-5*temp))-(2.3478d4/temp))-(1.8691d-9*(temp**2)))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr1",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1857,
+    1857
+   ],
+   "comment": "Primary cosmic ray ionization rates - calculated as scale factor * HI\ncosmic ray ion. rate. For cr3, cr4 we use scaling factors from\nLiszt (2003, A&A, 398, 621), based on data from the UMIST database.\nFor cr5 & cr7, we use L67, L78. For cr6, we use the scaling relative to\nthe HI rate given by UMIST.\n[NB Does not include photoionizations caused by CR-induced photons\n(i.e photons produced by excitation of HI or H2 by collisions with\nenergetic primary and secondary electrons)]\nHI:",
+   "expression": [
+    "crtab(1) = cosmic_ray_ion_rate"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr2",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1861,
+    1861
+   ],
+   "comment": "H2:",
+   "expression": [
+    "crtab(2) = (2d0*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr3",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1868,
+    1868
+   ],
+   "comment": "CI:",
+   "expression": [
+    "crtab(3) = (3.83d0*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr4",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1872,
+    1872
+   ],
+   "comment": "OI:",
+   "expression": [
+    "crtab(4) = (5.67d0*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr5",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1876,
+    1876
+   ],
+   "comment": "SiI:",
+   "expression": [
+    "crtab(5) = (6.5d0*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr6",
+   "networks": [
+    17
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1880,
+    1880
+   ],
+   "comment": "HeI:",
+   "expression": [
+    "crtab(6) = (1.09d0*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr7",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1884,
+    1884
+   ],
+   "comment": "Si+:",
+   "expression": [
+    "crtab(7) = (2.5d0*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr9",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1888,
+    1888
+   ],
+   "comment": "CO: [NB. Direct ionization by cosmic rays]",
+   "expression": [
+    "crtab(9) = (6.52d0*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr10",
+   "networks": [
+    5
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1862,
+    1862
+   ],
+   "comment": "",
+   "expression": [
+    "crtab(10) = (3.7d-2*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr11",
+   "networks": [
+    5
+   ],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1863,
+    1863
+   ],
+   "comment": "",
+   "expression": [
+    "crtab(11) = (2.2d-1*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cr12",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1864,
+    1864
+   ],
+   "comment": "",
+   "expression": [
+    "crtab(12) = (6.5d-4*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot1",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1893,
+    1893
+   ],
+   "comment": "Cosmic-ray induced photoprocesses\nC -> C+ + e-",
+   "expression": [
+    "crphot(1) = (2.8d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot2",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1895,
+    1895
+   ],
+   "comment": "CH -> C + H",
+   "expression": [
+    "crphot(2) = (4d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot3",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1897,
+    1897
+   ],
+   "comment": "CH+ -> C+ + H",
+   "expression": [
+    "crphot(3) = (9.6d2*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot4",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1899,
+    1899
+   ],
+   "comment": "CH2 -> CH2+ + e",
+   "expression": [
+    "crphot(4) = (2.7d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot5",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1901,
+    1901
+   ],
+   "comment": "CH2 -> CH + H",
+   "expression": [
+    "crphot(5) = (2.7d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot6",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1903,
+    1903
+   ],
+   "comment": "C2 -> C + C",
+   "expression": [
+    "crphot(6) = (1.3d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot7",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1905,
+    1905
+   ],
+   "comment": "OH -> O + H",
+   "expression": [
+    "crphot(7) = (2.8d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot8",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1907,
+    1907
+   ],
+   "comment": "H2O -> OH + H",
+   "expression": [
+    "crphot(8) = (5.3d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot9",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1909,
+    1909
+   ],
+   "comment": "O2 -> O + O",
+   "expression": [
+    "crphot(9) = (4.1d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot10",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1911,
+    1911
+   ],
+   "comment": "O2 -> O2+ + e",
+   "expression": [
+    "crphot(10) = (6.4d2*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot11",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1913,
+    1913
+   ],
+   "comment": "CO -> C + O",
+   "expression": [
+    "crphot(11) = (0.21d0*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "crphot12",
+   "networks": [],
+   "fortran_file": "cheminmo.F",
+   "lines": [
+    1918,
+    1918
+   ],
+   "comment": "NO -> N + O\nNote: this is actually the sum of two processes, direct photodissoc.\nand photoionization to NO+, which we assume then dissociatively\nrecombines to yield N + O...",
+   "expression": [
+    "crphot(12) = (5.2d3*cosmic_ray_ion_rate)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl1",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    253,
+    1161
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d0):",
+    "  cltab(1,itemp) = 1d-60",
+    "elseif (temp < 1d2):",
+    "  cltab(1,itemp) = max(f,1d-60)",
+    "elseif (temp > 1d4):",
+    "  cltab(1,itemp) = (1d1**(-18.253d0))"
+   ],
+   "kind": "TABLE",
+   "why": "assigned inside a residual do-loop (spline/DATA-table construction outside the analytic T-loop)"
+  },
+  {
+   "rate_id": "cl2",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    276,
+    1162
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d0):",
+    "  cltab(2,itemp) = 1d-60",
+    "elseif (temp < 1d2):",
+    "  cltab(2,itemp) = ((((fpara*h2q02)*h2e20)+((fortho*h2q13)*h2e31))*kboltz)",
+    "elseif (temp > 1d4):",
+    "  cltab(2,itemp) = (1d1**(-21.943d0))"
+   ],
+   "kind": "TABLE",
+   "why": "assigned inside a residual do-loop (spline/DATA-table construction outside the analytic T-loop)"
+  },
+  {
+   "rate_id": "cl3",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    293,
+    1163
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d0):",
+    "  cltab(3,itemp) = 1d-60",
+    "elseif (temp < 1d2):",
+    "  cltab(3,itemp) = ((((fpara*h2q02)*h2e20)+((fortho*h2q13)*h2e31))*kboltz)",
+    "elseif (temp > 1d4):",
+    "  cltab(3,itemp) = (1d1**(-22.758d0))"
+   ],
+   "kind": "TABLE",
+   "why": "assigned inside a residual do-loop (spline/DATA-table construction outside the analytic T-loop)"
+  },
+  {
+   "rate_id": "cl4",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    308,
+    336
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 1d1):",
+    "  cltab(4,itemp) = 0d0",
+    "elseif (temp < 1d2):",
+    "  cltab(4,itemp) = (1d1**((((((-16.818342d0)+(37.383713d0*dlog10(temp3)))+(58.145166d0*(dlog10(temp3)**2)))+(48.656103d0*(dlog10(temp3)**3)))+(20.159831d0*(dlog10(temp3)**4)))+(3.8479610d0*(dlog10(temp3)**5))))",
+    "elseif (temp < 1d3):",
+    "  cltab(4,itemp) = (1d1**((((((-24.311209d0)+(3.5692468d0*dlog10(temp3)))-(11.332860d0*(dlog10(temp3)**2)))-(27.850082d0*(dlog10(temp3)**3)))-(21.328264d0*(dlog10(temp3)**4)))-(4.2519023d0*(dlog10(temp3)**5))))",
+    "elseif (temp < 1d4):",
+    "  cltab(4,itemp) = (1d1**((((((-24.311209d0)+(4.6450521d0*dlog10(temp3)))-(3.7209846d0*(dlog10(temp3)**2)))+(5.9369081d0*(dlog10(temp3)**3)))-(5.5108047d0*(dlog10(temp3)**4)))+(1.5538288d0*(dlog10(temp3)**5))))",
+    "else:",
+    "  cltab(4,itemp) = (1d1**((((((-24.311209d0)+4.6450521d0)-3.7209846d0)+5.9369081d0)-5.5108047d0)+1.5538288d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl5",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    344,
+    358
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 1d1):",
+    "  cltab(5,itemp) = 0d0",
+    "elseif (temp < 1d4):",
+    "  cltab(5,itemp) = (1d1**((((((-23.962112d0)+(2.09433740d0*dlog10(temp3)))-(0.77151436d0*(dlog10(temp3)**2)))+(0.43693353d0*(dlog10(temp3)**3)))-(0.14913216d0*(dlog10(temp3)**4)))-(0.033638326d0*(dlog10(temp3)**5))))",
+    "else:",
+    "  cltab(5,itemp) = (1d1**((((((-23.962112d0)+2.09433740d0)-0.77151436d0)+0.43693353d0)-0.14913216d0)-0.033638326d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl6",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1536,
+    1590
+   ],
+   "comment": "",
+   "expression": [],
+   "kind": "TABLE",
+   "why": "assigned inside a residual do-loop (spline/DATA-table construction outside the analytic T-loop)"
+  },
+  {
+   "rate_id": "cl7",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    454,
+    454
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(7,itemp) = blwatr"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl8",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    461,
+    461
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(8,itemp) = blwatv"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl9",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    467,
+    467
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(9,itemp) = blwatvh"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl10",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    494,
+    505
+   ],
+   "comment": "",
+   "expression": [
+    "if (itemp <= 2800):",
+    "  if (itemp <= 1626):",
+    "    cltab(10,itemp) = (coc*frac)",
+    "  else:",
+    "    cltab(10,itemp) = (coc*frac)",
+    "else:",
+    "  cltab(10,itemp) = coc"
+   ],
+   "grid_only": true,
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl11",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    509,
+    509
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(11,itemp) = ccr"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl12",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    523,
+    523
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(12,itemp) = blcov"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl13",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    535,
+    537
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 7d2):",
+    "  cltab(13,itemp) = ((1.049d-35*(temp**3.98))*ctinv)",
+    "else:",
+    "  cltab(13,itemp) = ((1.062d-29*(temp**1.87))*ctinv)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl14",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    549,
+    549
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(14,itemp) = (((3.8d-33*tsqrt)*gg)*exp((-(temp/3e4))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl15",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    554,
+    554
+   ],
+   "comment": "(cl15) --  OH cooling - non-lte\nlike water cooling: HM79 universal cooling law",
+   "expression": [
+    "cltab(15,itemp) = ((2.84d-28*temp)*tsqrt)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl16",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    558,
+    558
+   ],
+   "comment": "(cl[16-17]) -- Photoelectric heating",
+   "expression": [
+    "cltab(16,itemp) = (dsqrt(temp)/phi_pah)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl17",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    560,
+    560
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(17,itemp) = (3.7d-2*((temp/1d4)**0.7d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl18",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    582,
+    602
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d0):",
+    "  cltab(18,itemp) = (((5d-11/3d0)*exp((((((((4.581-(156.118*tfintq))+(2679.979*(tfintq**2)))-(78996.962*(tfintq**3)))+(1308323.468*(tfintq**4)))-(13011761.861*(tfintq**5)))+(71010784.971*(tfintq**6)))-(162826621.855*(tfintq**7)))))*exp((oxe10/(kboltz*tfix))))",
+    "elseif (temp < 1d3):",
+    "  cltab(18,itemp) = (((5d-11/3d0)*exp((((((((4.581-(156.118*tintq))+(2679.979*(tintq**2)))-(78996.962*(tintq**3)))+(1308323.468*(tintq**4)))-(13011761.861*(tintq**5)))+(71010784.971*(tintq**6)))-(162826621.855*(tintq**7)))))*exp((oxe10/(kboltz*temp))))",
+    "else:",
+    "  cltab(18,itemp) = (6.81d-11*(temp**0.376d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl19",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    608,
+    628
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d0):",
+    "  cltab(19,itemp) = ((5d-11*exp((((((((3.297-(168.382*tfintq))+(1844.099*(tfintq**2)))-(68362.889*(tfintq**3)))+(1376864.737*(tfintq**4)))-(17964610.169*(tfintq**5)))+(134374927.808*(tfintq**6)))-(430107587.886*(tfintq**7)))))*exp((oxe20/(kboltz*tfix))))",
+    "elseif (temp < 1d3):",
+    "  cltab(19,itemp) = ((5d-11*exp((((((((3.297-(168.382*tintq))+(1844.099*(tintq**2)))-(68362.889*(tintq**3)))+(1376864.737*(tintq**4)))-(17964610.169*(tintq**5)))+(134374927.808*(tintq**6)))-(430107587.886*(tintq**7)))))*exp((oxe20/(kboltz*temp))))",
+    "else:",
+    "  cltab(19,itemp) = (6.34d-11*(temp**0.36d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl20",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    635,
+    647
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d1):",
+    "  cltab(20,itemp) = (2.62d-12*(temp**0.74d0))",
+    "elseif (temp < 1d3):",
+    "  cltab(20,itemp) = ((3d-11*exp((((((((3.437+(17.443*tisqt))-(618.761*(tisqt**2)))+(3757.156*(tisqt**3)))-(12736.468*(tisqt**4)))+(22785.266*(tisqt**5)))-(22759.228*(tisqt**6)))+(12668.261*(tisqt**7)))))*exp((oxe21/(kboltz*temp))))",
+    "else:",
+    "  cltab(20,itemp) = (3.61d-10*(temp**0.158d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl21",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    660,
+    660
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(21,itemp) = (f+hh)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl22",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    664,
+    664
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(22,itemp) = (f+hh)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl23",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    668,
+    668
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(23,itemp) = (f+hh)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl24",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    673,
+    673
+   ],
+   "comment": "Electron rate -- from my fits to BBT98.\n1 -> 0",
+   "expression": [
+    "cltab(24,itemp) = (5.12d-10*(temp**(-0.075)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl25",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    675,
+    675
+   ],
+   "comment": "2 -> 0",
+   "expression": [
+    "cltab(25,itemp) = (4.863d-10*(temp**(-0.026)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl26",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    677,
+    677
+   ],
+   "comment": "2 -> 1",
+   "expression": [
+    "cltab(26,itemp) = (1.082d-14*(temp**0.926))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl27",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    683,
+    687
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 194):",
+    "  cltab(27,itemp) = (6.38d-11*(temp**0.40))",
+    "elseif (temp < 3686):",
+    "  cltab(27,itemp) = (7.75d-12*(temp**0.80))",
+    "else:",
+    "  cltab(27,itemp) = (2.65d-10*(temp**0.37))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl28",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    691,
+    695
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 511):",
+    "  cltab(28,itemp) = (6.10d-13*(temp**1.10))",
+    "elseif (temp < 7510):",
+    "  cltab(28,itemp) = (2.12d-12*(temp**0.90))",
+    "else:",
+    "  cltab(28,itemp) = (4.49d-10*(temp**0.30))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl29",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    699,
+    701
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 2090):",
+    "  cltab(29,itemp) = (2.029d-11*(temp**0.56))",
+    "else:",
+    "  cltab(29,itemp) = (3.434d-10*(temp**0.19))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl30",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    715,
+    737
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d0):",
+    "  cltab(30,itemp) = (((1d-11/3d0)*dexp(((((((((3.6593+(56.6023*tfinq))-(802.9765*(tfinq**2)))+(5025.1882*(tfinq**3)))-(17874.4255*(tfinq**4)))+(38343.6655*(tfinq**5)))-(49249.4895*(tfinq**6)))+(34789.3941*(tfinq**7)))-(10390.9809*(tfinq**8)))))*dexp((cie10/(kboltz*tfix))))",
+    "elseif (temp < 1d3):",
+    "  cltab(30,itemp) = (((1d-11/3d0)*dexp(((((((((3.6593+(56.6023*tinq))-(802.9765*(tinq**2)))+(5025.1882*(tinq**3)))-(17874.4255*(tinq**4)))+(38343.6655*(tinq**5)))-(49249.4895*(tinq**6)))+(34789.3941*(tinq**7)))-(10390.9809*(tinq**8)))))*dexp((cie10/(kboltz*temp))))",
+    "else:",
+    "  cltab(30,itemp) = (2.57d-11*(temp**0.31d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl31",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    744,
+    766
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d0):",
+    "  cltab(31,itemp) = ((2.0d-12*dexp(((((((((10.8377-(173.4153*tfinth))+(2024.0272*(tfinth**2)))-(13391.6549*(tfinth**3)))+(52198.5522*(tfinth**4)))-(124518.3586*(tfinth**5)))+(178182.5823*(tfinth**6)))-(140970.6106*(tfinth**7)))+(47504.5861*(tfinth**8)))))*dexp((cie20/(kboltz*tfix))))",
+    "elseif (temp < 1d3):",
+    "  cltab(31,itemp) = ((2.0d-12*dexp(((((((((10.8377-(173.4153*tinth))+(2024.0272*(tinth**2)))-(13391.6549*(tinth**3)))+(52198.5522*(tinth**4)))-(124518.3586*(tinth**5)))+(178182.5823*(tinth**6)))-(140970.6106*(tinth**7)))+(47504.5861*(tinth**8)))))*dexp((cie20/(kboltz*temp))))",
+    "else:",
+    "  cltab(31,itemp) = (1.69d-11*(temp**0.35d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl32",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    772,
+    802
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 5d0):",
+    "  cltab(32,itemp) = ((6.0d-12*dexp((((((((15.8996-(201.3030*tfinq))+(1533.6164*(tfinq**2)))-(6491.0083*(tfinq**3)))+(15921.9239*(tfinq**4)))-(22691.1632*(tfinq**5)))+(17334.7529*(tfinq**6)))-(5517.9360*(tfinq**7)))))*dexp((cie21/(kboltz*tfix))))",
+    "elseif (temp < 1d3):",
+    "  cltab(32,itemp) = ((6.0d-12*dexp((((((((15.8996-(201.3030*tinq))+(1533.6164*(tinq**2)))-(6491.0083*(tinq**3)))+(15921.9239*(tinq**4)))-(22691.1632*(tinq**5)))+(17334.7529*(tinq**6)))-(5517.9360*(tinq**7)))))*dexp((cie21/(kboltz*temp))))",
+    "elseif (temp < 1d3):",
+    "  cltab(32,itemp) = ((6.0d-12*dexp((((((((15.8996-(201.3030*tinq))+(1533.6164*(tinq**2)))-(6491.0083*(tinq**3)))+(15921.9239*(tinq**4)))-(22691.1632*(tinq**5)))+(17334.7529*(tinq**6)))-(5517.9360*(tinq**7)))))*dexp((cie21/(kboltz*temp))))",
+    "else:",
+    "  cltab(32,itemp) = (4.95d-11*(temp**0.35))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl33",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    815,
+    815
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(33,itemp) = (f+hh)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl34",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    822,
+    822
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(34,itemp) = (f+hh)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl35",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    829,
+    829
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(35,itemp) = (f+hh)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl36",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    847,
+    848
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(36,itemp) = ((((1d0/3d0)*8.629d-6)*dexp(f))/dsqrt(temp))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl37",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    862,
+    862
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(37,itemp) = (((0.2d0*8.629d-6)*dexp(f))/dsqrt(temp))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl38",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    876,
+    876
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(38,itemp) = (((0.2d0*8.629d-6)*dexp(f))/dsqrt(temp))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl39",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    891,
+    891
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(39,itemp) = f"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl40",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    903,
+    903
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(40,itemp) = f"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl41",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    915,
+    915
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(41,itemp) = f"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl42",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    923,
+    923
+   ],
+   "comment": "(cl[42-43]) -- SiI fine structure lines\nCollisional de-excitation rates -- HI, protons from HM89\nHI:\n1 -> 0",
+   "expression": [
+    "cltab(42,itemp) = (3.5d-10*(temp2**(-0.03)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl43",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    925,
+    925
+   ],
+   "comment": "2 -> 0",
+   "expression": [
+    "cltab(43,itemp) = (1.7d-11*(temp2**0.17))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl44",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    927,
+    927
+   ],
+   "comment": "2 -> 1",
+   "expression": [
+    "cltab(44,itemp) = (5.0d-10*(temp2**0.17))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl45",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    959,
+    961
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d3):",
+    "  cltab(45,itemp) = (8d-10*(temp2**0.07d0))",
+    "else:",
+    "  cltab(45,itemp) = (3.113619d-10*(temp2**0.385d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl46",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    976,
+    976
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(46,itemp) = (f+hh)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl47",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    985,
+    987
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp <= 2d3):",
+    "  cltab(47,itemp) = (3.86d-7/dsqrt(temp2))",
+    "else:",
+    "  cltab(47,itemp) = (2.426206d-7/(temp2**0.345d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl48",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    994,
+    994
+   ],
+   "comment": "Proton rate negligible below 10^4K, ignorable below 10^5K.\nFinally, cl48 holds f(1,LTE)",
+   "expression": [
+    "cltab(48,itemp) = (2d0*dexp((-(91.25d0/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl49",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1002,
+    1002
+   ],
+   "comment": "(cl[49-51]) -- SiII fine structure lines\nCollisional rates:\n(cl49) SiII - HI (fit by SCOG to data from R90).",
+   "expression": [
+    "cltab(49,itemp) = (4.95d-10*(temp2**0.24))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl50",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1007,
+    1007
+   ],
+   "comment": "(cl50) SiII - electron (DK91 -- extrapolated to T < 4000K,\nassuming constant collision strength)",
+   "expression": [
+    "cltab(50,itemp) = (1.2d-6/dsqrt(temp2))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl51",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1011,
+    1011
+   ],
+   "comment": "cl51 holds f(1,LTE)",
+   "expression": [
+    "cltab(51,itemp) = (2d0*dexp((-(412.24d0/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl52",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1029,
+    1543
+   ],
+   "comment": "This rate includes cooling from HI, HeI, HeII excitation, so we set\nthe corresponding individual rates to zero to avoid double counting\nHI excitation cooling ('Lyman-alpha' cooling):",
+   "expression": [
+    "if (temp < 1d3):",
+    "  cltab(52,itemp) = 0d0",
+    "else:",
+    "  cltab(52,itemp) = ((7.5d-19*dexp((-(1.18348d5/temp))))/(1d0+dsqrt((temp/1d5))))"
+   ],
+   "kind": "TABLE",
+   "why": "assigned inside a residual do-loop (spline/DATA-table construction outside the analytic T-loop)"
+  },
+  {
+   "rate_id": "cl53",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1111,
+    1115
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(53,itemp) = (((((-42.57688)+(21.93385*thd))-(10.19097*(thd**2)))+(2.19906*(thd**3)))-(0.17334*(thd**4)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl54",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1116,
+    1120
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(54,itemp) = ((((0.92433+(0.77952*thd))-(0.54263*(thd**2)))+(0.11711*(thd**3)))-(8.35d-3*(thd**4)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl55",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1121,
+    1125
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(55,itemp) = ((((0.54962-(1.06447*thd))+(0.62343*(thd**2)))-(0.13768*(thd**3)))+(1.06d-2*(thd**4)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl56",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1126,
+    1130
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(56,itemp) = (((((-7.676d-2)+(0.11864d0*thd))-(7.366d-2*(thd**2)))+(1.759d-2*(thd**3)))-(1.482d-3*(thd**4)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl57",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1131,
+    1135
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(57,itemp) = ((((2.75d-3-(3.66d-3*thd))+(2.514d-3*(thd**2)))-(6.6631d-4*(thd**3)))+(6.1926d-5*(thd**4)))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl58",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1141,
+    1141
+   ],
+   "comment": "(cl58) H2 collision-induced emission cooling.\nFrom RA04. Assumes that H2-H2 collisions dominate",
+   "expression": [
+    "cltab(58,itemp) = (2.289d-49*(temp**4))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl59",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1041,
+    1547
+   ],
+   "comment": "HeI excitation cooling",
+   "expression": [
+    "if (temp < 2d3):",
+    "  cltab(59,itemp) = 0d0",
+    "else:",
+    "  cltab(59,itemp) = ((1.1d-19*(temp**0.082d0))*exp((-(2.3d5/temp))))"
+   ],
+   "kind": "TABLE",
+   "why": "assigned inside a residual do-loop (spline/DATA-table construction outside the analytic T-loop)"
+  },
+  {
+   "rate_id": "cl60",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1056,
+    1548
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 1d2):",
+    "  cltab(60,itemp) = 0d0",
+    "else:",
+    "  cltab(60,itemp) = ((9.1d-27*exp((-(1.3179d4/temp))))/((temp**0.1687d0)*(1d0+dsqrt((temp/1d5)))))"
+   ],
+   "kind": "TABLE",
+   "why": "assigned inside a residual do-loop (spline/DATA-table construction outside the analytic T-loop)"
+  },
+  {
+   "rate_id": "cl61",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1067,
+    1552
+   ],
+   "comment": "HeII excitation cooling",
+   "expression": [
+    "if (temp < 4d3):",
+    "  cltab(61,itemp) = 0d0",
+    "else:",
+    "  cltab(61,itemp) = ((5.54d-17*exp((-(4.73638d5/temp))))/((temp**0.397d0)*(1d0+dsqrt((temp/1d5)))))"
+   ],
+   "kind": "TABLE",
+   "why": "assigned inside a residual do-loop (spline/DATA-table construction outside the analytic T-loop)"
+  },
+  {
+   "rate_id": "cl62",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1085,
+    1085
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(62,itemp) = ((1.426d-27*dsqrt(temp))*gff)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl63",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    1095,
+    1095
+   ],
+   "comment": "",
+   "expression": [
+    "cltab(63,itemp) = (((4d0*1.426d-27)*dsqrt(temp))*gff)"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl64",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    364,
+    378
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 1d1):",
+    "  cltab(64,itemp) = 0d0",
+    "elseif (temp < 1d4):",
+    "  cltab(64,itemp) = (1d1**((((((-23.689237d0)+(2.1892372d0*dlog10(temp3)))-(0.81520438d0*(dlog10(temp3)**2)))+(0.29036281d0*(dlog10(temp3)**3)))-(0.16596184d0*(dlog10(temp3)**4)))+(0.19191375d0*(dlog10(temp3)**5))))",
+    "else:",
+    "  cltab(64,itemp) = (1d1**((((((-23.689237d0)+2.1892372d0)-0.81520438d0)+0.29036281d0)-0.16596184d0)+0.19191375d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl65",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    386,
+    400
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 1d1):",
+    "  cltab(65,itemp) = 0d0",
+    "elseif (temp < 1d4):",
+    "  cltab(65,itemp) = (1d1**((((((-21.716699d0)+(1.3865783d0*dlog10(temp3)))-(0.37915285d0*(dlog10(temp3)**2)))+(0.11453688d0*(dlog10(temp3)**3)))-(0.23214154d0*(dlog10(temp3)**4)))+(0.058538864d0*(dlog10(temp3)**5))))",
+    "else:",
+    "  cltab(65,itemp) = (1d1**((((((-21.716699d0)+1.3865783d0)-0.37915285d0)+0.11453688d0)-0.23214154d0)+0.058538864d0))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl66",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    406,
+    427
+   ],
+   "comment": "",
+   "expression": [
+    "if (temp < 1d1):",
+    "  cltab(66,itemp) = 0d0",
+    "elseif (temp < 2d2):",
+    "  cltab(66,itemp) = (1d1**((((((-34.286155d0)-(48.537163d0*dlog10(temp3)))-(77.121176d0*(dlog10(temp3)**2)))-(51.352459d0*(dlog10(temp3)**3)))-(15.169160d0*(dlog10(temp3)**4)))-(0.98120322d0*(dlog10(temp3)**5))))",
+    "elseif (temp < 1d4):",
+    "  cltab(66,itemp) = (1d1**((((((-22.190316)+(1.5728955*dlog10(temp3)))-(0.21335100*(dlog10(temp3)**2)))+(0.96149759*(dlog10(temp3)**3)))-(0.91023195*(dlog10(temp3)**4)))+(0.13749749*(dlog10(temp3)**5))))",
+    "else:",
+    "  cltab(66,itemp) = (1d1**((((((-22.190316)+1.5728955)-0.21335100)+0.96149759)-0.91023195)+0.13749749))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cl67",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "coolinmo.F",
+   "lines": [
+    433,
+    433
+   ],
+   "comment": "(cl67): Equilibrium J=1/J=0 H2 ratio (used to compute heating/cooling\nfrom J = 0 <-> J=1 transitions in cool_func",
+   "expression": [
+    "cltab(67,itemp) = (9d0*exp((-(170.5d0/temp))))"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst1",
+   "networks": [
+    17
+   ],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    72,
+    72
+   ],
+   "comment": "H2 formation from H2+  (H2+ + H -> H2 + H+)\nRate from KAH79",
+   "expression": [
+    "cst(1) = 6.4d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst2",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    78,
+    78
+   ],
+   "comment": "Charge transfer: C+ + Si -> C + Si+\nRate from UMIST99",
+   "expression": [
+    "cst(2) = 2.1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst3",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    84,
+    84
+   ],
+   "comment": "CO+ formation from C+ and OH:  C+ + OH -> CO+ + H\nRate from UMIST99",
+   "expression": [
+    "cst(3) = 7.7d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst4",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    90,
+    90
+   ],
+   "comment": "H2O destruction by C+:  H2O + C+ -> HCO+ + H\nRate from UMIST99, based on AHF76, WAH76",
+   "expression": [
+    "cst(4) = 9d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst5",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    96,
+    96
+   ],
+   "comment": "H2O destruction by C+:  H2O + C+ -> HOC+ + H\nRate from UMIST99, based on AHF76, WAH76",
+   "expression": [
+    "cst(5) = 1.8d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst6",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    105,
+    105
+   ],
+   "comment": "CH+ formation by radiative association: C+ + H -> CH+ + gamma\nUMIST99,06 gives this as a constant rate, 1.7e-17, but new work by\nBarinovs & van Hemert (2006) gives a T dependent fit, which I've\nimplemented as rate ch104. Consequently, this rate is no longer\nused",
+   "expression": [
+    "cst(6) = 1.7d-17"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst7",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    111,
+    111
+   ],
+   "comment": "CH+ destruction by atomic hydrogen: CH+ + H -> C+ + H2\nRate from MSA99.",
+   "expression": [
+    "cst(7) = 7.5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst8",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    117,
+    117
+   ],
+   "comment": "CH2+ formation from CH+:  CH+ + H2 -> CH2+ + H\nRate from MSA99",
+   "expression": [
+    "cst(8) = 1.2d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst9",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    123,
+    123
+   ],
+   "comment": "CH3+ formation from CH2+:  CH2+ + H2 -> CH3+ + H\nRate from UMIST99, based on SA77a, SA77b",
+   "expression": [
+    "cst(9) = 1.6d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst10",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    129,
+    129
+   ],
+   "comment": "C2 formation from CH and C:  C + CH -> C2 + H\nRate from SHC04.",
+   "expression": [
+    "cst(10) = 6.59d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst11",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    135,
+    135
+   ],
+   "comment": "CH2 destruction by atomic H: CH2 + H -> CH + H2\nRate from W84.",
+   "expression": [
+    "cst(11) = 6.64d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst12",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    141,
+    141
+   ],
+   "comment": "CH formation by radiative association: C + H -> CH + gamma\nRate from PH80",
+   "expression": [
+    "cst(12) = 1d-17"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst13",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    147,
+    147
+   ],
+   "comment": "OH+ formation from O & H2+:  O + H2+ -> OH+ + H\nRate from UMIST99",
+   "expression": [
+    "cst(13) = 1.5d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst14",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    153,
+    153
+   ],
+   "comment": "OH+ formation from O & H3+:  O + H3+ -> OH+ + H2\nRate from MM00",
+   "expression": [
+    "cst(14) = 8.4d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst15",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    159,
+    159
+   ],
+   "comment": "OH+ formation from O+ & H2: O+ + H2 -> OH+ + H\nRate from UMIST99, based on SAM78, ASP80.",
+   "expression": [
+    "cst(15) = 1.7d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst16",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    165,
+    165
+   ],
+   "comment": "H2O+ formation from OH+: OH+ + H2 -> H2O+ + H\nRate from JBT81",
+   "expression": [
+    "cst(16) = 1.01d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst17",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    171,
+    171
+   ],
+   "comment": "H3O+ formation from H2O+: H2O+ + H2 -> H3O+ + H\nRate from RW80",
+   "expression": [
+    "cst(17) = 6.4d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst18",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    177,
+    177
+   ],
+   "comment": "SiH+ formation by radiative association: Si+ + H -> SiH+ + gamma\nXXX: no longer used; replaced with more recent temperature dependent rate",
+   "expression": [
+    "cst(18) = 1d-17"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst19",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    183,
+    183
+   ],
+   "comment": "SiH2+ formation by radiative association: Si+ + H2 -> SiH2+ + gamma\nXXX: No longer used.",
+   "expression": [
+    "cst(19) = 3d-18"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst20",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    189,
+    189
+   ],
+   "comment": "SiH+ destruction by atomic hydrogen: SiH+ + H -> Si+ + H2\nRate from HMWB89",
+   "expression": [
+    "cst(20) = 1.9d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst21",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    195,
+    195
+   ],
+   "comment": "H3O+ destruction by Si:  H3O+ + Si -> H2O + SiH+\nRate from UMIST99",
+   "expression": [
+    "cst(21) = 1.8d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst22",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    201,
+    201
+   ],
+   "comment": "OH formation by AD of H- with O:  H- + O -> OH + e-\nRate from UMIST99",
+   "expression": [
+    "cst(22) = 1.0d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst23",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    207,
+    207
+   ],
+   "comment": "O- formation by RA of O and e-:  O + e- -> O- + gamma\nRate from UMIST99",
+   "expression": [
+    "cst(23) = 1.5d-15"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst24",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    213,
+    213
+   ],
+   "comment": "OH formation from AD of O- with H:  O- + H -> OH + e-\nRate from UMIST99",
+   "expression": [
+    "cst(24) = 5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst25",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    219,
+    219
+   ],
+   "comment": "OH charge transfer with H+:  OH + H+ -> OH+ + H\nRate from UMIST99",
+   "expression": [
+    "cst(25) = 2.1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst26",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    225,
+    225
+   ],
+   "comment": "OH dissoc. charge transfer with He+:  OH + He+ -> O+ + He + H\nRate from UMIST99",
+   "expression": [
+    "cst(26) = 1.1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst27",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    231,
+    231
+   ],
+   "comment": "H2O charge transfer with H+:   H2O + H+ -> H2O+ + H\nRate from SSM92",
+   "expression": [
+    "cst(27) = 6.9d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst28",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    237,
+    237
+   ],
+   "comment": "H2O charge transfer with He+:  H2O + He+ -> OH + He + H+\nRate from UMIST99, based on MDM78a, MDM78b",
+   "expression": [
+    "cst(28) = 2.04d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst29",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    243,
+    243
+   ],
+   "comment": "H2O charge transfer with He+:  H2O + He+ -> OH+ + He + H\nRate from UMIST99, based on MDM78a, MDM78b",
+   "expression": [
+    "cst(29) = 2.86d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst30",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    249,
+    249
+   ],
+   "comment": "H2O charge transfer with He+:  H2O + He+ -> H2O+ + He\nRate from UMIST99, based on MDM78a, MDM78b",
+   "expression": [
+    "cst(30) = 6.05d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst31",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    255,
+    255
+   ],
+   "comment": "CO+  formation from O+ and C2:  C2 + O+ -> CO+ + C\nRate from UMIST99",
+   "expression": [
+    "cst(31) = 4.8d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst32",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    261,
+    261
+   ],
+   "comment": "Dissoc. charge transfer -- C2 and He+: C2 + He+ -> C+ + C + He\nRate from UMIST99",
+   "expression": [
+    "cst(32) = 1.6d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst33",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    267,
+    267
+   ],
+   "comment": "O2 destruction by C+:  O2 + C+ -> CO+ + O\nRate from UMIST99, based on SA77a, SA77b",
+   "expression": [
+    "cst(33) = 3.8d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst34",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    273,
+    273
+   ],
+   "comment": "O2 destruction by C+:  O2 + C+ -> CO + O+\nRate from UMIST99, based on SA77a, SA77b",
+   "expression": [
+    "cst(34) = 6.2d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst35",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    279,
+    279
+   ],
+   "comment": "O2 CT with H+:  O2 + H+ -> O2+ + H\nRate from SSM92",
+   "expression": [
+    "cst(35) = 2d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst36",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    285,
+    285
+   ],
+   "comment": "O2 non-dissoc. CT with He+:  O2 + He+ -> O2+ + He\nRate from UMIST06, based on AS76a, AS76b",
+   "expression": [
+    "cst(36) = 3.3d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst37",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    291,
+    291
+   ],
+   "comment": "O2 dissoc. CT with He+:  O2 + He+ -> O+ + O + He\nRate from UMIST06, based on AS76a, AS76b",
+   "expression": [
+    "cst(37) = 1.1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst38",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    297,
+    297
+   ],
+   "comment": "CO+ formation from O2+ and C:  O2+ + C -> CO+ + O\nRate from UMIST99",
+   "expression": [
+    "cst(38) = 5.2d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst39",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    303,
+    303
+   ],
+   "comment": "O2+ charge transfer with C:  O2+ + C -> O2 + C+\nRate from UMIST99",
+   "expression": [
+    "cst(39) = 5.2d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst40",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    309,
+    309
+   ],
+   "comment": "CO formation from CO+ CT with H:  CO+ + H -> CO + H+\nRate from UMIST99, based on FED84a, FED84b",
+   "expression": [
+    "cst(40) = 7.5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst41",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    315,
+    315
+   ],
+   "comment": "CO+ formation from CH+ and O:  CH+ + O -> CO+ + H\nRate from VIG80",
+   "expression": [
+    "cst(41) = 3.5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst42",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    321,
+    321
+   ],
+   "comment": "CO formation from HCO+ and C:  HCO+ + C -> CO + CH+\nRate from UMIST99",
+   "expression": [
+    "cst(42) = 1.1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst43",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    327,
+    327
+   ],
+   "comment": "CO formation from HCO+ and Si:  HCO+ + Si -> CO + SiH+\nRate from UMIST99",
+   "expression": [
+    "cst(43) = 1.6d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst44",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    333,
+    333
+   ],
+   "comment": "CO formation from HCO+ and H2O:  HCO+ + H2O -> CO + H3O+\nRate from ASG78",
+   "expression": [
+    "cst(44) = 2.5d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst45",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    339,
+    339
+   ],
+   "comment": "Conversion of HOC+ to HCO+ by CO: HOC+ + CO -> HCO+ + CO\nRate from WR85",
+   "expression": [
+    "cst(45) = 4d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst46",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    345,
+    345
+   ],
+   "comment": "Conversion of HOC+ to HCO+ by H2: HOC+ + H2 -> HCO+ + H2\nRate from SSRG02",
+   "expression": [
+    "cst(46) = 3.8d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst47",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    351,
+    351
+   ],
+   "comment": "C- formation by radiative association: C + e- -> C- + gamma\nFrom UMIST06, who cite SD98",
+   "expression": [
+    "cst(47) = 2.25d-15"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst48",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    357,
+    357
+   ],
+   "comment": "CO formation from AD of C- with O:  C- + O -> CO + e-\nRate from UMIST99",
+   "expression": [
+    "cst(48) = 5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst49",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    363,
+    363
+   ],
+   "comment": "CH formation from AD of C- with H:  C- + H -> CH + e-\nRate from UMIST99",
+   "expression": [
+    "cst(49) = 5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst50",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    369,
+    369
+   ],
+   "comment": "CO formation from AD of O- with C:  O- + C -> CO + e-\nRate from UMIST99",
+   "expression": [
+    "cst(50) = 5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst51",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    380,
+    382
+   ],
+   "comment": "",
+   "expression": [
+    "if (iflag_h3pra == 1):",
+    "  cst(51) = 1d-16",
+    "elseif (iflag_h3pra == 2):",
+    "  cst(51) = 1d-20",
+    "else:"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst52",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    392,
+    392
+   ],
+   "comment": "Charge transfer: Si + He+ -> Si+ + He\nRate taken from UMIST99.",
+   "expression": [
+    "cst(52) = 3.3d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst53",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    398,
+    398
+   ],
+   "comment": "HCO+ formation from CH2+:  CH2+ + O -> HCO+ + H\nRate from UMIST99.",
+   "expression": [
+    "cst(53) = 7.5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst54",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    404,
+    404
+   ],
+   "comment": "CH2 formation by radiative association: C + H2 -> CH2 + gamma\nRate from PH80",
+   "expression": [
+    "cst(54) = 1d-17"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst55",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    410,
+    410
+   ],
+   "comment": "CH+ formation from H3+:  C + H3+ -> CH+ + H2\nRate from UMIST99.",
+   "expression": [
+    "cst(55) = 2.0d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst56",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    416,
+    416
+   ],
+   "comment": "H2O+ formation from H3+:  OH + H3+ -> H2O+ + H2\nRate from UMIST99",
+   "expression": [
+    "cst(56) = 1.3d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst57",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    422,
+    422
+   ],
+   "comment": "Conversion of H2O to H3O+  by H3+: H2O + H3+ -> H3O+ + H2\nRate from UMIST99, based on KTH74, AFHK75",
+   "expression": [
+    "cst(57) = 5.9d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst58",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    428,
+    428
+   ],
+   "comment": "Conversion of CO to HOC+  by H3+: CO + H3+ -> HOC+ + H2\nRate from KTH75",
+   "expression": [
+    "cst(58) = 2.7d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst59",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    434,
+    434
+   ],
+   "comment": "Conversion of CO to HCO+  by H3+: CO + H3+ -> HCO+ + H2\nRate from KTH75",
+   "expression": [
+    "cst(59) = 1.7d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst60",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    440,
+    440
+   ],
+   "comment": "Conversion of Si to SiH+  by H3+: Si + H3+ -> SiH+ + H2\nRate from UMIST99",
+   "expression": [
+    "cst(60) = 3.7d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst61",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    446,
+    446
+   ],
+   "comment": "Formation of CH2 from C-:  C- + H2 -> CH2 + e-\nRate from UMIST99",
+   "expression": [
+    "cst(61) = 1.0d-13"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst62",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    452,
+    452
+   ],
+   "comment": "Destruction of CH2 by H+:  CH2 + H+ -> CH+ + H2\nRate from UMIST99",
+   "expression": [
+    "cst(62) = 1.4d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst63",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    458,
+    458
+   ],
+   "comment": "Formation of H2O from O-:  O- + H2 -> H2O + e\nRate from UMIST99",
+   "expression": [
+    "cst(63) = 7d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst64",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    466,
+    466
+   ],
+   "comment": "Formation of CO from CH2: CH2 + O -> CO + H + H\n-> CO + H2\nRate from UMIST06.\nBranching ratios are in rate_eq_mol.F",
+   "expression": [
+    "cst(64) = 2.13d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst65",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    472,
+    472
+   ],
+   "comment": "Charge transfer from H+ to CH:  CH + H+ -> CH+ + H\nRate from UMIST99",
+   "expression": [
+    "cst(65) = 1.9d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst66",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    478,
+    478
+   ],
+   "comment": "Charge transfer from H+ to CH2: CH2 + H+ -> CH2+ + H\nRate from UMIST99",
+   "expression": [
+    "cst(66) = 1.4d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst67",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    484,
+    484
+   ],
+   "comment": "Destruction of CH2+ by O2:  CH2+ + O2 -> HCO+ + OH\nRate from UMIST99, based on SA77a, SA77b",
+   "expression": [
+    "cst(67) = 9.1d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst68",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    490,
+    490
+   ],
+   "comment": "Dissociative CT -- CH2 and He+:  CH2 + He+ -> C+ + He + H2\nRate from UMIST99",
+   "expression": [
+    "cst(68) = 7.5d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst69",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    496,
+    496
+   ],
+   "comment": "Destruction of CH3+ by O:  CH3+ + O -> HCO+ + H2\nRate from FEH76",
+   "expression": [
+    "cst(69) = 4.0d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst70",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    502,
+    502
+   ],
+   "comment": "Destruction of water by SiH+:  SiH+ + H2O -> Si + H3O+\nRate from HMWB89",
+   "expression": [
+    "cst(70) = 8.0d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst71",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    508,
+    508
+   ],
+   "comment": "CO formation from OH: C + OH -> CO + H\nRate from SHC04",
+   "expression": [
+    "cst(71) = 1.0d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst72",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    514,
+    514
+   ],
+   "comment": "Mg charge transfer with H: H+ + Mg -> H + Mg+\nRate from UMIST99",
+   "expression": [
+    "cst(72) = 1.1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst73",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    520,
+    520
+   ],
+   "comment": "Mg charge transfer with C+: C+ + Mg -> C + Mg+\nRate from UMIST99",
+   "expression": [
+    "cst(73) = 1.1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst74",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    526,
+    526
+   ],
+   "comment": "Associative detachment of H- by OH: H- + OH -> H2O + e-\nRate from UMIST99",
+   "expression": [
+    "cst(74) = 1.0d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst75",
+   "networks": [
+    17
+   ],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    532,
+    532
+   ],
+   "comment": "H2 destruction by He+ CT  (He+ + H2 -> H2+ + He + PHOTON)\nRate from B84",
+   "expression": [
+    "cst(75) = 7.2d-15"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst76",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    538,
+    538
+   ],
+   "comment": "CH formation by AD of H-: C + H- -> CH + e-\nRate from UMIST99",
+   "expression": [
+    "cst(76) = 1.0d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst77",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    544,
+    544
+   ],
+   "comment": "CH+ form from H2+: H2+ + C -> CH+ + H\nRate from UMIST99",
+   "expression": [
+    "cst(77) = 2.4d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst78",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    550,
+    550
+   ],
+   "comment": "HCO+ form: H3O+ + C -> HCO+ + H2\nRate from UMIST99",
+   "expression": [
+    "cst(78) = 1.0d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst79",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    554,
+    554
+   ],
+   "comment": "CO2 formation: OH + CO -> CO2 + H",
+   "expression": [
+    "cst(79) = 1.0d-13"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst80",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    558,
+    558
+   ],
+   "comment": "HCO+ formation from CO+:  CO+ + H2 -> HCO+ + H",
+   "expression": [
+    "cst(80) = 1.8d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst81",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    562,
+    562
+   ],
+   "comment": "[NL99] H3+ + M -> M+ + H2 + H",
+   "expression": [
+    "cst(81) = 2.0d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst82",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    566,
+    566
+   ],
+   "comment": "Formation of CHx [NL99]:  C+ + H2 -> CHx + H",
+   "expression": [
+    "cst(82) = 4d-16"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst83",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    570,
+    570
+   ],
+   "comment": "Formation of HCO+ from OHx [NL99]: C+ + OHx -> HCO+",
+   "expression": [
+    "cst(83) = 1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst84",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    574,
+    574
+   ],
+   "comment": "Formation of CHx from C + H3+ [NL99]: C + H3+ -> CHx + H2",
+   "expression": [
+    "cst(84) = 2d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst85",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    578,
+    578
+   ],
+   "comment": "Formation of CO from CHx",
+   "expression": [
+    "cst(85) = 2d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst86",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    582,
+    582
+   ],
+   "comment": "Formation of OHx from O + H3+ [NL99]: O + H3+ -> OHx + H2",
+   "expression": [
+    "cst(86) = 8d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst87",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    588,
+    588
+   ],
+   "comment": "Formation of N2H+ from N2:  N2 + H3+ -> N2H+ + H2\nRate from Rakshit (1982)",
+   "expression": [
+    "cst(87) = 1.8d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst88",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    592,
+    592
+   ],
+   "comment": "Proton transfer from N2H+ to CO",
+   "expression": [
+    "cst(88) = 8.8d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst89",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    598,
+    598
+   ],
+   "comment": "CO formation from NO:  C + NO -> CO + N\nRate from Smith, Herbst & Chang (2004)",
+   "expression": [
+    "cst(89) = 9d-11"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst90",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    604,
+    604
+   ],
+   "comment": "Charge transfer from C+ to NO: C+ + NO -> C + NO+\nRate from Viggiano et al (1980)",
+   "expression": [
+    "cst(90) = 5.2d-10"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "cst91",
+   "networks": [],
+   "fortran_file": "const_rates.F",
+   "lines": [
+    608,
+    608
+   ],
+   "comment": "Proton transfer from N2H+ to C:  N2H+ + C -> N2 + CH+",
+   "expression": [
+    "cst(91) = 1.1d-9"
+   ],
+   "kind": "GENERATED"
+  },
+  {
+   "rate_id": "rate_eq_simple:ydot(I)@85",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    85,
+    85
+   ],
+   "expression": [
+    "ydot(I) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:ncrinv@199",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    199,
+    199
+   ],
+   "expression": [
+    "ncrinv   = (2d0 * abh2 * (ch6 - ch5) + ch5)"
+   ],
+   "comment": "H2 collisional dissociation rates -- need special handling because of\ndensity dependence"
+  },
+  {
+   "rate_id": "rate_eq_simple:h2var0@200",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    200,
+    200
+   ],
+   "expression": [
+    "h2var0   = 1d0 / ( 1d0 + yn * ncrinv)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:h2var1@201",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    201,
+    201
+   ],
+   "expression": [
+    "h2var1   = ch3**h2var0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:h2var2@202",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    202,
+    202
+   ],
+   "expression": [
+    "h2var2   = ch4**h2var0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:ykdh@203",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    203,
+    203
+   ],
+   "expression": [
+    "ykdh     = ch1 * h2var1"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:ykdh2@204",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    204,
+    204
+   ],
+   "expression": [
+    "ykdh2    = ch2 * h2var2"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:ykdis@215",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    215,
+    215
+   ],
+   "expression": [
+    "ykdis = phrates(1) * fshield"
+   ],
+   "comment": "call calc_H2_shielding_factor(fshield, temp, abh2, NH, rpar)"
+  },
+  {
+   "rate_id": "rate_eq_simple:gamma_co@221",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    221,
+    221
+   ],
+   "expression": [
+    "gamma_co = phrates(10)"
+   ],
+   "comment": "if (id_current .eq. 10) then\nprint*, \"phrates(1)=\", phrates(1), \"  fshield=\", fshield\nendif"
+  },
+  {
+   "rate_id": "rate_eq_simple:gamma_chx@222",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    222,
+    222
+   ],
+   "expression": [
+    "gamma_chx = 2.94d-10 * G_dust"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:phi@237",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    237,
+    237
+   ],
+   "expression": [
+    "phi = 1d20"
+   ],
+   "comment": "If the fractional ionization is zero, then there won't be any recombination,\nso the value we use for phi doesn't matter too much -- 1d20 is simply an\narbitrary large number"
+  },
+  {
+   "rate_id": "rate_eq_simple:phi@239",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    239,
+    239
+   ],
+   "expression": [
+    "phi = G_dust * sqrt(temp) / (yn * abe)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:h_gr@245",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    245,
+    245
+   ],
+   "expression": [
+    "h_gr = 1.225d-13 * dust_to_gas_ratio"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:hgrvar1@247",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    247,
+    247
+   ],
+   "expression": [
+    "hgrvar1  = 8.074d-6 * phi**1.378d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:hgrvar2@248",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    248,
+    248
+   ],
+   "expression": [
+    "hgrvar2  = (1d0 + ch34 * phi**ch35)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:h_gr@249",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    249,
+    250
+   ],
+   "expression": [
+    "h_gr     = 1.225d-13 * dust_to_gas_ratio / (1d0 + hgrvar1 * hgrvar2)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:h_gr@253",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    253,
+    253
+   ],
+   "expression": [
+    "h_gr = h_gr * dexp(-temp / 3d4)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:ydot(ihp)@276",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    276,
+    281
+   ],
+   "expression": [
+    "ydot(ihp) = (ch11 * abe   * abHI -  ch13 * abhp  * abe -  h_gr * abhp  * 1d0) * yn +  cr1  * abHI + cr10  * abh2 + ph38  * abHI"
+   ],
+   "comment": "Protons"
+  },
+  {
+   "rate_id": "rate_eq_simple:ydot(ih2)@285",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    285,
+    292
+   ],
+   "expression": [
+    "ydot(ih2) = (-ch25  * abe  * abh2 -   ykdh  * abHI * abh2 -   ykdh2 * abh2 * abh2 +   Rdust * abHI * 1d0 ) * yn -   ykdis * abh2 - 0.5d0 * cr2 * abh2 -   cr10  * abh2 -   cr11  * abh2"
+   ],
+   "comment": "Molecular hydrogen"
+  },
+  {
+   "rate_id": "rate_eq_simple:k0@306",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    306,
+    306
+   ],
+   "expression": [
+    "k0 = 5d-16"
+   ],
+   "comment": "if (id_current .eq. 10) then\nprint*, \"Rdust=\", Rdust, \"  temp=\", temp,\n$        \"ykdis\", ykdis, \"  abh2=\", abh2\nendif\nCO -- from NL97"
+  },
+  {
+   "rate_id": "rate_eq_simple:k1@307",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    307,
+    307
+   ],
+   "expression": [
+    "k1 = 5d-10"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:beta@315",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    315,
+    315
+   ],
+   "expression": [
+    "beta = 0.0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:beta@317",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    317,
+    317
+   ],
+   "expression": [
+    "beta = 1.0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:beta@319",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    319,
+    320
+   ],
+   "expression": [
+    "beta = k1 * abo / (k1 * abo + gamma_chx / yn)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:ydot(ico)@323",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    323,
+    324
+   ],
+   "expression": [
+    "ydot(ico) = k0 * abcp * abh2 * beta * yn - gamma_co * abco"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:rates_chem(1)@356",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    356,
+    358
+   ],
+   "expression": [
+    "rates_chem(1) = 4.48d0 * eV * (ykdh  * abHI * abh2 + ykdh2 * abh2 * abh2 + ch25  * abe  * abh2 ) * yn**2"
+   ],
+   "comment": "H2 collisional dissociation cooling:"
+  },
+  {
+   "rate_id": "rate_eq_simple:rates_chem(2)@362",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    362,
+    362
+   ],
+   "expression": [
+    "rates_chem(2) = - 4d-1 * eV * abH2 * yn * ykdis"
+   ],
+   "comment": "H2 photodissociation heating -- 0.4eV per photodissociation:"
+  },
+  {
+   "rate_id": "rate_eq_simple:cdex@370",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    370,
+    371
+   ],
+   "expression": [
+    "cdex = (1.4 * dexp(-1.81d4 / (temp + 1200)) * abH2 +  1.0 * dexp(-1d3 / temp) * abHI) * 1d-12 * dsqrt(temp) * yn"
+   ],
+   "comment": "Heating by UV pumping of H2 -- effective for n > n_crit\nWe assume 2 eV per UV photon (Burton, Hollenbach & Tielens 1990),\nand adopt a pumping rate 8.5 times larger than the dissociation rate\n(Draine & Bertoldi 1996, table 2)."
+  },
+  {
+   "rate_id": "rate_eq_simple:rdex@372",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    372,
+    372
+   ],
+   "expression": [
+    "rdex = 2d-7"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:fpheat@373",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    373,
+    373
+   ],
+   "expression": [
+    "fpheat = cdex / (cdex + rdex)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:rates_chem(3)@378",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    378,
+    378
+   ],
+   "expression": [
+    "rates_chem(3) = - 2d0 * eV * abH2 * yn * ykdis * 8.5d0 * fpheat"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:f_ex@394",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    394,
+    394
+   ],
+   "expression": [
+    "f_ex = 0d0"
+   ],
+   "comment": "call compute_h2_heating_fraction(temp, yn, abh2, f_ex)\nf_ex = f_ex * h2_form_ex"
+  },
+  {
+   "rate_id": "rate_eq_simple:f_ex@396",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    396,
+    396
+   ],
+   "expression": [
+    "f_ex = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:f_tot@398",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    398,
+    398
+   ],
+   "expression": [
+    "f_tot = h2_form_kin + f_ex"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:rates_chem(4)@400",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    400,
+    400
+   ],
+   "expression": [
+    "rates_chem(4) = - 4.48d0 * eV * f_tot * RH2"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:rates_chem(5)@404",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    404,
+    404
+   ],
+   "expression": [
+    "rates_chem(5) = 13.6d0 * eV * ch11 * abe * abHI * yn**2"
+   ],
+   "comment": "HI collisional ionization cooling -- 13.6eV per ionization:"
+  },
+  {
+   "rate_id": "rate_eq_simple:rates_chem(6)@410",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    410,
+    410
+   ],
+   "expression": [
+    "rates_chem(6) = kboltz * temp * abhp * (ch13 * abe + h_gr) * yn**2"
+   ],
+   "comment": "HII recombination cooling -- we assume that kT ergs is radiated\nper recombination and that this is independent of whether the\nrecombination occurs in the gas phase or on a grain surface"
+  },
+  {
+   "rate_id": "rate_eq_simple:rates_chem(6)@413",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    413,
+    413
+   ],
+   "expression": [
+    "rates_chem(6) = 0."
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_simple:ydot(itmp)@483",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5
+   ],
+   "fortran_file": "rate_eq_simple.F",
+   "lines": [
+    483,
+    483
+   ],
+   "expression": [
+    "ydot(itmp) = -(ylam + ylam_chem) + pdv_term"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(I)@138",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    138,
+    138
+   ],
+   "expression": [
+    "ydot(I) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(I)@193",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    193,
+    193
+   ],
+   "expression": [
+    "ydot(I) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(I)@203",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    203,
+    203
+   ],
+   "expression": [
+    "ydot(I) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(I)@215",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    215,
+    215
+   ],
+   "expression": [
+    "ydot(I) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdh2_h@432",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    432,
+    436
+   ],
+   "expression": [
+    "cdh2_h = (ch161 - (ch161 - ch163) / (1d0 + (yn * abHI / ch165)**ch166)) + (ch162 - (ch162 - ch164) / (1d0 + (yn * abHI / (1d1**(-1.164408e0) * ch165))**ch166))"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdh2_h@443",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    443,
+    443
+   ],
+   "expression": [
+    "cdh2_h = 1d1**cdh2_h"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdh2_h_dt@447",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    447,
+    451
+   ],
+   "expression": [
+    "cdh2_h_dt = (ch167 - (ch167 - ch169) / (1d0 + (yn * abHI / ch171)**ch172)) + (ch168 - (ch168 - ch170) / (1d0 + (yn * abHI / (1d1**(-1.174242e0) * ch171))**ch172))"
+   ],
+   "comment": "DT rate from MSM96"
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdh2_h_dt@458",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    458,
+    458
+   ],
+   "expression": [
+    "cdh2_h_dt = 1d1**cdh2_h_dt"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdh2_h@462",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    462,
+    462
+   ],
+   "expression": [
+    "cdh2_h = cdh2_h + cdh2_h_dt"
+   ],
+   "comment": "Total dissociation rate"
+  },
+  {
+   "rate_id": "rate_eq_ulli:ncrinv@464",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    464,
+    464
+   ],
+   "expression": [
+    "ncrinv   = ch5 + abheI * ch139"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2var0@465",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    465,
+    465
+   ],
+   "expression": [
+    "h2var0   = 1d0 / ( 1d0 + yn * ncrinv)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2var2@466",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    466,
+    466
+   ],
+   "expression": [
+    "h2var2   = ch4**h2var0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdh2_h2@467",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    467,
+    467
+   ],
+   "expression": [
+    "cdh2_h2  = ch2 * h2var2"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdh2_he@469",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    469,
+    469
+   ],
+   "expression": [
+    "cdh2_he = 1d-100"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdh2_he@471",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    471,
+    471
+   ],
+   "expression": [
+    "cdh2_he = ch138 * (ch137 / ch138)**h2var0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2_ct_low@482",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    482,
+    482
+   ],
+   "expression": [
+    "h2_ct_low = ch24"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ncrit_h2p_h@487",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    487,
+    487
+   ],
+   "expression": [
+    "ncrit_h2p_h = 4d2 * (1d4 / temp)"
+   ],
+   "comment": "Compute H2+ critical density"
+  },
+  {
+   "rate_id": "rate_eq_ulli:ncrit_h2p_e@488",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    488,
+    488
+   ],
+   "expression": [
+    "ncrit_h2p_e = 5d1"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ncrit_h2p_inv@490",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    490,
+    490
+   ],
+   "expression": [
+    "ncrit_h2p_inv = (abHI / ncrit_h2p_h) + (abe / ncrit_h2p_e)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ncrit_h2p_inv@492",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    492,
+    492
+   ],
+   "expression": [
+    "ncrit_h2p_inv = 1d0 / 4d2"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2p_alpha@494",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    494,
+    494
+   ],
+   "expression": [
+    "h2p_alpha = 1d0 / (1d0 + yn * ncrit_h2p_inv)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2p_dr@501",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    501,
+    501
+   ],
+   "expression": [
+    "h2p_dr   = ch157 * (ch30 / ch157)**h2p_alpha"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2p_cdh@508",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    508,
+    508
+   ],
+   "expression": [
+    "h2p_cdh  = ch160 * (ch159 / ch160)**h2p_alpha"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ykdis@525",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    525,
+    525
+   ],
+   "expression": [
+    "ykdis = phrates(1) * fshield"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ph4@526",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    526,
+    526
+   ],
+   "expression": [
+    "ph4 = phrates(4)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ph4@530",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    530,
+    530
+   ],
+   "expression": [
+    "ph4 = ph4 + 0.11d0 * CMB_temp**2.13d0 * exp(-8.823d3 / CMB_temp)"
+   ],
+   "comment": "At high redshift, account for dissociation of H- by the CMB.\nThermal (fit from Galli & Palla 1998):"
+  },
+  {
+   "rate_id": "rate_eq_ulli:ph4@532",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    532,
+    532
+   ],
+   "expression": [
+    "ph4 = ph4 + 8.0d-8 * CMB_temp**1.3d0 * exp(-2.3d3 / CMB_temp)"
+   ],
+   "comment": "Non-thermal (fit from Coppola et al 2011):"
+  },
+  {
+   "rate_id": "rate_eq_ulli:ph5@536",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    536,
+    536
+   ],
+   "expression": [
+    "ph5 = 0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2p_pd_low@538",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    538,
+    538
+   ],
+   "expression": [
+    "h2p_pd_low = phrates(5)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2p_pd_lte@539",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    539,
+    539
+   ],
+   "expression": [
+    "h2p_pd_lte = 2.2d-11 * G0 * temp**(-0.22d0)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2p_pd_lte@542",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    542,
+    542
+   ],
+   "expression": [
+    "h2p_pd_lte = h2p_pd_low"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h2p_pd_lte@546",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    546,
+    546
+   ],
+   "expression": [
+    "h2p_pd_lte = 1d-100"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ph5@549",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    549,
+    549
+   ],
+   "expression": [
+    "ph5 = h2p_pd_lte * (h2p_pd_low / h2p_pd_lte)**h2p_alpha"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:gamma_co@572",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    572,
+    572
+   ],
+   "expression": [
+    "gamma_co = phrates(10)"
+   ],
+   "comment": "Photodissociation (due to diffuse field):"
+  },
+  {
+   "rate_id": "rate_eq_ulli:gamma_chx@573",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    573,
+    573
+   ],
+   "expression": [
+    "gamma_chx = 2.94d-10 * G_dust"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:phi@578",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    578,
+    578
+   ],
+   "expression": [
+    "phi = 1d20"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:phi@580",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    580,
+    580
+   ],
+   "expression": [
+    "phi = G_dust * sqrt(temp) / (yn * abe)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h_gr@586",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    586,
+    586
+   ],
+   "expression": [
+    "h_gr = 1.225d-13 * dust_to_gas_ratio"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:hgrvar1@588",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    588,
+    588
+   ],
+   "expression": [
+    "hgrvar1  = 8.074d-6 * phi**1.378d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:hgrvar2@589",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    589,
+    589
+   ],
+   "expression": [
+    "hgrvar2  = (1d0 + ch34 * phi**ch35)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h_gr@590",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    590,
+    591
+   ],
+   "expression": [
+    "h_gr     = 1.225d-13 * dust_to_gas_ratio / (1d0 + hgrvar1 * hgrvar2)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:h_gr@594",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    594,
+    594
+   ],
+   "expression": [
+    "h_gr = h_gr * dexp(-temp / 3d4)"
+   ],
+   "comment": "Exponentially reduce rate at high temperature"
+  },
+  {
+   "rate_id": "rate_eq_ulli:num@639",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    639,
+    639
+   ],
+   "expression": [
+    "num   = ch21 * abHI * abe + ch126 * abh2 * abe"
+   ],
+   "comment": "H- :"
+  },
+  {
+   "rate_id": "rate_eq_ulli:denom@640",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    640,
+    642
+   ],
+   "expression": [
+    "denom = ch22 * abHI + ch26 * abe + ch27 * abHI + ch28 * abhp + ch29 * abhp + (ph4 / yn) + ch8 * abhep + ch31 * abheI + 2d0 * ch127 * abh2p"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:abM@654",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    654,
+    654
+   ],
+   "expression": [
+    "abM = abHI + abh2 / dsqrt(2d0) + abheI / 2d0"
+   ],
+   "comment": "H2+ :"
+  },
+  {
+   "rate_id": "rate_eq_ulli:num@656",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    656,
+    658
+   ],
+   "expression": [
+    "num   = ch23 * abHI * abhp + ch24 * abh2 * abhp + ch29 * abhp * abhm + ch156 * abhehp * abHI + (cr2 * abh2 / yn)  + cst(75) * abhep * abh2"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:denom@660",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    660,
+    662
+   ],
+   "expression": [
+    "denom = cst(1) * abHI + h2p_dr * abe + (ph5 / yn) + 2d0 * ch127 * abhm + ch154 * abheI + h2p_cdh * abM"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:num@675",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    675,
+    676
+   ],
+   "expression": [
+    "num = ch155 * abheI * abhp + ch154 * abheI * abh2p"
+   ],
+   "comment": "HeH+"
+  },
+  {
+   "rate_id": "rate_eq_ulli:denom@678",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    678,
+    678
+   ],
+   "expression": [
+    "denom = ch156 * abHI + ch153 * abe"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihp)@717",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    717,
+    734
+   ],
+   "expression": [
+    "ydot(ihp) = (ch11 * abe   * abHI + ch144 * abHI  * abHI + ch158 * abheI * abHI + cst(1) * abh2p * abHI - ch13 * abhp  * abe -  h_gr * abhp  * 1d0 - ch23 * abHI  * abhp - ch24 * abh2  * abhp - ch28 * abhp  * abhm - ch29 * abhp  * abhm + ch18 * abhep * abe + ch32 * abhep * abHI - ch33 * abheI * abhp + h2p_cdh * abh2p * abM + ch9 * abhep * abh2) * yn +  ph5  * abh2p +  cr1  * abHI + ph38  * abHI"
+   ],
+   "comment": "Protons"
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihp)@739",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    739,
+    743
+   ],
+   "expression": [
+    "ydot(ihp) = ydot(ihp) + (ch99 * abdp  * abHI -  ch98 * abhp  * abDI + ch100 * abdp  * abh2 - ch101 * abhd  * abhp) * yn"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ih2)@748",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    748,
+    765
+   ],
+   "expression": [
+    "ydot(ih2) = (ch108  * abHI**3 + ch109  * abHI**2 * abh2 + ch110  * abHI**2 * abheI) * yn**2 + (ch22   * abHI    * abhm +  Rdust  * abHI    * 1d0 + cst(1)  * abHI    * abh2p -  ch24  * abhp    * abh2 -  ch25  * abe     * abh2 - cdh2_h * abHI    * abh2 - cdh2_h2* abh2    * abh2 - cdh2_he* abheI   * abh2 - ch9    * abhep   * abh2 - cst(75) * abhep  * abh2 - ch126   * abh2   * abe + ch127   * abhm   * abh2p) * yn -  ykdis  * abh2 -  cr2    * abh2 -  ph41   * abh2"
+   ],
+   "comment": "Molecular hydrogen"
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ih2)@770",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    770,
+    774
+   ],
+   "expression": [
+    "ydot(ih2) = ydot(ih2) + (ch101  * abhd    * abhp -  ch100  * abh2    * abdp -  ch102  * abh2    * abDI +  ch103  * abhd    * abHI) * yn"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihep)@780",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    780,
+    780
+   ],
+   "expression": [
+    "ydot(ihep) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihep)@782",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    782,
+    794
+   ],
+   "expression": [
+    "ydot(ihep) = (ch14    * abheI * abe - ch15    * abhep * abe - ch17    * abhep * abe + ch20    * abhepp * abe - ch32    * abhep * abHI + ch33    * abheI * abhp -  ch8    * abhep * abhm -  ch9    * abhep * abh2 - cst(75) * abhep * abh2 -  ch92   * abhep * abco) * yn + cr6     * abheI + ph39    * abheI - ph40    * abhep"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihep)@810",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    810,
+    812
+   ],
+   "expression": [
+    "ydot(ihep) = ydot(ihep) + (ch33    * abheI * abdp -  ch32    * abhep * abDI) * yn"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihepp)@818",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    818,
+    818
+   ],
+   "expression": [
+    "ydot(ihepp)  = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihepp)@820",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    820,
+    822
+   ],
+   "expression": [
+    "ydot(ihepp) = (ch15 * abhep  * abe -  ch20 * abhepp * abe) * yn + ph40  * abhep"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(idp)@828",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    828,
+    828
+   ],
+   "expression": [
+    "ydot(idp) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(idp)@830",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    830,
+    839
+   ],
+   "expression": [
+    "ydot(idp) = (ch98   * abhp  * abDI - ch99   * abdp  * abHI - ch100  * abdp  * abh2 + ch101  * abhd  * abhp - ch13   * abdp  * abe + ch11   * abDI  * abe + ch32   * abhep * abDI - ch33   * abheI * abdp) * yn + cr1a   * abDI + ph38   * abDI"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihd)@849",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    849,
+    849
+   ],
+   "expression": [
+    "ydot(ihd) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ihd)@851",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    851,
+    859
+   ],
+   "expression": [
+    "ydot(ihd) = (ch108  * abHI +  ch109  * abh2 +  ch110  * abheI) * abHI * abDI * ynsq + (ch100  * abh2  * abdp - ch101  * abhd  * abhp + ch102  * abh2  * abDI - ch103  * abhd  * abHI) * yn - ph35   * abhd - ph41   * abhd"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:k0@864",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    864,
+    864
+   ],
+   "expression": [
+    "k0 = 5d-16"
+   ],
+   "comment": "CO -- from Nelson & Langer 1997, with destruction by He+ charge transfer added"
+  },
+  {
+   "rate_id": "rate_eq_ulli:k1@865",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    865,
+    865
+   ],
+   "expression": [
+    "k1 = 5d-10"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:beta@868",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    868,
+    868
+   ],
+   "expression": [
+    "beta = 0.0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:beta@870",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    870,
+    870
+   ],
+   "expression": [
+    "beta = 1.0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:beta@872",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    872,
+    873
+   ],
+   "expression": [
+    "beta = k1 * abo / (k1 * abo + gamma_chx / yn)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(ico)@876",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    876,
+    878
+   ],
+   "expression": [
+    "ydot(ico) = k0 * abcp * abh2 * beta * yn - ch92 * abhep * abco * yn - gamma_co * abco"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(1)@886",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    886,
+    889
+   ],
+   "expression": [
+    "rates_chem(1) = 4.48d0 * eV * (cdh2_h * abHI * abh2 + cdh2_h2* abh2 * abh2 + cdh2_he* abheI * abh2 + ch25   * abe  * abh2 ) * ynsq"
+   ],
+   "comment": "Chemical heating & cooling\nH2 collisional dissociation cooling:"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(2)@893",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    893,
+    893
+   ],
+   "expression": [
+    "rates_chem(2) = 1.83d0 * eV * ch24 * abh2 * abhp * ynsq"
+   ],
+   "comment": "H2 destruction by charge transfer with HII -- endothermic by 1.83eV"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(3)@898",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    898,
+    898
+   ],
+   "expression": [
+    "rates_chem(3) = - 4d-1 * eV * abH2 * yn * ykdis"
+   ],
+   "comment": "Heating due to H2 photodissociation (0.4 eV per dissociation) and\nH2 photoionization"
+  },
+  {
+   "rate_id": "rate_eq_ulli:cdex@902",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    902,
+    903
+   ],
+   "expression": [
+    "cdex = (1.4 * dexp(-1.81d4 / (temp + 1200)) * abH2 +  1.0 * dexp(-1d3 / temp) * abHI) * 1d-12 * dsqrt(temp) * yn"
+   ],
+   "comment": "Heating by UV pumping of H2 -- effective for n > n_crit"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rdex@904",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    904,
+    904
+   ],
+   "expression": [
+    "rdex = 2d-7"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:fpheat@905",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    905,
+    905
+   ],
+   "expression": [
+    "fpheat = cdex / (cdex + rdex)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(4)@907",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    907,
+    908
+   ],
+   "expression": [
+    "rates_chem(4) = - 2d0 * eV * abH2 * yn * ykdis * 6.94d0 * fpheat"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(5)@917",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    917,
+    918
+   ],
+   "expression": [
+    "rates_chem(5) = - 3.73d0 * eV * ch22 * abHI * abhm * ynsq * (1d0 - h2var0)"
+   ],
+   "comment": "H2 formation heating\nH-   -- 3.73eV\nH2+  -- 1.83eV\n3-body -- 4.48eV\nDust -- ~0.54 eV"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(6)@920",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    920,
+    921
+   ],
+   "expression": [
+    "rates_chem(6) = - 1.83d0 * eV * cst(1) * abHI * abh2p * ynsq * (1d0 - h2var0)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(7)@923",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    923,
+    925
+   ],
+   "expression": [
+    "rates_chem(7) = - 4.48d0 * eV * (ch108 * abHI**3 + ch109 * abHI**2 * abh2 + ch110 * abHI**2 * abheI) * ynsq * yn"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(8)@929",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    929,
+    930
+   ],
+   "expression": [
+    "rates_chem(8) = 13.6d0 * eV * (ch11 * abe + ch144 * abHI + ch158 * abheI) * abHI * ynsq"
+   ],
+   "comment": "HI collisional ionization cooling -- 13.6eV per ionization:"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(9)@934",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    934,
+    934
+   ],
+   "expression": [
+    "rates_chem(9) = 24.6d0 * eV * ch14 * abe * abheI * ynsq"
+   ],
+   "comment": "HeI collisional ionization cooling -- 24.6 eV per ionization"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(10)@938",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    938,
+    938
+   ],
+   "expression": [
+    "rates_chem(10) = 54.4d0 * eV * ch15 * abe * abhep * ynsq"
+   ],
+   "comment": "HeII collisional ionization cooling -- 54.4 eV per ionization"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(11)@942",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    942,
+    943
+   ],
+   "expression": [
+    "rates_chem(11) = kboltz * temp * abhp * (ch13 * abe + h_gr) * ynsq"
+   ],
+   "comment": "HII recombination cooling"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(12)@947",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    947,
+    947
+   ],
+   "expression": [
+    "rates_chem(12) = 40.8d0 * eV * ch10 * abhep * abe * ynsq"
+   ],
+   "comment": "HeII recombination cooling.\nDielectronic:"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(13)@949",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    949,
+    950
+   ],
+   "expression": [
+    "rates_chem(13) = kboltz * temp * (ch17 - ch10) * abhep * abe * ynsq"
+   ],
+   "comment": "Radiative:"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(14)@954",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    954,
+    955
+   ],
+   "expression": [
+    "rates_chem(14) = kboltz * temp * abhepp * ch20 * abe * ynsq"
+   ],
+   "comment": "HeIII recombination cooling"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(15)@959",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    959,
+    959
+   ],
+   "expression": [
+    "rates_chem(15) = - ph8 * abhm * yn"
+   ],
+   "comment": "H- photodissociation heating"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(16)@963",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    963,
+    963
+   ],
+   "expression": [
+    "rates_chem(16) = - ph9 * abh2p * yn"
+   ],
+   "comment": "H2+ photodissociation heating"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(17)@968",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    968,
+    968
+   ],
+   "expression": [
+    "rates_chem(17) = 0d0"
+   ],
+   "comment": "Photoionization heating from HI, HeI, HeII (from M1 RT or external rates)\nph42/43/44 = Gamma_X * epsilon_X [erg/s per atom], negative = heating"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(18)@969",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    969,
+    969
+   ],
+   "expression": [
+    "rates_chem(18) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(19)@970",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    970,
+    970
+   ],
+   "expression": [
+    "rates_chem(19) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(20)@971",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    971,
+    972
+   ],
+   "expression": [
+    "rates_chem(20) = - (ph42 * abHI + ph43 * abheI +  ph44 * abhep) * yn"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(21)@976",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    976,
+    977
+   ],
+   "expression": [
+    "rates_chem(21) = (0.75d0 * eV + kboltz * temp) * ch21 * abHI * abe * ynsq"
+   ],
+   "comment": "H- formation cooling (NB kinetic contribution is approximate)"
+  },
+  {
+   "rate_id": "rate_eq_ulli:rates_chem(22)@982",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    982,
+    982
+   ],
+   "expression": [
+    "rates_chem(22) = - 4.48d0 * eV * h2_form_kin * RH2"
+   ],
+   "comment": "Dust -- H2 formation heating (4.48eV)\nh2_form_kin is set in the COOLR common block (cool.h)"
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(itmp)@1022",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    1022,
+    1022
+   ],
+   "expression": [
+    "ydot(itmp) = -(ylam - ylam_cmb + ylam_chem)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "rate_eq_ulli:ydot(J)@1040",
+   "kind": "RHS_INLINE",
+   "networks": [
+    17
+   ],
+   "fortran_file": "rate_eq_ulli.F",
+   "lines": [
+    1040,
+    1040
+   ],
+   "expression": [
+    "ydot(J) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(1)@606",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    606,
+    606
+   ],
+   "expression": [
+    "rates(1) = 0d0"
+   ],
+   "comment": "Compute heating/cooling rates\n(R1) -- gas-grain cooling-heating"
+  },
+  {
+   "rate_id": "cool_func:rates(1)@616",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    616,
+    616
+   ],
+   "expression": [
+    "rates(1) = 4.68d-31 * tdust**6 * yn * dust_to_gas_ratio"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(1)@620",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    620,
+    620
+   ],
+   "expression": [
+    "rates(1) = cl14 * (temp - tdust) * yn**2 * dust_to_gas_ratio"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(2)@628",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    628,
+    628
+   ],
+   "expression": [
+    "rates(2) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:h2var0@630",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    630,
+    631
+   ],
+   "expression": [
+    "h2var0   = ynh * cl4 + ynh2 * cl5 + ynhe * cl64 + ynhp * cl65 + yne * cl66"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(2)@633",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    633,
+    633
+   ],
+   "expression": [
+    "rates(2) = h2var0 * ynh2"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(2)@635",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    635,
+    635
+   ],
+   "expression": [
+    "rates(2) = ynh2 * cl1 / (1d0 + cl1 / h2var0)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(2)@663",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    663,
+    663
+   ],
+   "expression": [
+    "rates(2) = rates(2) * H2_opacity_correction"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(3)@677",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    677,
+    677
+   ],
+   "expression": [
+    "rates(3)  = cl6 * yn**2"
+   ],
+   "comment": "(R3)  -- atomic cooling, table-based; depending on the value of iflag_atom,\nmay include some or all of R25 - R28 (in which case the coefficients\nfor these rates will have been set to zero, to avoid double counting)\n(R25) -- HI electronic excitation cooling [aka Lyman-alpha cooling]\n(R26) -- HeI electronic excitation cooling\n(N.B. Note the dependence of the HeII metastable rate (cl60) on\nthe HeII n"
+  },
+  {
+   "rate_id": "cool_func:rates(25)@678",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    678,
+    678
+   ],
+   "expression": [
+    "rates(25) = cl52 * ynh  * yne"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(26)@679",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    679,
+    679
+   ],
+   "expression": [
+    "rates(26) = cl59 * ynhe * yne + cl60 * abheII * yn * yne**2"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(27)@680",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    680,
+    680
+   ],
+   "expression": [
+    "rates(27) = cl61 * abheII * yn * yne"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(28)@681",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    681,
+    682
+   ],
+   "expression": [
+    "rates(28) = cl62 * (abhp + abheII) * yn * yne + cl63 * abheIII * yn * yne"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(28)@685",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    685,
+    685
+   ],
+   "expression": [
+    "rates(28) = 0."
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(4)@693",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    693,
+    693
+   ],
+   "expression": [
+    "rates(4)  = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(23)@694",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    694,
+    694
+   ],
+   "expression": [
+    "rates(23) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(4)@705",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    705,
+    705
+   ],
+   "expression": [
+    "rates(4) = f_ortho_h2o * abh2o * neff * yn / h2o_rot_inv"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(4)@713",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    713,
+    714
+   ],
+   "expression": [
+    "rates(4) = rates(4) + f_para_h2o * abh2o * neff * yn / h2o_rot_inv"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(23)@724",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    724,
+    725
+   ],
+   "expression": [
+    "rates(23) = 2d-3 * f_ortho_h2o * abh2o * neff * yn / h2o_rot_inv"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(23)@733",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    733,
+    734
+   ],
+   "expression": [
+    "rates(23) = rates(23) + 2d-3 * f_para_h2o * abh2o * neff * yn / h2o_rot_inv"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(5)@743",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    743,
+    743
+   ],
+   "expression": [
+    "rates(5) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(6)@744",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    744,
+    744
+   ],
+   "expression": [
+    "rates(6) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(5)@748",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    748,
+    748
+   ],
+   "expression": [
+    "rates(5) = abh2o * yn * neff * (1d0 / h2o_vib_inv)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(6)@752",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    752,
+    752
+   ],
+   "expression": [
+    "rates(6) = 2d-3 * abh2o * yn * neff * (1d0 / h2o_vib_inv)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(7)@761",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    761,
+    761
+   ],
+   "expression": [
+    "rates(7)  = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(21)@762",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    762,
+    762
+   ],
+   "expression": [
+    "rates(21) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(22)@763",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    763,
+    763
+   ],
+   "expression": [
+    "rates(22) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(7)@772",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    772,
+    772
+   ],
+   "expression": [
+    "rates(7) = abco * neff * yn / co_rot_inv"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(21)@780",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    780,
+    780
+   ],
+   "expression": [
+    "rates(21) = 1d-2 * abco * neff * yn / co_rot_inv"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(22)@787",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    787,
+    787
+   ],
+   "expression": [
+    "rates(22) = 2d-3 * abco * neff * yn / co_rot_inv"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(7)@792",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    792,
+    792
+   ],
+   "expression": [
+    "rates(7)  = rates(7)  * low_T_adjust"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(21)@793",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    793,
+    793
+   ],
+   "expression": [
+    "rates(21) = rates(21) * low_T_adjust"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(22)@794",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    794,
+    794
+   ],
+   "expression": [
+    "rates(22) = rates(22) * low_T_adjust"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(8)@810",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    810,
+    810
+   ],
+   "expression": [
+    "rates(8)  = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(9)@811",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    811,
+    811
+   ],
+   "expression": [
+    "rates(9)  = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(24)@812",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    812,
+    812
+   ],
+   "expression": [
+    "rates(24) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(8)@816",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    816,
+    816
+   ],
+   "expression": [
+    "rates(8) = abco * yn * neff * (1d0 / co_vib_inv)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(9)@819",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    819,
+    819
+   ],
+   "expression": [
+    "rates(9) = 1d-2 * abco * yn * neff * (1d0 / co_vib_inv)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(24)@822",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    822,
+    822
+   ],
+   "expression": [
+    "rates(24) = 2d-3 * abco * yn * neff * (1d0 / co_vib_inv)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(10)@832",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    832,
+    832
+   ],
+   "expression": [
+    "rates(10) = cl15 * aboh * neff"
+   ],
+   "comment": "(R10) -- OH cooling"
+  },
+  {
+   "rate_id": "cool_func:rates(11)@839",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    839,
+    839
+   ],
+   "expression": [
+    "rates(11) =  -3.2d-11 * (ynh2 + ynh) * cosmic_ray_ion_rate"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(11)@851",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    851,
+    855
+   ],
+   "expression": [
+    "rates(11) = rates(11) - (0.87d0 * 6.37d-16 / 6d0 + 0.53d0 * 3.09d-16 * (abe + 0.57d0 * abHI) / (1d0 + 4d0 * abhe)) * cr_energy_density * yn"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(11)@858",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    858,
+    858
+   ],
+   "expression": [
+    "rates(11) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(12)@870",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    870,
+    870
+   ],
+   "expression": [
+    "rates(12) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(12)@872",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    872,
+    872
+   ],
+   "expression": [
+    "rates(12) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(12)@881",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    881,
+    881
+   ],
+   "expression": [
+    "rates(12) = -1.3d-24 * eps * G_dust * yn * dust_to_gas_ratio"
+   ],
+   "comment": "eps = 8.6d-2"
+  },
+  {
+   "rate_id": "cool_func:rates(13)@893",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    893,
+    893
+   ],
+   "expression": [
+    "rates(13) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(13)@896",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    896,
+    896
+   ],
+   "expression": [
+    "rates(13) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(13)@955",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    955,
+    955
+   ],
+   "expression": [
+    "rates(13) = (oxlam1 - oxlam2) * abo * yn"
+   ],
+   "comment": "Net cooling rate is emission - absorption; note that if the latter\nterm is larger, we have heating"
+  },
+  {
+   "rate_id": "cool_func:rates(14)@967",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    967,
+    967
+   ],
+   "expression": [
+    "rates(14) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(14)@970",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    970,
+    970
+   ],
+   "expression": [
+    "rates(14) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(14)@1017",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1017,
+    1017
+   ],
+   "expression": [
+    "rates(14) = (cIlam1 - cIlam2) * abcI * yn"
+   ],
+   "comment": "Net cooling rate is emission - absorption; note that if the latter\nterm is larger, we have heating"
+  },
+  {
+   "rate_id": "cool_func:rates(15)@1030",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1030,
+    1030
+   ],
+   "expression": [
+    "rates(15) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(15)@1033",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1033,
+    1033
+   ],
+   "expression": [
+    "rates(15) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(15)@1080",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1080,
+    1080
+   ],
+   "expression": [
+    "rates(15) = (siIlam1 - siIlam2) * absiI * yn"
+   ],
+   "comment": "Net cooling rate is emission - absorption; note that if the latter\nterm is larger, we have heating"
+  },
+  {
+   "rate_id": "cool_func:rates(16)@1089",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1089,
+    1089
+   ],
+   "expression": [
+    "rates(16) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(16)@1131",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1131,
+    1131
+   ],
+   "expression": [
+    "rates(16) = (cIIvar2 - cIIvar3) * abcII * yn"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(17)@1140",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1140,
+    1140
+   ],
+   "expression": [
+    "rates(17) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(17)@1154",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1154,
+    1154
+   ],
+   "expression": [
+    "rates(17) = (siIIvar2 - siIIvar3) * siIIe10 * absiII * yn"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(18)@1160",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1160,
+    1160
+   ],
+   "expression": [
+    "rates(18) = compvar1 * (temp - CMB_temp) * yne"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(19)@1177",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1177,
+    1178
+   ],
+   "expression": [
+    "rates(19) = 1d1**(cl53 + lnh * (cl54 + lnh * (cl55 + lnh * (cl56 + lnh * cl57)))) * ynhd"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(19)@1179",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1179,
+    1179
+   ],
+   "expression": [
+    "rates(19) = rates(19) * r19scale"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(19)@1181",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1181,
+    1181
+   ],
+   "expression": [
+    "rates(19) = 0d0"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(20)@1190",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1190,
+    1190
+   ],
+   "expression": [
+    "rates(20) = cl58 * yn * (2d0 * ynh2)"
+   ],
+   "comment": "CMB effects: see note above for molecular coolants\n(R20) -- H2 CIE cooling: assumes molecular fraction ~ 1, although this\nshould always be true at the densities at which CIE cooling is\nsignificant"
+  },
+  {
+   "rate_id": "cool_func:rates(20)@1196",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1196,
+    1196
+   ],
+   "expression": [
+    "rates(20) = rates(20) * min((1d0 - dexp(-tau_CIE)) / tau_CIE, 1d0)"
+   ],
+   "comment": ""
+  },
+  {
+   "rate_id": "cool_func:rates(3)@1223",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1223,
+    1223
+   ],
+   "expression": [
+    "rates(3) = 0."
+   ],
+   "comment": "Benchmarking suggests that writing this out explicitly is more efficient\nthan using a loop (although this is probably only true if the compiler\noptimization is poor)."
+  },
+  {
+   "rate_id": "cool_func:rates(3)@1248",
+   "kind": "RHS_INLINE",
+   "networks": [
+    5,
+    17
+   ],
+   "fortran_file": "cool_func.F",
+   "lines": [
+    1248,
+    1248
+   ],
+   "expression": [
+    "rates(3) = wss_rate_total *yn**2"
+   ],
+   "comment": "print*, 'wss_rate_total = ', wss_rate_total"
+  }
+ ]
+}

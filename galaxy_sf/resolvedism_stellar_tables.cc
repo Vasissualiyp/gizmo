@@ -421,6 +421,9 @@ void resolvedism_load_stellar_tables(void)
     StellarTbl.dlog_age    = 0;  /* non-uniform grid — binary search used, dlog_age unused */
 
     StellarTbl.loaded = 1;
+#ifdef GALSF_RESOLVEDISM_TYPE_IA
+    stellar_ia_fdead_init();
+#endif
 
     /* Post-load fixup: force M_current at ZAMS (first age bin) to equal M_init.
      * Some tracks at the low-mass end don't exactly match the grid M_init. */
@@ -718,7 +721,7 @@ void resolvedism_load_stellar_tables(void)
                     double logM_t = StellarTbl.log_M[im], logZ_t = StellarTbl.log_Z[iz];
                     double metal_yield = 0;
                     for(int kk = ELEM_C; kk < STBL_NELEM; kk++) {
-                        double ny = StellarTbl.net_yields[IDX3(iz, im, kk)];
+                        double ny = StellarTbl.net_yields[(IDX2(iz, im)) * STBL_NELEM + kk]; /* element stride, NOT IDX3 (age stride): OOB read, segfaulted adiab builds (ASAN 2026-07-13) */
                         /* Apply same clip as injection code */
                         double X_birth_k = (kk < ELEM_C) ? 0.0 : (StellarTbl.Z[iz] / 0.014) * 0.0134; /* approx */
                         double M_elem_ej = ny + X_birth_k * Mej;
@@ -1227,6 +1230,65 @@ double stellar_type_ia_yield(int elem)
     if(elem < 0 || elem >= STBL_NELEM) return 0;
     return StellarTbl.type_ia_yields[elem];
 }
+
+/* Sum of tabulated Ia yields [Msun]; yields are rescaled by M_WD / this so they sum to the ejecta mass. */
+double stellar_type_ia_yield_total(void)
+{
+    double s = 0; int k;
+    for(k = 0; k < STBL_NELEM; k++) s += StellarTbl.type_ia_yields[k];
+    return s;
+}
+
+#ifdef GALSF_RESOLVEDISM_TYPE_IA
+/* f_dead(t,Z): fraction of formed stellar mass (sampler Kroupa, IMFSampleMinMass..350 Msun)
+ * in WD-remnant stars that have died by age t since birth. Normalises the per-WD Ia hazard. */
+#define IA_FDEAD_NT 96
+static double IaFdead[STBL_NZ][IA_FDEAD_NT];
+static const double IaFdead_logt_min = 6.5, IaFdead_logt_max = 10.3; /* log10 yr */
+static int IaFdead_ready = 0;
+
+static double ia_kroupa_massweight(double M) { return (M < 0.5) ? 2.0 * pow(M, -0.3) : pow(M, -1.3); }
+
+void stellar_ia_fdead_init(void)
+{
+    const int NM = 4000; int iz, it, im;
+    double Mmin = DMAX(All.IMFSampleMinMass, 0.08), Mmax = 350.;
+    double lmin = log10(Mmin), dl = (log10(Mmax) - lmin) / NM;
+    for(iz = 0; iz < STBL_NZ; iz++) {
+        double logZ = StellarTbl.log_Z[iz], wtot = 0;
+        double *tdie = (double *)malloc(NM * sizeof(double)), *w = (double *)malloc(NM * sizeof(double));
+        for(im = 0; im < NM; im++) {
+            double lM = lmin + (im + 0.5) * dl, M = pow(10., lM);
+            w[im] = ia_kroupa_massweight(M) * M * dl * log(10.); /* (M dN/dM) dM */
+            wtot += w[im];
+            tdie[im] = (stellar_remnant_type(lM, logZ) == REM_WD) ? stellar_t_PMS(lM, logZ) + stellar_lifetime(lM, logZ) : -1;
+        }
+        for(it = 0; it < IA_FDEAD_NT; it++) {
+            double t = pow(10., IaFdead_logt_min + it * (IaFdead_logt_max - IaFdead_logt_min) / (IA_FDEAD_NT - 1)), wd = 0;
+            for(im = 0; im < NM; im++) if(tdie[im] > 0 && tdie[im] <= t) wd += w[im];
+            IaFdead[iz][it] = wd / wtot;
+        }
+        free(w); free(tdie);
+    }
+    IaFdead_ready = 1;
+    if(ThisTask == 0) {
+        int izs = STBL_NZ / 2; printf("STELLAR TABLES: Ia f_dead(t) at logZ=%.2f:", StellarTbl.log_Z[izs]);
+        for(it = 0; it < IA_FDEAD_NT; it += 19) printf(" [logt=%.2f %.4f]", IaFdead_logt_min + it * (IaFdead_logt_max - IaFdead_logt_min) / (IA_FDEAD_NT - 1), IaFdead[izs][it]);
+        printf("\n"); fflush(stdout);
+    }
+}
+
+double stellar_ia_fdead(double t_yr, double logZ)
+{
+    if(!IaFdead_ready || t_yr <= 0) return 0;
+    int iz; double fz; stbl_idx_Z(logZ, &iz, &fz);
+    double x = (log10(t_yr) - IaFdead_logt_min) / (IaFdead_logt_max - IaFdead_logt_min) * (IA_FDEAD_NT - 1);
+    x = DMAX(0, DMIN(x, IA_FDEAD_NT - 1));
+    int it = (int)x; if(it > IA_FDEAD_NT - 2) it = IA_FDEAD_NT - 2; double ft = x - it;
+    int iz1 = (iz < STBL_NZ - 1) ? iz + 1 : iz;
+    return (1 - fz) * ((1 - ft) * IaFdead[iz][it] + ft * IaFdead[iz][it + 1]) + fz * ((1 - ft) * IaFdead[iz1][it] + ft * IaFdead[iz1][it + 1]);
+}
+#endif
 
 /* Absolute element ejecta tables [Msun] — X_init baked in by table builder.
  * These are the runtime quantities for SN/AGB metal injection. */

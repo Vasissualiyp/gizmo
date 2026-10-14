@@ -28,12 +28,15 @@ struct kernel_resolvedismFB_momentum {double dp[3], r, wk, dwk, hinv, hinv3, hin
 #define OUTPUTFUNCTION_NAME out2particle_resolvedismFB_momentum
 #define CONDITIONFUNCTION_FOR_EVALUATION if(resolvedismFB_momentum_active_check(i,loop_iteration))
 #include "../system/code_block_xchange_initialize.h"
+#include "../declarations/resolvedism_dgr.h"
 
 struct INPUT_STRUCT_NAME
 {
     MyDouble Pos[3], KernelRadius, Mej;
     /* Bit-exact normalizer measured by the weighting pre-pass; see resolvedism_fb_thermal.cc */
     MyDouble FB_Area_weighted_sum_in;
+    MyDouble FB_VecSum_in[3];
+    MyDouble StarVel[3];
     MyDouble WindMomentum;
     MyDouble MetalMass;
     MyIDType StarID;
@@ -52,36 +55,21 @@ struct INPUT_STRUCT_NAME
 }
 *DATAIN_NAME, *DATAGET_NAME;
 
-void particle2in_resolvedismFB_momentum(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
-{
-    int k; for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k];}
-    in->KernelRadius = P[i].KernelRadius;
-    in->Mej = 0; in->MetalMass = 0; in->WindMomentum = 0;
-    /* Load measured AWS from prior weighting pass (or 0 if this IS the weighting pass). */
-    in->FB_Area_weighted_sum_in = (loop_iteration >= 0) ? (MyDouble)P[i].FB_Area_weighted_sum : 0;
-#ifdef GALSF_RESOLVEDISM_FB_HEALPIX
-    {int hp_; for(hp_=0;hp_<12;hp_++) {in->HpxCount[hp_] = P[i].FB_HpxCount[hp_];}}
-#endif
-    in->StarID = P[i].ID;
-    in->StarMass = P[i].MstarSampleIMF[0];
-    in->fb_channel = DMAX(P[i].SNe_ThisTimeStep - 1, 0);
-#ifdef GALSF_RESOLVEDISM_METALS_INDIVIDUAL
-    for(k=0; k<NUM_RESOLVEDISM_ELEMENTS; k++) in->ElemYields[k] = 0;
-#endif
-#ifdef GALSF_RESOLVEDISM_DUST
-    for(k=0; k<NUM_RESOLVEDISM_DUST; k++) in->DustYields[k] = 0;
-#endif
-    if(P[i].Mass <= 0) return;
-#ifdef DO_DENSITY_AROUND_NONGAS_PARTICLES
-    if(P[i].DensityAroundParticle <= 0) return;
-#endif
-
-    double Mstar, logM, logZ;
-    if(!get_star_info(i, &Mstar, &logM, &logZ)) return;
-
 #ifdef GALSF_RESOLVEDISM_RADPRESSURE
-    /* ---- Radiation pressure (loop_iteration == 1) ---- */
-    if(loop_iteration == 1) {
+/* Star-side radiation-pressure momentum for star i, CODE units (0 if ineligible).
+ * Single source of truth: called by particle2in (walk payload) AND once per local
+ * star by the channel-3 ledger in resolvedism_fb.cc. LEDGER FIX 2026-07-28:
+ * accumulating inside particle2in over-reported by (1+N_export_entries)x on
+ * multi-rank runs (same export-repack class as the fb_thermal Mej fix). */
+double resolvedism_radp_starside_dp_code(int i)
+{
+    if(P[i].Mass <= 0) return 0;
+#ifdef DO_DENSITY_AROUND_NONGAS_PARTICLES
+    if(P[i].DensityAroundParticle <= 0) return 0;
+#endif
+    double Mstar, logM, logZ;
+    if(!get_star_info(i, &Mstar, &logM, &logZ)) return 0;
+    {
 #ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
         /* throttled gate-trace: which return fires? (FBDBG_RP, parsed by test suite) */
         static int rp_dbg_count = 0; int rp_dbg = (P[i].ID <= 8 && rp_dbg_count < 40); if(rp_dbg) rp_dbg_count++;
@@ -90,29 +78,34 @@ void particle2in_resolvedismFB_momentum(struct INPUT_STRUCT_NAME *in, int i, int
         #define RP_TRACE(reason, val) do {} while(0)
 #endif
         double star_age_yr = evaluate_stellar_age_Gyr(i) * 1.0e9;
-        if(star_age_yr <= 0) {RP_TRACE("age<=0", star_age_yr); return;}
+        if(star_age_yr <= 0) {RP_TRACE("age<=0", star_age_yr); return 0;}
         double lifetime_yr = get_star_lifetime(Mstar, logM, logZ);
-        if(star_age_yr >= lifetime_yr) {RP_TRACE("dead", star_age_yr); return;}
+        if(star_age_yr >= lifetime_yr) {RP_TRACE("dead", star_age_yr); return 0;}
         double table_age = get_star_table_age(star_age_yr, logM, logZ);
-        if(table_age <= 0) {RP_TRACE("pms", table_age); return;} /* PMS: no radiation pressure */
+        if(table_age <= 0) {RP_TRACE("pms", table_age); return 0;} /* PMS: no radiation pressure */
 
         double log_age = log10(DMAX(table_age, 100.0));
         double log_Lbol = stellar_log_L_bol(logM, logZ, log_age);
         double Lbol_cgs = pow(10.0, log_Lbol);
-        if(Lbol_cgs <= 0) {RP_TRACE("Lbol<=0", Lbol_cgs); return;}
+        if(Lbol_cgs <= 0) {RP_TRACE("Lbol<=0", Lbol_cgs); return 0;}
 
         double dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(i);
-        if(dt <= 0) {RP_TRACE("dt<=0", dt); return;}
+        if(dt <= 0) {RP_TRACE("dt<=0", dt); return 0;}
         double dt_cgs = dt * UNIT_TIME_IN_CGS;
 
 #ifdef GALSF_RESOLVEDISM_DUST
-        double DGR = P[i].DGR_around / 0.01;
+        double DGR = P[i].DGR_around / RESOLVEDISM_DGR_SOLAR_ABS; /* kernel-avg dust around the star, solar units */
 #else
+        /* D_REF UNIFICATION (2026-07-28): was flat All.DGRnormalized (=MW-like)
+         * regardless of Z -> at 0.1 Zsun the star-side f_abs was ~10x too dusty
+         * vs the chemistry/tree convention. Mirror chemcool: dust-to-metal
+         * efficiency x local Z / Zsun, capped at the certified 10x-solar domain. */
         double DGR = All.DGRnormalized;
-#ifdef DGR_SCALE_WITH_Z
-        DGR = All.DGRnormalized * All.InitialMetallicity;
+#ifdef METALS
+        DGR = All.DGRnormalized * P[i].Metallicity[0] / All.SolarAbundances[0];
 #endif
 #endif
+        if(DGR > 10.0) {DGR = 10.0;} if(DGR < 0) {DGR = 0;}
 
         double rho_phys = P[i].DensityAroundParticle * All.cf_a3inv;
         double h_phys = P[i].KernelRadius * All.cf_atime;
@@ -137,7 +130,7 @@ void particle2in_resolvedismFB_momentum(struct INPUT_STRUCT_NAME *in, int i, int
         double f_NUV = 1.0 - exp(-(1.3e-21 * DGR) * NH);
         double f_OPT = 1.0 - exp(-(0.5e-21 * DGR) * NH);
         double L_abs_cgs = f_FUV * L_FUV + f_NUV * L_NUV + f_OPT * L_OPT; /* absorbed lum, erg/s */
-        if(L_abs_cgs <= 0 || Lbol_cgs <= 0) {RP_TRACE("L_abs", L_abs_cgs); return;}
+        if(L_abs_cgs <= 0 || Lbol_cgs <= 0) {RP_TRACE("L_abs", L_abs_cgs); return 0;}
         if(L_abs_cgs > Lbol_cgs) L_abs_cgs = Lbol_cgs; /* budget guard */
 
 #ifdef GALSF_RESOLVEDISM_RADPRESSURE_TREERAD
@@ -159,8 +152,44 @@ void particle2in_resolvedismFB_momentum(struct INPUT_STRUCT_NAME *in, int i, int
          * the old tau_IR * L_BOL form boosted light that was never absorbed. */
         if(tau_IR > 0) dp_cgs += tau_IR * L_abs_cgs * dt_cgs / C_LIGHT_CGS;
 
-        in->WindMomentum = dp_cgs / (UNIT_MASS_IN_CGS * All.UnitVelocity_in_cm_per_s);
-        RadPressure_dp_thisStep += dp_cgs;
+        return dp_cgs / (UNIT_MASS_IN_CGS * All.UnitVelocity_in_cm_per_s);
+    }
+}
+#endif
+
+void particle2in_resolvedismFB_momentum(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
+{
+    int k; for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k];}
+    in->KernelRadius = P[i].KernelRadius;
+    in->Mej = 0; in->MetalMass = 0; in->WindMomentum = 0;
+    /* Load measured AWS from prior weighting pass (or 0 if this IS the weighting pass). */
+    in->FB_Area_weighted_sum_in = (loop_iteration >= 0) ? (MyDouble)P[i].FB_Area_weighted_sum : 0;
+    for(k=0;k<3;k++) {in->FB_VecSum_in[k] = (loop_iteration >= 0) ? P[i].FB_VecSum[k] : 0;}
+    for(k=0;k<3;k++) {in->StarVel[k] = P[i].Vel[k];}
+#ifdef GALSF_RESOLVEDISM_FB_HEALPIX
+    {int hp_; for(hp_=0;hp_<12;hp_++) {in->HpxCount[hp_] = P[i].FB_HpxCount[hp_];}}
+#endif
+    in->StarID = P[i].ID;
+    in->StarMass = P[i].MstarSampleIMF[0];
+    in->fb_channel = DMAX(P[i].SNe_ThisTimeStep - 1, 0);
+#ifdef GALSF_RESOLVEDISM_METALS_INDIVIDUAL
+    for(k=0; k<NUM_RESOLVEDISM_ELEMENTS; k++) in->ElemYields[k] = 0;
+#endif
+#ifdef GALSF_RESOLVEDISM_DUST
+    for(k=0; k<NUM_RESOLVEDISM_DUST; k++) in->DustYields[k] = 0;
+#endif
+    if(P[i].Mass <= 0) return;
+#ifdef DO_DENSITY_AROUND_NONGAS_PARTICLES
+    if(P[i].DensityAroundParticle <= 0) return;
+#endif
+
+    double Mstar, logM, logZ;
+    if(!get_star_info(i, &Mstar, &logM, &logZ)) return;
+
+#ifdef GALSF_RESOLVEDISM_RADPRESSURE
+    /* ---- Radiation pressure (loop_iteration == 1) ---- */
+    if(loop_iteration == 1) {
+        in->WindMomentum = resolvedism_radp_starside_dp_code(i);
         return;
     }
 #endif
@@ -332,6 +361,7 @@ struct OUTPUT_STRUCT_NAME
     MyFloat M_coupled;
     /* Weighting-pass accumulator: Σ_j (Mass_j × kernel.wk) over neighbors walked. */
     MyDouble FB_Area_weighted_sum_accum;
+    MyDouble FB_VecSum_accum[3];
 #ifdef GALSF_RESOLVEDISM_FB_HEALPIX
     MyFloat HpxCount[12];
 #endif
@@ -343,6 +373,7 @@ void out2particle_resolvedismFB_momentum(struct OUTPUT_STRUCT_NAME *out, int i, 
     if(loop_iteration < 0) {
         /* Weighting pass: accumulate measured kernel sum onto the star. */
         P[i].FB_Area_weighted_sum += out->FB_Area_weighted_sum_accum;
+        {int k_; for(k_=0;k_<3;k_++) {ASSIGN_ADD(P[i].FB_VecSum[k_], out->FB_VecSum_accum[k_], mode);}}
 #ifdef GALSF_RESOLVEDISM_FB_HEALPIX
         {int hp_; for(hp_=0;hp_<12;hp_++) {P[i].FB_HpxCount[hp_] += out->HpxCount[hp_];}}
 #endif
@@ -353,7 +384,7 @@ void out2particle_resolvedismFB_momentum(struct OUTPUT_STRUCT_NAME *out, int i, 
     if(P[i].Mass > 0) {
         int k;
         for(k = 0; k < 3; k++) {
-            P[i].Vel[k] -= out->MomentumInjected[k] * All.cf_atime / P[i].Mass;
+            P[i].FB_RecoilAccum[k] += out->MomentumInjected[k]; /* applied once after the walk by resolvedism_fb_apply_recoil */
         }
         P[i].Mass -= out->M_coupled;
         if((P[i].Mass < 0) || (isnan(P[i].Mass))) P[i].Mass = 0;
@@ -451,6 +482,7 @@ int resolvedismFB_momentum_evaluate(int target, int mode, int *exportflag, int *
                  * as the bit-exact normalizer → Σ wk_j = 1 by construction. */
                 if(loop_iteration < 0) {
                     out.FB_Area_weighted_sum_accum += Mass_j * kernel.wk;
+                    for(k=0;k<3;k++) {out.FB_VecSum_accum[k] += Mass_j * kernel.wk * (-kernel.dp[k] / kernel.r);}
 #ifdef GALSF_RESOLVEDISM_FB_HEALPIX
                 {double v_hp[3]; long ip_hp; v_hp[0]=-kernel.dp[0]; v_hp[1]=-kernel.dp[1]; v_hp[2]=-kernel.dp[2];
                  vec2pix_ring(1, v_hp, &ip_hp); out.HpxCount[(int)ip_hp] += 1;}
@@ -581,6 +613,21 @@ int resolvedismFB_momentum_evaluate(int target, int mode, int *exportflag, int *
 #endif
                     #pragma omp atomic
                     P[j].Mass += dM;
+                    /* ENERGY BUGFIX (2026-07-18, ledger-pinpointed): the deposited wind/AGB
+                     * parcel is thermally cold — its energy budget is booked ENTIRELY by the
+                     * kick + inelastic residual below. Adding dM at the receiver's CURRENT
+                     * specific energy silently manufactured dM*u_j of heat per event; with
+                     * receivers being the wind's own self-heated cavity (u -> ~0.5 v_w^2)
+                     * this compounded to +26-34% of L_w*t at 0.1 Msun cells (adiabatic
+                     * ledger: 100% of the creation localized to this deposit bracket).
+                     * Dilute u so total thermal energy is conserved by the mass transfer. */
+                    {
+                        double dil = Mass_j / (Mass_j + dM);
+                        #pragma omp atomic
+                        CellP[j].InternalEnergy *= dil;
+                        #pragma omp atomic
+                        CellP[j].InternalEnergyPred *= dil;
+                    }
                     /* Accumulate actual deposition for measured-coupling reduction
                      * on the dying star (FIRE pattern); see out2particle. */
                     out.M_coupled += dM;
@@ -629,9 +676,18 @@ int resolvedismFB_momentum_evaluate(int target, int mode, int *exportflag, int *
                     double dp_share = wk * local.WindMomentum;
                     double dM_wind = (local.Mej > 0) ? wk * local.Mej : 0;
                     double dv_mag2 = 0;
+                    double v_prekick[3]; /* pre-kick velocity: residual must use it (2026-07-18 fix 3) */
+                    for(k = 0; k < 3; k++) {v_prekick[k] = P[j].Vel[k];}
+                    double dir_[3]; /* r̂_j minus the weighted mean direction: Σ_j wk_j dir_j = 0, no net momentum from an isotropic source */
+                    for(k = 0; k < 3; k++) {dir_[k] = -kernel.dp[k] / kernel.r;}
+#ifndef GALSF_RESOLVEDISM_FB_HEALPIX
+                    for(k = 0; k < 3; k++) {dir_[k] -= local.FB_VecSum_in[k] / (MIN_REAL_NUMBER + fabs(local.FB_Area_weighted_sum_in));}
+#endif
                     for(k = 0; k < 3; k++) {
-                        double dp_k = dp_share * (-kernel.dp[k] / kernel.r);
-                        double dv_k = dp_k * All.cf_atime / (Mass_j + dM_wind);
+                        double dp_k = dp_share * dir_[k];
+                        /* momentum-CONSERVING kick (2026-07-18 fix 2): the added mass must not
+                         * arrive carrying dM*v_j of free momentum; new v = (M v + dp)/(M+dM). */
+                        double dv_k = (dp_k * All.cf_atime + dM_wind * (local.StarVel[k] - v_prekick[k])) / (Mass_j + dM_wind); /* ejecta arrives with the star's velocity */
                         #pragma omp atomic
                         P[j].Vel[k] += dv_k;
                         #pragma omp atomic
@@ -655,8 +711,8 @@ int resolvedismFB_momentum_evaluate(int target, int mode, int *exportflag, int *
                         double v_w  = local.WindMomentum / local.Mej;  /* wind speed, code units */
                         double dvrel2 = 0; int kk_w;
                         for(kk_w = 0; kk_w < 3; kk_w++) {
-                            double vw_k = v_w * (-kernel.dp[kk_w] / kernel.r);  /* radial wind vector */
-                            double dvr = vw_k - P[j].Vel[kk_w]/All.cf_atime;
+                            double vw_k = v_w * dir_[kk_w];  /* wind vector along the deposited momentum */
+                            double dvr = vw_k + (local.StarVel[kk_w] - v_prekick[kk_w])/All.cf_atime;   /* PRE-kick velocity (2026-07-18 fix 3): post-kick v under-deposits the residual by x+(1-x)^3 at finite dM/M */
                             dvrel2 += dvr*dvr;
                         }
                         double dE_th = 0.5 * (Mass_j*dM_w/(Mass_j+dM_w)) * dvrel2; /* inelastic residual */
@@ -765,6 +821,52 @@ void resolvedism_radpressure_treerad(void)
     const double area_conv = 1.0 / (UNIT_LENGTH_IN_CGS * UNIT_LENGTH_IN_CGS); /* cm^2 -> code_len^2 */
     const double p_conv = 1.0 / (UNIT_MASS_IN_CGS * All.UnitVelocity_in_cm_per_s); /* cgs p -> code p */
     int i;
+    /* ---- Photon-conservation cap for the TREE_RAD deposit (2026-07-28) ----
+     * Each target's pixel rays are independent, so Sum_cells(implied absorbed L)
+     * has no constraint to stay <= Sum_stars L (the TREE_RAY sweep has this cap;
+     * the TREE_RAD path did not -- radp_set measured 16x over-deposit at tau=12).
+     * Pre-pass: implied absorbed luminosity with the SAME per-pixel dust
+     * attenuation as the deposit below; scale all deposits by L_emit/A_abs. */
+    double fcons = 1.0;
+    {
+        double L_emit = 0, A_abs = 0;
+        for(i = 0; i < NumPart; i++) {
+            if(P[i].Type == 4 && P[i].Mass > 0) {
+                L_emit += P[i].UV_luminosity + P[i].LW_luminosity;
+                /* BAND-COMPLETE CAP (2026-07-29): deposit couples NUV/OPT too
+                 * (auto-enabled by RADPRESSURE in precompiler_logic.h) -- the
+                 * UV-only pre-pass under-counted both sums by exactly 1.3154x. */
+#ifdef GALSF_RESOLVEDISM_NUV_VARIABLE
+                L_emit += P[i].NUV_luminosity;
+#endif
+#ifdef GALSF_RESOLVEDISM_OPT_VARIABLE
+                L_emit += P[i].OPT_luminosity;
+#endif
+            }
+        }
+        for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+        {
+            if(P[i].Type != 0 || P[i].Mass <= 0) {continue;}
+            double NH_cell_pp = P[i].Mass * UNIT_MASS_IN_CGS * HYDROGEN_MASSFRAC / PROTONMASS_CGS;
+            double DGR_pp = resolvedism_cell_DGR_solar(i);
+            double se_uv_pp = sig_uv * DGR_pp * NH_cell_pp * area_conv;
+            int pfx_pp;
+            for(pfx_pp = 0; pfx_pp < NPIX; pfx_pp++)
+            {
+                double att_pp = 1.0; /* matches deposit: no ProjectionDust attenuation (see REVISION note) */
+                A_abs += se_uv_pp * att_pp * ((double)CellP[i].UV_flux[pfx_pp] + (double)CellP[i].LW_flux[pfx_pp]) * inv4pi;
+#ifdef GALSF_RESOLVEDISM_NUV_VARIABLE
+                A_abs += (sig_nuv * DGR_pp * NH_cell_pp * area_conv) * att_pp * (double)CellP[i].NUV_flux[pfx_pp] * inv4pi;
+#endif
+#ifdef GALSF_RESOLVEDISM_OPT_VARIABLE
+                A_abs += (sig_opt * DGR_pp * NH_cell_pp * area_conv) * att_pp * (double)CellP[i].OPT_flux[pfx_pp] * inv4pi;
+#endif
+            }
+        }
+        double loc[2], glob[2]; loc[0] = L_emit; loc[1] = A_abs;
+        MPI_Allreduce(loc, glob, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        if(glob[1] > glob[0] && glob[1] > 0) {fcons = glob[0] / glob[1];}
+    }
     for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
     {
         if(P[i].Type != 0 || P[i].Mass <= 0) {continue;}
@@ -780,7 +882,11 @@ void resolvedism_radpressure_treerad(void)
          * per-STAR kernel field (density.cc:399, DO_DENSITY_AROUND_NONGAS_PARTICLES)
          * and is NOT meaningful on gas cells; using it here would decouple absorption
          * from the tree's attenuation. */
-        double DGR = All.DGRnormalized;
+        /* PER-CELL DGR (Uli sign-off 2026-07-28): the cell's own absorption uses its
+         * own dust content -- consistent with the tree's dust-weighted column
+         * (ProjectionDust leaf weighting) and the conservation cap (gravtree.cc),
+         * replacing the global slice-1 approximation documented above. */
+        double DGR = resolvedism_cell_DGR_solar(i);
         double NH_cell = P[i].Mass * UNIT_MASS_IN_CGS * HYDROGEN_MASSFRAC / PROTONMASS_CGS; /* # H atoms */
         /* per-band effective absorbing area in code_len^2 (matches the tree cap) */
         double se_uv  = sig_uv  * DGR * NH_cell * area_conv;
@@ -790,18 +896,34 @@ void resolvedism_radpressure_treerad(void)
         int pfx;
         for(pfx = 0; pfx < NPIX; pfx++)
         {
+            /* THICK-LIMIT FIX (2026-07-28, radp_set measurement: deposit 16x physical
+             * at tau=12): under TREE_RAD the stored per-pixel fluxes are UNATTENUATED
+             * 1/r^2 (the attenuation sweep is TREE_RAY-only; chemistry attenuates
+             * target-side from the columns). Attenuate the DEPOSIT here, per pixel,
+             * with the DGR-weighted dust column (ProjectionDust carries the DGR
+             * inside the path integral) -- stored fluxes stay raw so chemistry does
+             * not double-attenuate. */
+            /* REVISION (2026-07-29, radp2 control-subtracted measurement): the first
+             * fix attenuated deposits with ProjectionDust -- WRONG GEOMETRY: TREE_RAD
+             * columns run cell->box-edge (direction-total), not star->cell, so in the
+             * thick regime every deposit was killed (measured ~0 vs L t/c). Proper
+             * source-segmented attenuation needs TreeRay (v2). The photon-conservation
+             * cap below is the correct minimal fix: it bounds the TOTAL deposited
+             * momentum at L t/c (exact in the thick limit) while leaving the thin
+             * limit untouched; spatial distribution stays subgrid-approximate. */
+            double att_uv = 1.0, att_nuv = 1.0, att_opt = 1.0;
             /* L_abs from this pixel (all bands), erg/s; FUV cross-section also for LW sub-band */
-            double L_abs = se_uv * ((double)CellP[i].UV_flux[pfx] + (double)CellP[i].LW_flux[pfx]);
+            double L_abs = se_uv * att_uv * ((double)CellP[i].UV_flux[pfx] + (double)CellP[i].LW_flux[pfx]);
 #ifdef GALSF_RESOLVEDISM_NUV_VARIABLE
-            L_abs += se_nuv * (double)CellP[i].NUV_flux[pfx];
+            L_abs += se_nuv * att_nuv * (double)CellP[i].NUV_flux[pfx];
 #endif
 #ifdef GALSF_RESOLVEDISM_OPT_VARIABLE
-            L_abs += se_opt * (double)CellP[i].OPT_flux[pfx];
+            L_abs += se_opt * att_opt * (double)CellP[i].OPT_flux[pfx];
 #endif
             L_abs *= inv4pi; /* fluxes stored without 1/4pi; restore it -> erg/s */
             if(!(L_abs > 0)) {continue;}
             double nhat[3]; pix2vec_ring(NSIDE, (long)pfx, nhat);
-            double dp_scalar_cgs = L_abs * dt_cgs / C_LIGHT_CGS; /* g cm/s */
+            double dp_scalar_cgs = fcons * L_abs * dt_cgs / C_LIGHT_CGS; /* g cm/s (fcons: photon-conservation cap) */
             /* push AWAY from the source: photon momentum is along -n_hat(pfx) */
             int k; for(k = 0; k < 3; k++) {dp_vec[k] += -nhat[k] * dp_scalar_cgs;}
         }

@@ -669,6 +669,33 @@ void set_non_standard_physics_for_current_time(void)
 
 void calculate_non_standard_physics(void)
 {
+#if defined(GALSF) && defined(FB_G17_BOUNDARY_INJECTION)
+    /* ---- gizmo2017-mimicry boundary injection (2026-07-10) ----
+     * Restores the upstream ordering (gizmo2017 run.c:114-118 + 220): the FB walk AND
+     * deposit run here, AFTER do_second_halfstep_kick() and BEFORE cooling, so no
+     * half-kick integrates across the injection discontinuity.  The stale-density bug
+     * that motivated the mid-step placement (2026-05-07) does not recur: density() ran
+     * earlier THIS step, so DensityAroundParticle/KernelRadius/NumNgb are fresh, and the
+     * serialized per-event weighting pre-pass measures live neighbor masses anyway. */
+    compute_stellar_feedback();
+    /* ---- gizmo2017 conditional hydro recompute (run.c:299-319, verbatim scope) ----
+     * If any cell received FB this step, re-run the FULL synchronous hydro pass
+     * (density + gradients + hydro forces for active particles).  This refreshes
+     * Pressure/gradients/MaxSignalVel/DtInternalEnergy against the post-deposit state,
+     * so the next step's first half-kick uses hot-state derivatives and neighbors get
+     * correct signal-velocity wakeups immediately instead of one step late. */
+    {
+        int count_fb = 0, tot_count_fb = 0, i_fb;
+        for(i_fb = 0; i_fb < N_gas; i_fb++) {if(P[i_fb].Type == 0 && CellP[i_fb].FBinjFlag == 1) {count_fb++;}}
+        MPI_Allreduce(&count_fb, &tot_count_fb, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+        if(tot_count_fb > 0)
+        {
+            if(ThisTask == 0) {printf("G17RECOMPUTE: %d feedback-affected cells -> re-running compute_hydro_densities_and_forces\n", tot_count_fb); fflush(stdout);}
+            compute_hydro_densities_and_forces();
+        }
+        for(i_fb = 0; i_fb < N_gas; i_fb++) {CellP[i_fb].FBinjFlag = 0;}
+    }
+#endif
 #ifdef PARTICLE_EXCISION
     apply_excision();
 #endif
@@ -743,7 +770,7 @@ void calculate_non_standard_physics(void)
 #endif
 
     MCBAL_LOG("pre_cooling");
-#ifdef COOLING	/* radiative cooling and chemistry  */
+#if defined(COOLING) && !defined(RESOLVEDISM_ADIABATIC_NOCOOL)	/* radiative cooling and chemistry; NOCOOL = adiabatic test twin (energy-conservation ladder): skip the energy/chemistry update entirely, all kick/drift paths identical */
     cooling_parent_routine(); // top-level cooling and chemistry subroutine //
     MPI_Barrier(MPI_COMM_WORLD); CPU_Step[CPU_COOLINGSFR] += measure_time(); // finish time calc for SFR+cooling
 #endif
@@ -762,6 +789,9 @@ void calculate_non_standard_physics(void)
     MBARY_STEP("pre_imf_accrete");
     assign_stellar_masses(); // sample individual stellar masses from Kroupa IMF for newly formed star particles
     MBARY_STEP("post_imf_accrete");
+#if defined(GALSF_RESOLVEDISM_SAMPLE_IMF) && defined(GALSF_RESOLVEDISM_STELLAR_TABLES) && (defined(RADTRANSFER) || defined(TREE_RAY_PI))
+    resolvedism_update_ion_photon_energy(); // BUGFIX 2026-07-29: table-driven <hnu>_ion (was hard-wired 27.2 eV -> 3x photoheating); before recompute so TreeRay Ion_luminosity uses fresh value
+#endif
 #ifdef GALSF_RESOLVEDISM_G0_VARIABLE
     recompute_resolvedism_fuv_luminosities(); // BUGFIX: re-evaluate stellar FUV/LW at current age each step (else stuck at PMS-zero -> G0 floor)
 #endif

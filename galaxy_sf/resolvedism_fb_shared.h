@@ -14,7 +14,7 @@
 #define IA_T_MIN_GYR     0.04    /* 40 Myr minimum delay time [Gyr] */
 #define IA_N_PER_MSUN    1.3e-3  /* total Ia per Msun formed */
 #define IA_F_WD          0.76    /* mass fraction in WD progenitors (Kroupa IMF) */
-#define IA_DTD_NORM      2.93e-4 /* [Gyr^{-1} Msun^{-1}] rate constant */
+#define IA_DTD_NORM      2.93e-4 /* [Msun^{-1}] DTD constant: rate = NORM/t */
 #define IA_EJECTA_MASS   1.378   /* total ejecta mass [Msun] (Chandrasekhar mass) */
 #define IA_ENERGY_ERG    1.0e51  /* canonical Type Ia energy [erg] */
 #endif

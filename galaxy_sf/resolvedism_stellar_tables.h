@@ -204,6 +204,9 @@ double stellar_elem_ej_SN(double logM, double logZ, int elem);  /* absolute SN e
 double stellar_elem_ej_AGB(double logM, double logZ, int elem); /* absolute AGB ejecta [Msun], X_init baked in */
 double stellar_X_init(double logZ, int elem);                   /* table's assumed birth mass fraction */
 double stellar_type_ia_yield(int elem);
+double stellar_type_ia_yield_total(void);
+void   stellar_ia_fdead_init(void);
+double stellar_ia_fdead(double t_yr, double logZ);
 
 #endif /* GALSF_RESOLVEDISM_STELLAR_TABLES */
 #endif /* RESOLVEDISM_STELLAR_TABLES_H */

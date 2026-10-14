@@ -13,7 +13,7 @@ double get_lifetime(double mass, double Z) {
 #ifdef GALSF_RESOLVEDISM_STELLAR_TABLES
     double logM = log10(DMAX(mass, 0.09));
     double logZ = log10(DMAX(Z, 1e-10));
-    return stellar_lifetime(logM, logZ);
+    return stellar_t_PMS(logM, logZ) + stellar_lifetime(logM, logZ); /* time since birth to death, same as get_star_lifetime */
 #else
     double A, B;
     if(mass < 3.0) {

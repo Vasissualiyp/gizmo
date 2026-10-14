@@ -6,6 +6,7 @@
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
 #include "../mesh/kernel.h"
+#include "resolvedism_selfcheck.h"
 #include "resolvedism_fb_shared.h"
 
 /* Resolved-ISM supernova feedback for individually sampled single stars.
@@ -32,6 +33,7 @@ double CumulFeedbackMetals = 0;  /* cumulative metals returned to gas by feedbac
 int CumulSNe = 0, CumulAGB = 0, CumulIa = 0; /* cumulative event counts */
 double CumulStarMassFormed = 0;  /* cumulative stellar mass formed [Msun] — set in IMF sampling */
 double RadPressure_dp_thisStep = 0; /* total radpressure momentum this step [g*cm/s] */
+extern double resolvedism_radp_starside_dp_code(int i); /* fb_momentum.cc: single source for star-side radp dp */
 
 #ifndef DO_DENSITY_AROUND_NONGAS_PARTICLES
 #error "GALSF_RESOLVEDISM_FB requires DO_DENSITY_AROUND_NONGAS_PARTICLES for kernel weights (wt_sum)"
@@ -83,19 +85,33 @@ void resolvedism_determine_SNe(void)
         if(star_age_yr >= lifetime_yr) continue; /* dead — handled in death loop below */
 
         double table_age = get_star_table_age(star_age_yr, logM, logZ);
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+        if(All.TestFixedWindMdot <= 0)
+#endif
         if(table_age <= 0) continue; /* PMS: no winds yet */
         double log_age = log10(DMAX(table_age, 100.0));
 
-        double cum_now_total = 0;
-        for(int kk = 0; kk < STBL_NELEM; kk++)
-            cum_now_total += stellar_elem_ej_wind_cumulative(logM, logZ, log_age, kk);
+        double cum_now_total = 0, v_w = 0;
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+        if(All.TestFixedWindMdot > 0) {
+            /* Weaver-bubble test (2026-07-15): constant Mdot [Msun/yr] and v_wind [km/s]
+             * pinned (bypasses tables + PMS delay) -> L_w = 0.5*Mdot*v^2 known exactly
+             * for the analytic R(t) = 0.76 (L_w t^3 / rho)^(1/5) comparison. Same
+             * cumulative-minus-injected closure as the table path (bit-exact mass). */
+            cum_now_total = All.TestFixedWindMdot * star_age_yr;      /* Msun */
+            v_w = DMAX(All.TestFixedWindVel, 10.0);                    /* km/s */
+        } else
+#endif
+        {
+            for(int kk = 0; kk < STBL_NELEM; kk++)
+                cum_now_total += stellar_elem_ej_wind_cumulative(logM, logZ, log_age, kk);
+            v_w = stellar_v_wind(logM, logZ, log_age);
+            if(v_w < 10.0) v_w = 10.0;
+        }
         double M_init_solar = P[i].MstarSampleIMF[0];
         double cum_injected = M_init_solar - P[i].Mass * UNIT_MASS_IN_SOLAR;
         double dM_pending = cum_now_total - cum_injected;
         if(dM_pending < 0) dM_pending = 0; /* interp noise — wait for table to catch up */
-
-        double v_w = stellar_v_wind(logM, logZ, log_age);
-        if(v_w < 10.0) v_w = 10.0;
 
         P[i].WindMassAccum = dM_pending;                /* pending mass to inject */
         P[i].WindMomentumAccum = dM_pending * v_w;      /* matching momentum (v at current age) */
@@ -216,7 +232,7 @@ void resolvedism_determine_SNe(void)
                 /* Threshold above float precision (~1e-15 Msun): otherwise the
                  * death-loop fires a wind event every step that injects zero
                  * mass but consumes the SN-flag path via the `continue` below. */
-                if(dM_pending > 1.0e-6) {
+                if(dM_pending > 1.0e-6 && P[i].FB_NoDepositCount < 2) { /* after 2 failed flushes the SN carries the residual */
                     double v_w = stellar_v_wind(logM, logZ, log_age_end);
                     if(v_w < 10.0) v_w = 10.0;
                     P[i].WindMassAccum = dM_pending;
@@ -442,6 +458,10 @@ void resolvedism_determine_SNe(void)
             if(P[i].Type != 4 || P[i].Mass <= 0) continue;
             if(P[i].SNe_ThisTimeStep != 0) continue; /* already flagged for something else */
             if(P[i].M_drawn_Ia <= 0) continue; /* not a WD remnant */
+            if(P[i].M_at_SN_trigger > 0) { /* Ia drawn earlier but not deposited: re-fire */
+                P[i].SNe_ThisTimeStep = 4; n_ia_local++;
+                continue;
+            }
 
             double star_age_Gyr = evaluate_stellar_age_Gyr(i);
             if(star_age_Gyr < IA_T_MIN_GYR) continue; /* below minimum delay time */
@@ -450,6 +470,9 @@ void resolvedism_determine_SNe(void)
             double dt_Gyr = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(i) * UNIT_TIME_IN_GYR;
             if(dt_Gyr <= 0) continue;
             double P_Ia = (IA_DTD_NORM / star_age_Gyr) * P[i].M_drawn_Ia * dt_Gyr;
+            /* only dead WD progenitors carry the hazard: rescale so the population rate matches the DTD */
+            double f_dead = stellar_ia_fdead(star_age_Gyr * 1.0e9, log10(DMAX(P[i].BirthMetallicity, 1e-10)));
+            P_Ia *= IA_F_WD / DMAX(f_dead, 1.0e-6);
 #ifdef GALSF_RESOLVEDISM_IA_DTD_BOOST
             /* TEST-ONLY rate multiplier (ia_dtd case): pure scaling of the hazard so a
              * ~100-WD box yields O(20) events in 0.5 Gyr; the checker divides it out. */
@@ -575,6 +598,18 @@ int FB_WindBatchOnly = 0;   /* 1 = momentum walk admits ONLY flag-3 (wind) stars
  * inside an evacuated superbubble), grow the kernel x1.4 and re-measure (<=3 tries).
  * MPI SAFETY: every rank executes the identical sequence of collective calc() calls;
  * the per-iteration winner and retry decisions are agreed by MPI_Allreduce. */
+/* Star recoil from a momentum walk, applied once with the final star mass: v -= Σdp / M_final
+ * (ejecta carry v_star into the gas, so this conserves momentum; isotropic sources give Σdp = 0). */
+static void resolvedism_fb_apply_recoil(void)
+{
+    int ii, k;
+    for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {
+        if(P[ii].Type != 4) continue;
+        if(P[ii].Mass > 0) {for(k = 0; k < 3; k++) {P[ii].Vel[k] -= P[ii].FB_RecoilAccum[k] * All.cf_atime / P[ii].Mass;}}
+        for(k = 0; k < 3; k++) {P[ii].FB_RecoilAccum[k] = 0;}
+    }
+}
+
 static void resolvedism_fb_serialized_pass(void (*calc_fn)(int), int flagA, int flagB)
 {
     int ii;
@@ -629,6 +664,9 @@ static void resolvedism_fb_serialized_pass(void (*calc_fn)(int), int flagA, int 
                 }
             }
             calc_fn(-1); /* weighting pre-pass (collective) */
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+            if(i_owner >= 0 && All.Time < All.TestFBNoGasUntilTime) {P[i_owner].FB_Area_weighted_sum = 0;} /* test: no gas in reach */
+#endif
             ok_local = 1;
             if(i_owner >= 0 && P[i_owner].FB_Area_weighted_sum <= 0) {ok_local = 0;}
             MPI_Allreduce(&ok_local, &ok_glob, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
@@ -690,9 +728,11 @@ static void resolvedism_fb_serialized_pass(void (*calc_fn)(int), int flagA, int 
             }
         }
         {int sp_glob=0; MPI_Allreduce(&spawn_this, &sp_glob, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
-         if(sp_glob) {if(i_owner >= 0) {done[my_idx] = 1;} continue;}}  /* all ranks skip injection for this event */
+         if(sp_glob) {if(i_owner >= 0) {done[my_idx] = 1; if(spawn_this) {P[i_owner].FB_Deposited = 1;}} continue;}}  /* all ranks skip injection for this event */
 #endif
         calc_fn(0); /* injection for this single event (collective) */
+        resolvedism_fb_apply_recoil();
+        if(i_owner >= 0 && ok_glob) {P[i_owner].FB_Deposited = 1;}
 
 #ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
         if(i_owner >= 0) { /* FBSER trace (2026-07-04, twin-SN clip hunt): AWS + post-injection mass */
@@ -733,6 +773,8 @@ void resolvedism_inject_fb_energy(void)
     #define FB_ZERO_AWS() do { for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) { if(P[ii].Type == 4) P[ii].FB_Area_weighted_sum = 0; } } while(0)
 #endif
 
+    for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {if(P[ii].Type == 4) {P[ii].FB_Deposited = 0;}}
+
     /* ---- Pass 0: wind + AGB (momentum + mass + metals).  Fires first so final
      *      winds happen before the star explodes as SN. Serialized per event. ---- */
     MBARY_STEP("pre_fb_mom_p0");
@@ -744,7 +786,14 @@ void resolvedism_inject_fb_energy(void)
     FB_WindBatchOnly = 1;
     FB_ZERO_AWS();
     resolvedism_fb_momentum_calc(-1);
+    for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+        if(P[ii].Type == 4 && P[ii].SNe_ThisTimeStep == 3 && All.Time < All.TestFBNoGasUntilTime) {P[ii].FB_Area_weighted_sum = 0;} /* test: no gas in reach */
+#endif
+        if(P[ii].Type == 4 && P[ii].SNe_ThisTimeStep == 3 && P[ii].FB_Area_weighted_sum > 0) {P[ii].FB_Deposited = 1;}
+    }
     resolvedism_fb_momentum_calc(0);
+    resolvedism_fb_apply_recoil();
     FB_WindBatchOnly = 0;
 #else
     resolvedism_fb_serialized_pass(resolvedism_fb_momentum_calc, 2, 3);
@@ -778,8 +827,55 @@ void resolvedism_inject_fb_energy(void)
 
     /* Post-injection: handle latching, cleanup, and budget tracking for pass 0 */
     int i;
+#ifdef STELLA_SELFCHECK
+    int n_selfcheck_book = 0;
+#endif
     for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
     {
+        if(P[i].Type == 4 && P[i].SNe_ThisTimeStep >= 1 && P[i].SNe_ThisTimeStep <= 4) {
+            int has_payload = 1; /* silent collapse with no ejecta has nothing to deposit */
+#ifdef GALSF_RESOLVEDISM_STELLAR_TABLES
+            if(P[i].SNe_ThisTimeStep == 1) {
+                double Ms_, lM_, lZ_;
+                if(get_star_info(i, &Ms_, &lM_, &lZ_)) {
+                    int rt_ = stellar_remnant_type(lM_, lZ_);
+                    double rm_ = (rt_ == REM_PISN) ? 0 : stellar_remnant_mass(lM_, lZ_);
+                    double Mpre_ = (P[i].M_at_SN_trigger > 0) ? (double)P[i].M_at_SN_trigger : P[i].Mass * UNIT_MASS_IN_SOLAR;
+                    if((rt_ == REM_FSN || rt_ == REM_DBH) && Mpre_ - rm_ <= 0) has_payload = 0;
+                }
+            }
+#endif
+            if(has_payload && !P[i].FB_Deposited) {
+                /* no gas reached: book nothing, keep the star's mass, retry next step */
+                P[i].FB_NoDepositCount++;
+                printf("RESOLVEDISM FB: event flag=%d ID=%llu deposited nothing (no gas); not booked, retry %d\n",
+                       (int)P[i].SNe_ThisTimeStep, (unsigned long long)P[i].ID, (int)P[i].FB_NoDepositCount);
+                if(P[i].SNe_ThisTimeStep != 4) {P[i].M_at_SN_trigger = -1;} /* Ia keeps its trigger to re-fire */
+#ifdef GALSF_RESOLVEDISM_WINDS
+                if(P[i].SNe_ThisTimeStep == 3) {P[i].WindMassAccum = 0; P[i].WindMomentumAccum = 0;}
+#endif
+                P[i].SNe_ThisTimeStep = -1;
+                continue;
+            }
+            P[i].FB_NoDepositCount = 0;
+#if defined(STELLA_SELFCHECK) && defined(GALSF_RESOLVEDISM_STELLAR_TABLES)
+            if(P[i].SNe_ThisTimeStep == 3 && P[i].WindMassAccum > 0) { /* a booked wind must have found gas */
+                STELLA_CHECK("fb_booked_deposited", P[i].FB_Deposited, "flag=3 ID=%llu dM=%g booked without gas", (unsigned long long)P[i].ID, (double)P[i].WindMassAccum);
+                n_selfcheck_book++;
+            }
+            if(P[i].SNe_ThisTimeStep != 3 && P[i].M_at_SN_trigger > 0) { /* a booked event with ejecta must have left the star */
+                double Ms_, lM_, lZ_, rm_ = 0;
+                if(P[i].SNe_ThisTimeStep != 4 && get_star_info(i, &Ms_, &lM_, &lZ_)) {
+                    rm_ = (stellar_remnant_type(lM_, lZ_) == REM_PISN) ? 0 : stellar_remnant_mass(lM_, lZ_);}
+                double Mtrig_ = P[i].M_at_SN_trigger, Mnow_ = P[i].Mass * UNIT_MASS_IN_SOLAR;
+                if(Mtrig_ - rm_ > 1.0e-6) {
+                    STELLA_CHECK("fb_booked_deposited", Mnow_ < Mtrig_ * (1 - 1.0e-6), "flag=%d ID=%llu M_trigger=%g M_now=%g",
+                                 (int)P[i].SNe_ThisTimeStep, (unsigned long long)P[i].ID, Mtrig_, Mnow_);
+                    n_selfcheck_book++;
+                }
+            }
+#endif
+        }
 #ifdef GALSF_RESOLVEDISM_WINDS
         /* Wind injection complete: tally budget only.  Star mass has already
          * been reduced by the measured-coupling out2particle in the fb_momentum
@@ -863,7 +959,7 @@ void resolvedism_inject_fb_energy(void)
             /* Use pre-walk snapshot — P[i].Mass has already been drained by thermal walk */
             double M_WD = (P[i].M_at_SN_trigger > 0) ? (double)P[i].M_at_SN_trigger
                                                      : P[i].Mass * UNIT_MASS_IN_SOLAR;
-            double yield_rescale = M_WD / IA_EJECTA_MASS;
+            double yield_rescale = M_WD / stellar_type_ia_yield_total();
             n_events[4] += 1;
             M_injected[4] += M_WD;     /* actual injected mass (= WD mass) */
             M_removed[4] += M_WD;      /* particle mass removed */
@@ -1029,6 +1125,9 @@ void resolvedism_inject_fb_energy(void)
         P[i].M_at_SN_trigger = -1; /* reset bookkeeping snapshot */
         P[i].SNe_ThisTimeStep = -1;
     }
+#ifdef STELLA_SELFCHECK
+    STELLA_CHECK_RAN("fb_booked_deposited", n_selfcheck_book);
+#endif
 
     /* ---- Write wind events to WINDinfo.txt ---- */
     {
@@ -1091,6 +1190,14 @@ void resolvedism_inject_fb_energy(void)
     resolvedism_fb_momentum_calc(-2);   /* weighting pre-pass for radpressure */
     resolvedism_fb_momentum_calc(1);    /* radpressure injection (IR-trapping boost; DIRECT term
                                          * offloaded to the per-cell TREE_RAD pass below) */
+    resolvedism_fb_apply_recoil();
+    /* channel-3 ledger, ONCE per local star (LEDGER FIX 2026-07-28: the old
+     * accumulation inside particle2in counted once per export entry too). */
+    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+        if(P[i].Type != 4 || P[i].Mass <= 0) continue;
+        double dp_code_led = resolvedism_radp_starside_dp_code(i);
+        if(dp_code_led > 0) {RadPressure_dp_thisStep += dp_code_led * (UNIT_MASS_IN_CGS * All.UnitVelocity_in_cm_per_s);}
+    }
 #ifdef GALSF_RESOLVEDISM_RADPRESSURE_TREERAD
     /* LEBRON-style DIRECT radp: per gas cell, from the TREE_RAD attenuated per-pixel
      * fluxes finalized in the gravity walk (deposited locally in the absorbing cell,

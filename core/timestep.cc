@@ -107,6 +107,70 @@ void find_timesteps(void)
 #endif
 
 
+#if defined(GALSF_RESOLVEDISM_SN_SPAWN) || defined(RESOLVEDISM_HOTSYNC_CLAMP) /* clamp is injection-agnostic: any persistent hot region (wind bubbles) suffers the same one-sided pair-flux creation (2026-07-17) */
+    /* SPAWN-SYNC (2026-07-10): while any blast-hot gas (young spawned SN remnant, T >~ 1e6 K)
+     * exists anywhere, forbid assigning ANY particle a timebin coarser than the bin the hottest
+     * cell currently occupies. Rationale: hydro flux application in this code is per-side (each
+     * active element applies only its own half of every pair flux; the reverse-assignment branch
+     * 'j_is_active_for_fluxes' is disabled), so pair antisymmetry -- and with it total-energy
+     * conservation -- only holds when both partners walk at the same cadence. Across a
+     * rapidly-decaying spawned blast front a single-bin offset destroys ~2e49 erg per kick of
+     * the finer side (adiabatic ladder: -5%/1e51 erg at 1 Msun resolution, +3-4% at 0.1/0.01);
+     * with a single global bin the same run conserves to +0.002%. This clamp reproduces that
+     * synchronization exactly while the remnant is hot, and relaxes automatically as it cools. */
+    integertime ti_spawnhot_glob = TIMEBASE;
+    double spawnhot_cen[3] = {0,0,0}; double spawnhot_R2 = -1;
+    {
+        double u_hot_code = (1.0e6 * BOLTZMANN_CGS) / ((2./3.)*0.6*PROTONMASS_CGS) / UNIT_SPECEGY_IN_CGS; /* u(T~1e6 K, mu=0.6) */
+        integertime ti_local = TIMEBASE; int i_hot; double aphys_hot;
+        double csum_loc[4] = {0,0,0,0}, csum_glob[4] = {0,0,0,0}; /* Sum(x,y,z), count of hot cells */
+        for(i_hot = 0; i_hot < NumPart; i_hot++) {
+            if(P[i_hot].Type != 0 || P[i_hot].Mass <= 0) continue;
+            if(CellP[i_hot].InternalEnergyPred > u_hot_code) {
+                /* forward-looking: use ONLY the hot cell's physical CFL requirement
+                 * (get_timestep), never its occupied bin -- the occupied bin already contains
+                 * the clamp of the previous step, so folding it back in would divide the floor
+                 * by the margin every find_timesteps (runaway to the integer-time quantum). */
+                integertime t_c = get_timestep(i_hot, &aphys_hot, 0);
+                if(t_c > 0 && t_c < ti_local) {ti_local = t_c;}
+                int kc_; for(kc_ = 0; kc_ < 3; kc_++) {csum_loc[kc_] += P[i_hot].Pos[kc_];}
+                csum_loc[3] += 1;
+            }
+        }
+        MPI_Allreduce(&ti_local, &ti_spawnhot_glob, 1, MPI_TYPE_TIME, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(csum_loc, csum_glob, 4, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+        if(ti_spawnhot_glob < TIMEBASE && csum_glob[3] > 0)
+        {
+            /* margin: sync 4x FINER than the hot-cell CFL. The residual pair-flux error around
+             * the (mid-step-inserted, cascade-refined) ejecta scales ~linearly with the step on
+             * which the blast is integrated; the global-dt experiment (dt ~ CFL/3.4) conserved
+             * to +0.002% while floor=CFL left +2.5% at 1 Msun. */
+            ti_spawnhot_glob >>= 2; if(ti_spawnhot_glob < 2) {ti_spawnhot_glob = 2;}
+            /* distance limiting: only particles within the remnant's sphere of influence need
+             * the fine cadence -- pairs not touching a hot cell carry no blast-flux error.
+             * Sphere = hot-cell centroid + max hot-cell distance + 3x max hot kernel radius.
+             * (Single-centroid approximation: multiple simultaneous remnants degrade toward a
+             * global clamp -- safe, just costlier. Plain (non-wrapped) coordinates: the FB test
+             * boxes are non-periodic; revisit for BOX_PERIODIC production use.) */
+            int kc_; for(kc_ = 0; kc_ < 3; kc_++) {spawnhot_cen[kc_] = csum_glob[kc_] / csum_glob[3];}
+            double r2max_loc = 0, hmax_loc = 0, rh_glob[2] = {0,0}, rh_loc[2];
+            for(i_hot = 0; i_hot < NumPart; i_hot++) {
+                if(P[i_hot].Type != 0 || P[i_hot].Mass <= 0) continue;
+                if(CellP[i_hot].InternalEnergyPred > u_hot_code) {
+                    double r2_ = 0; for(kc_ = 0; kc_ < 3; kc_++) {double d_ = P[i_hot].Pos[kc_] - spawnhot_cen[kc_]; r2_ += d_*d_;}
+                    if(r2_ > r2max_loc) {r2max_loc = r2_;}
+                    if(P[i_hot].KernelRadius > hmax_loc) {hmax_loc = P[i_hot].KernelRadius;}
+                }
+            }
+            rh_loc[0] = r2max_loc; rh_loc[1] = hmax_loc;
+            MPI_Allreduce(rh_loc, rh_glob, 2, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+            double R_sync = sqrt(rh_glob[0]) + 3.*rh_glob[1];
+            spawnhot_R2 = R_sync * R_sync;
+        }
+        else {ti_spawnhot_glob = TIMEBASE;}
+    }
+#endif
+
     /* Now assign new timesteps  */
     for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
     {
@@ -116,6 +180,12 @@ void find_timesteps(void)
         ti_step = get_timestep(i, &aphys, 0);
 #endif
         ti_step = (integertime)(((double)ti_step) / TIMESTEP_DILATION_FACTOR(i,0));
+#if defined(GALSF_RESOLVEDISM_SN_SPAWN) || defined(RESOLVEDISM_HOTSYNC_CLAMP) /* clamp is injection-agnostic: any persistent hot region (wind bubbles) suffers the same one-sided pair-flux creation (2026-07-17) */
+        if(ti_spawnhot_glob < TIMEBASE && ti_step > ti_spawnhot_glob && spawnhot_R2 > 0) {
+            double r2_sc = 0; int kc_; for(kc_ = 0; kc_ < 3; kc_++) {double d_ = P[i].Pos[kc_] - spawnhot_cen[kc_]; r2_sc += d_*d_;}
+            if(r2_sc < spawnhot_R2) {ti_step = ti_spawnhot_glob;} /* SPAWN-SYNC clamp, distance-limited (see above) */
+        }
+#endif
         
 #if defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM)
         if(ti_step < 0) {ti_step = ti_min_glob;}
@@ -963,7 +1033,7 @@ integertime get_timestep(int p,		/*!< particle index */
             double star_age_yr = evaluate_stellar_age_Gyr(p) * 1e9;
             double logM = log10(Mstar);
             double logZ = log10(DMAX(P[p].BirthMetallicity, 1e-10));
-            double lifetime = stellar_lifetime(logM, logZ);
+            double lifetime = stellar_t_PMS(logM, logZ) + stellar_lifetime(logM, logZ); /* age since birth at death */
             double time_to_death = lifetime - star_age_yr;
 
             /* Hard cap: never exceed MaxStellarTimestep (~50 kyr default) */

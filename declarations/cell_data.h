@@ -15,7 +15,14 @@ extern struct gas_cell_data
     MyDouble InternalEnergy;        /*!< specific internal energy [internal thermal energy per unit mass] of cell */
     MyDouble InternalEnergyPred;    /*!< predicted value of the specific internal energy at the current time */
     MyDouble DtInternalEnergy;      /*!< rate of change of specific internal energy */
-    
+
+#ifdef FB_G17_BOUNDARY_INJECTION
+    /* gizmo2017-mimicry (2026-07-10): set by the FB thermal walk on every receiver
+     * (mirrors gizmo2017 SphP.flagFBinj); consumed by the conditional hydro recompute
+     * at the sync boundary (run.cc calculate_non_standard_physics); reset to 0 there. */
+    int FBinjFlag;
+#endif
+
     MyDouble VelPred[3];            /*!< predicted gas cell velocity at the current time */
     MyDouble HydroAccel[3];         /*!< acceleration due to hydrodynamical force (for drifting) */
     
@@ -253,6 +260,7 @@ extern struct gas_cell_data
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #ifdef TREE_RAD
     MyFloat Projection[NPIX];             /*!< HEALPix column density per pixel */
+    MyFloat ProjectionDust[NPIX];         /*!< HEALPix DGR-weighted column per pixel (solar-DGR units): with variable dust the DGR stays INSIDE the path integral (Uli 2026-07-28) */
 #endif
 #ifdef TREE_RAD_H2
     MyFloat ProjectionH2[NPIX];           /*!< HEALPix H2 column density per pixel */

@@ -2323,6 +2323,14 @@ void read_parameter_file(char *fname)
 #endif
 
 #ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+      strcpy(tag[nt], "TestStarInitAgeYr");
+      addr[nt] = &All.TestStarInitAgeYr;
+      id[nt++] = REAL;
+
+      strcpy(tag[nt], "TestFBNoGasUntilTime");
+      addr[nt] = &All.TestFBNoGasUntilTime;
+      id[nt++] = REAL;
+
       strcpy(tag[nt], "TestStarMass");
       addr[nt] = &All.TestStarMass;
       id[nt++] = REAL;
@@ -2347,8 +2355,20 @@ void read_parameter_file(char *fname)
       addr[nt] = &All.TestFixedQion;
       id[nt++] = REAL;
 
+      strcpy(tag[nt], "TestStarBenchIso");
+      addr[nt] = &All.TestStarBenchIso;
+      id[nt++] = REAL;
+
       strcpy(tag[nt], "TestFixedLbol");
       addr[nt] = &All.TestFixedLbol;
+      id[nt++] = REAL;
+
+      strcpy(tag[nt], "TestFixedWindMdot");
+      addr[nt] = &All.TestFixedWindMdot;
+      id[nt++] = REAL;
+
+      strcpy(tag[nt], "TestFixedWindVel");
+      addr[nt] = &All.TestFixedWindVel;
       id[nt++] = REAL;
 
       strcpy(tag[nt], "TestStarMass2");
@@ -2809,7 +2829,12 @@ void read_parameter_file(char *fname)
                 if(strcmp("TestSNSpacing",tag[i])==0) {continue;}
                 if(strcmp("TestFUVZero",tag[i])==0) {*((int *)addr[i])=0; printf("Tag %s not set in parameter file: stellar radiation ON as normal (=0)\n",tag[i]); continue;}
                 if(strcmp("TestFixedQion",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set in parameter file: ionizing Q from tables as normal (variable; =0)\n",tag[i]); continue;}
+                if(strcmp("TestStarBenchIso",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set in parameter file: full thermochemistry as normal (=0; >0 = StarBench benchmark mode, neutral gas isothermal at this T [K])\n",tag[i]); continue;}
+                if(strcmp("TestFBNoGasUntilTime",tag[i])==0) {*((double *)addr[i])=0; continue;}
+                if(strcmp("TestStarInitAgeYr",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set in parameter file: stars born at age 0 as normal (=0)\n",tag[i]); continue;}
                 if(strcmp("TestFixedLbol",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set in parameter file: bolometric L from tables as normal (variable; =0)\n",tag[i]); continue;}
+                if(strcmp("TestFixedWindMdot",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set in parameter file: wind Mdot from tables as normal (variable; =0)\n",tag[i]); continue;}
+                if(strcmp("TestFixedWindVel",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set in parameter file: wind velocity from tables as normal (=0)\n",tag[i]); continue;}
 #endif
                 if(strcmp("TimeBetStatistics",tag[i])==0) {*((double *)addr[i])=1.0e10; printf("Tag %s (%s) not set in parameter file: ENERGYinfo.txt will get only the t=0 row (=%g) \n",tag[i],alternate_tag[i],All.TimeBetStatistics); continue;}
                 printf("ERROR. I miss a required value for tag '%s' (or alternate name '%s') in parameter file '%s'.\n", tag[i], alternate_tag[i], fname);
@@ -2902,7 +2927,14 @@ void read_parameter_file(char *fname)
     All.ErrTolTheta = 0.7;
     All.ErrTolForceAcc = 0.0025;
     All.MaxRMSDisplacementFac = 0.25;
+#if !(defined(CHEMCOOL) && defined(GALSF_RESOLVEDISM_FB))
+    /* ENERGYinfo one-row ROOT CAUSE #3 (2026-07-10): this non-DEVELOPER_MODE default
+     * block runs AFTER read_parameter_file and silently clobbered the parsed
+     * TimeBetStatistics back to 1e10 (usedvalues showed the file value; runtime had
+     * 1e10 -> exactly one t=0 row fleet-wide). When the conservation ledger exists
+     * (CHEMCOOL+RESOLVEDISM_FB), the parsed cadence must survive. */
     All.TimeBetStatistics = 1.0e10;
+#endif
     strcpy(All.ResubmitCommand,"none");
     All.ResubmitOn = 0;
 #ifdef HYDRO_SPH

@@ -828,12 +828,18 @@ void finalize_sampled_star(int i, double M_drawn);
 void recompute_resolvedism_fuv_luminosities(void);
 #endif
 #endif
+#if defined(GALSF_RESOLVEDISM_SAMPLE_IMF) && defined(GALSF_RESOLVEDISM_STELLAR_TABLES) && (defined(RADTRANSFER) || defined(TREE_RAY_PI))
+void resolvedism_update_ion_photon_energy(void);
+extern double Resolvedism_Eion_eff_eV;
+#endif
 #ifdef GALSF_RESOLVEDISM_STELLAR_TABLES
 void resolvedism_load_stellar_tables(void);
 void resolvedism_free_stellar_tables(void);
 #endif
 #ifdef GALSF_RESOLVEDISM_DUST
 void resolvedism_dust_evolve(void);
+void resolvedism_dust_seed_cell(int i);
+void resolvedism_dust_clamp_cell(int i);
 void resolvedism_dust_condensation(int sne_flag, double *metal_yields, double *dust_yields);
 double resolvedism_dust_sn_destruction_frac(double rho_code, double E_sne_code, double mass_code);
 #ifdef GALSF_RESOLVEDISM_DUST_SELFTEST

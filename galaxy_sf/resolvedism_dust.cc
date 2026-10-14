@@ -159,7 +159,11 @@ void resolvedism_dust_evolve(void)
         /* Sticking efficiency S(T_gas, T_dust) = 1 / (1 + 0.04*sqrt(T_gas + T_dust))
            (Hirashita 2000).  Smoothly transitions from S~1 at low T to S~0 at high T. */
         /* Rates from Dwek 1998 / Draine 2009, same form as gizmo2017 evolve_abundances_dust.F */
+#ifdef CHEMCOOL
         double T_dust = CellP[i].DustTemp;
+#else
+        double T_dust = DMIN(T, 100.); /* no chemcool dust-temp solve in cooling-off test builds */
+#endif
         double sticking = 1.0 / (1.0 + 0.04 * sqrt(T + T_dust));
         if(sticking > 1e-4 && dust_total > 0) {
             double sqrtT = sqrt(T);
@@ -218,17 +222,41 @@ void resolvedism_dust_evolve(void)
             }
         }
 
-        /* floor: ensure non-negative and don't exceed total element abundance */
-        for(k = 0; k < NUM_RESOLVEDISM_DUST; k++) {
-            if(CellP[i].Dust[k] < 0) CellP[i].Dust[k] = 0;
-        }
-        /* conservation: dust can't exceed total metal content */
-        CellP[i].Dust[0] = DMIN(CellP[i].Dust[0], DMAX(P[i].Metallicity[MET_OF(ELEM_C)],  0));
-        CellP[i].Dust[1] = DMIN(CellP[i].Dust[1], DMAX(P[i].Metallicity[MET_OF(ELEM_O)],  0));
-        CellP[i].Dust[2] = DMIN(CellP[i].Dust[2], DMAX(P[i].Metallicity[MET_OF(ELEM_Mg)], 0));
-        CellP[i].Dust[3] = DMIN(CellP[i].Dust[3], DMAX(P[i].Metallicity[MET_OF(ELEM_Si)], 0));
-        CellP[i].Dust[4] = DMIN(CellP[i].Dust[4], DMAX(P[i].Metallicity[MET_OF(ELEM_Fe)], 0));
+        resolvedism_dust_clamp_cell(i);
     }
+}
+
+/* Dust cannot exceed its element pool; silicate is scaled as a whole to keep stoichiometry. */
+void resolvedism_dust_clamp_cell(int i)
+{
+    int k;
+    for(k = 0; k < NUM_RESOLVEDISM_DUST; k++) if(CellP[i].Dust[k] < 0) CellP[i].Dust[k] = 0;
+    CellP[i].Dust[0] = DMIN(CellP[i].Dust[0], DMAX(P[i].Metallicity[MET_OF(ELEM_C)], 0));
+    double f = 1;
+    if(CellP[i].Dust[1] > 0) f = DMIN(f, DMAX(P[i].Metallicity[MET_OF(ELEM_O)],  0) / CellP[i].Dust[1]);
+    if(CellP[i].Dust[2] > 0) f = DMIN(f, DMAX(P[i].Metallicity[MET_OF(ELEM_Mg)], 0) / CellP[i].Dust[2]);
+    if(CellP[i].Dust[3] > 0) f = DMIN(f, DMAX(P[i].Metallicity[MET_OF(ELEM_Si)], 0) / CellP[i].Dust[3]);
+    if(CellP[i].Dust[4] > 0) f = DMIN(f, DMAX(P[i].Metallicity[MET_OF(ELEM_Fe)], 0) / CellP[i].Dust[4]);
+    if(f < 1) for(k = 1; k <= 4; k++) CellP[i].Dust[k] *= f;
+}
+
+#define DUST_SEED_MAXDEPL_C   0.5 /* max fraction of a cell's C locked in seed dust */
+#define DUST_SEED_MAXDEPL_SIL 0.9 /* max fraction of a cell's Mg/Si/Fe/O locked in seed silicate */
+/* Fresh-start seed: DGR = 0.01 Z/0.014 split 30% C / 70% olivine, capped by the cell's own element pools. */
+void resolvedism_dust_seed_cell(int i)
+{
+    double DGR = 0.01 * (DMAX(P[i].Metallicity[0], 0) / 0.014);
+    double C_dust = DMIN(0.3 * DGR, DUST_SEED_MAXDEPL_C * DMAX(P[i].Metallicity[MET_OF(ELEM_C)], 0));
+    double sil = 0.7 * DGR; /* olivine mass fraction, limited by the scarcest constituent */
+    sil = DMIN(sil, DUST_SEED_MAXDEPL_SIL * DMAX(P[i].Metallicity[MET_OF(ELEM_O)],  0) / DUST_SIL_FRAC_O);
+    sil = DMIN(sil, DUST_SEED_MAXDEPL_SIL * DMAX(P[i].Metallicity[MET_OF(ELEM_Mg)], 0) / DUST_SIL_FRAC_MG);
+    sil = DMIN(sil, DUST_SEED_MAXDEPL_SIL * DMAX(P[i].Metallicity[MET_OF(ELEM_Si)], 0) / DUST_SIL_FRAC_SI);
+    sil = DMIN(sil, DUST_SEED_MAXDEPL_SIL * DMAX(P[i].Metallicity[MET_OF(ELEM_Fe)], 0) / DUST_SIL_FRAC_FE);
+    CellP[i].Dust[0] = C_dust;
+    CellP[i].Dust[1] = sil * DUST_SIL_FRAC_O;
+    CellP[i].Dust[2] = sil * DUST_SIL_FRAC_MG;
+    CellP[i].Dust[3] = sil * DUST_SIL_FRAC_SI;
+    CellP[i].Dust[4] = sil * DUST_SIL_FRAC_FE;
 }
 
 

@@ -490,12 +490,48 @@ endif
 
 # chemcool non-equilibrium chemistry: fortran backend + C++ interface
 ifeq (CHEMCOOL,$(findstring CHEMCOOL,$(CONFIGVARS)))
-OBJS    += cooling/chemcool/chemcool.o
+OBJS    += cooling/chemcool/chemcool.o cooling/chemcool/chem_interface.o
+INCL    += cooling/chemcool/chem_interface.h
 FOBJS   += cooling/chemcool/coolinmo.o cooling/chemcool/cheminmo.o cooling/chemcool/spline.o cooling/chemcool/cool_func.o cooling/chemcool/photoinit_ism.o \
            cooling/chemcool/dvode.o cooling/chemcool/evolve_abundances.o cooling/chemcool/rate_eq_simple.o cooling/chemcool/rate_eq_ulli.o \
            cooling/chemcool/jac.o cooling/chemcool/cool_util.o \
            cooling/chemcool/const_rates.o cooling/chemcool/validate_rates.o cooling/chemcool/calc_photo.o cooling/chemcool/calc_temp.o \
            cooling/chemcool/compute_gamma.o cooling/chemcool/wss_z_collis.o
+
+# CHEMCOOL_CXX: C++/CVODE chemistry backend (cooling/chemcool/cxx/).
+# DEFAULT OFF -- with the flag absent the build is byte-for-byte the Fortran
+# DVODE path above, which remains the reference implementation.  With the flag
+# ON, the same Fortran objects are still linked (the RHS leaf kernels
+# cool_func/calc_dust_temp/calc_photo/calc_temp and the coolinmo/cheminmo table
+# builders are still Fortran -- see cooling/chemcool/cxx/DEVIATIONS.md D-0);
+# what is replaced is the integrator (SUNDIALS CVODE instead of DVODE), the RHS
+# assembly and the driver/retry policy.
+#
+# SUNDIALS: point SUNDIALS_DIR at a local static build (CVODE >= 6.x).  Build it
+# once with:
+#   cmake -DCMAKE_INSTALL_PREFIX=<prefix> -DBUILD_SHARED_LIBS=OFF \
+#         -DEXAMPLES_ENABLE_C=OFF <sundials-src> && make install
+# Default below is a stable copy (headers + the 6 static libs) of the tree
+# built for the Gate-2 benchmark (SUNDIALS 6.7.0, gcc; original build tree:
+# /orion/ptmp/uli/orion/fb_tests/_chemcool_cxx_build/sundials/).
+ifeq (CHEMCOOL_CXX,$(findstring CHEMCOOL_CXX,$(CONFIGVARS)))
+SUNDIALS_DIR ?= /orion/ptmp/uli/orion/fb_tests/_sundials/install
+SUNDIALS_LIBDIR := $(firstword $(wildcard $(SUNDIALS_DIR)/lib64 $(SUNDIALS_DIR)/lib))
+SUNDIALS_INCL = -I$(SUNDIALS_DIR)/include
+SUNDIALS_LIBS = -L$(SUNDIALS_LIBDIR) -lsundials_cvode -lsundials_nvecserial \
+                -lsundials_sunmatrixdense -lsundials_sunlinsoldense \
+                -lsundials_sunnonlinsolnewton -lsundials_generic
+# These are kept OUT of $(OBJS) and given their own recipe below: SUNDIALS'
+# sundials_context.hpp uses std::make_unique, so they need -std=c++14, while
+# most SYSTYPE blocks pin the rest of GIZMO to -std=c++11.  Compiling only
+# these files at c++14 avoids silently changing the standard for the whole
+# build (c++14 is appended after the SYSTYPE -std, and the last -std wins).
+# Wildcarded on purpose: cooling/chemcool/cxx/ is under active development
+# (Gate 3 is porting the leaf kernels), so a hand-maintained list goes stale and
+# fails at LINK time with undefined cxx_* references rather than at parse time.
+CHEMCXX_OBJS = $(patsubst %.cc,%.o,$(wildcard cooling/chemcool/cxx/*.cc))
+INCL    += $(wildcard cooling/chemcool/cxx/*.h)
+endif
 endif
 
 # resolved ISM star formation / feedback modules
@@ -550,7 +586,7 @@ endif
 
 # linking libraries (includes machine-dependent options above)
 CFLAGS = $(OPTIONS) $(GSL_INCL) $(FFTW_INCL) $(HDF5INCL) \
-         $(GRACKLEINCL) $(CHIMESINCL) $(HEALPIXINCL) $(KETJU_INCL)
+         $(GRACKLEINCL) $(CHIMESINCL) $(HEALPIXINCL) $(KETJU_INCL) $(SUNDIALS_INCL)
 
 
 
@@ -576,21 +612,25 @@ endif
 
 
 LIBS = $(HDF5LIB) -g $(MPICHLIB) $(GSL_LIBS) -lgsl -lgslcblas \
-	   $(FFTW_LIBS) $(FFTW_LIBNAMES) -lm $(GRACKLELIBS) $(CHIMESLIBS) $(HEALPIXLIBS) $(KETJU_LIBS)
+	   $(FFTW_LIBS) $(FFTW_LIBNAMES) -lm $(GRACKLELIBS) $(CHIMESLIBS) $(HEALPIXLIBS) $(KETJU_LIBS) $(SUNDIALS_LIBS)
 
 FFLAGS = $(FOPTIONS) -Icooling/chemcool
 
 # if we have Fortran objects (e.g. CHEMCOOL, EOS_HELMHOLTZ), link with FC; otherwise use CXX
 ifneq ($(FOBJS),)
-$(EXEC): $(OBJS) $(FOBJS)
-	$(FC) $(OPTIMIZE) $(OBJS) $(FOBJS) $(LIBS) -o $(EXEC)
+$(EXEC): $(OBJS) $(CHEMCXX_OBJS) $(FOBJS)
+	$(FC) $(OPTIMIZE) $(OBJS) $(CHEMCXX_OBJS) $(FOBJS) $(LIBS) -o $(EXEC)
 else
-$(EXEC): $(OBJS)
-	$(CXX) $(OPTIMIZE) $(OBJS) $(LIBS) -o $(EXEC)
+$(EXEC): $(OBJS) $(CHEMCXX_OBJS)
+	$(CXX) $(OPTIMIZE) $(OBJS) $(CHEMCXX_OBJS) $(LIBS) -o $(EXEC)
 endif
 
 $(OBJS): %.o: %.cc $(INCL) $(CONFIG) compile_time_info.cc
 	$(CXX) $(CFLAGS) -c $< -o $@
+
+# CHEMCOOL_CXX sources: same compiler and flags, plus -std=c++14 (SUNDIALS)
+$(CHEMCXX_OBJS): %.o: %.cc $(INCL) $(CONFIG) compile_time_info.cc
+	$(CXX) $(CFLAGS) -std=c++14 -I. -c $< -o $@
 
 $(FOBJS): %.o: %.F
 	$(FC) $(FOPTIONS) -I. -Icooling/chemcool -c $< -o $@
@@ -599,6 +639,10 @@ compile_time_info.cc: $(CONFIG)
 	$(PERL) file_io/prepare-config.perl $(CONFIG)
 
 clean:
-	rm -f $(OBJS) $(FOBJS) $(EXEC) *.oo *.c~ compile_time_info.cc GIZMO_config.h
+	rm -f $(OBJS) $(CHEMCXX_OBJS) $(FOBJS) $(EXEC)
+# CHEMCXX_OBJS is empty when CHEMCOOL_CXX is off, so clean it explicitly:
+# otherwise objects left over from a CHEMCOOL_CXX build survive a clean
+# made with the flag off (harmless -- they are not linked -- but stale).
+	rm -f cooling/chemcool/cxx/*.o *.oo *.c~ compile_time_info.cc GIZMO_config.h
 
 

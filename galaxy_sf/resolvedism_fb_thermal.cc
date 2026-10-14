@@ -30,6 +30,7 @@ struct kernel_resolvedismFB_thermal {double dp[3], r, wk, dwk, hinv, hinv3, hinv
 struct INPUT_STRUCT_NAME
 {
     MyDouble Pos[3], KernelRadius, Esne, Mej;
+    MyDouble StarVel[3];
     /* Bit-exact normalizer measured by the weighting pre-pass (loop_iteration<0):
      * FB_Area_weighted_sum_in = Σ_j (Mass_j × kernel.wk).  In the injection pass
      * (loop_iteration>=0) we use wk_j = Mass_j × kernel.wk / FB_Area_weighted_sum_in
@@ -52,7 +53,7 @@ struct INPUT_STRUCT_NAME
 
 void particle2in_resolvedismFB_thermal(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
 {
-    int k; for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k];}
+    int k; for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k]; in->StarVel[k]=P[i].Vel[k];}
     in->KernelRadius = P[i].KernelRadius;
     in->Esne = 0; in->Mej = 0; in->MetalMass = 0;
     /* Load measured AWS from prior weighting pass (or 0 if this is the weighting pass). */
@@ -87,7 +88,7 @@ void particle2in_resolvedismFB_thermal(struct INPUT_STRUCT_NAME *in, int i, int 
                                                       : P[i].Mass * UNIT_MASS_IN_SOLAR;
         in->Mej = MIa_solar / UNIT_MASS_IN_SOLAR;
         double Mej_actual_solar = MIa_solar;
-        double yield_rescale = Mej_actual_solar / IA_EJECTA_MASS;
+        double yield_rescale = Mej_actual_solar / stellar_type_ia_yield_total(); /* yields sum to the ejecta mass */
         double metal_mass_solar = 0;
         for(int k = 0; k < STBL_NELEM; k++) {
             double y_k = stellar_type_ia_yield(k) * yield_rescale;
@@ -365,18 +366,24 @@ int resolvedismFB_thermal_evaluate(int target, int mode, int *exportflag, int *e
                     CellP[j].InternalEnergy += dE;
                     #pragma omp atomic
                     CellP[j].InternalEnergyPred += dE;
-                    /* update pressure immediately after energy injection (gizmo2017 pattern) */
-                    {
-                        double u_pred, rho_j;
-                        #pragma omp atomic read
-                        u_pred = CellP[j].InternalEnergyPred;
-                        #pragma omp atomic read
-                        rho_j = CellP[j].Density;
-                        #pragma omp atomic write
-                        CellP[j].Pressure = (GAMMA_DEFAULT - 1.0) * u_pred * rho_j;
-                    }
+                    /* NO immediate Pressure update at deposit (2026-07-10, "variant B" —
+                     * this IS the true gizmo2017 pattern: upstream thermal_fb.c:208-211
+                     * deposits u/u_pred ONLY; the block previously here that eagerly set
+                     * Pressure=(gamma-1)*u_pred*rho was MISLABELED as gizmo2017). Leaving
+                     * Pressure stale means the deposit-step flux pass + KICK2 still act on
+                     * the cold state the receiver's KICK1 saw; the eager update let hot
+                     * pressure enter the half-kicks straddling the mid-step deposit,
+                     * CREATING energy: adiabatic ladder (kernel) +3.4/+5.2/+18.8% at
+                     * m1/0.1/0.01 with eager vs +2.0/+2.3/+4.7% without; cooling-on m0.01
+                     * box excess +13.5% -> -0.6% (eliminated). Wakeup-axis 2x2: immaterial.
+                     * Evidence: stella/tests/validation/sne_set/figures/fig_B_table.png.
+                     * Residual is O(dt) impulsive-injection truncation; structural fix if
+                     * <1% at m0.01 ever needed: sync-boundary injection (post-KICK2). */
                     P[j].wakeup = -1;
                     NeedToWakeupParticles_local = 1;
+#ifdef FB_G17_BOUNDARY_INJECTION
+                    CellP[j].FBinjFlag = 1; /* gizmo2017-mimicry: triggers boundary hydro recompute */
+#endif
 #ifdef COSMIC_RAY_FLUID
                     double dEcr = wk * local.Esne * cr_frac;
                     double v_ej = (local.Mej > 0) ? sqrt(2.0 * local.Esne / local.Mej) : 3000.0/UNIT_VEL_IN_KMS;
@@ -512,6 +519,13 @@ int resolvedismFB_thermal_evaluate(int target, int mode, int *exportflag, int *e
                     }
 #endif
 #endif
+                    for(k = 0; k < 3; k++) { /* ejecta arrives with the star's velocity */
+                        double dv_ej = dM * (local.StarVel[k] - P[j].Vel[k]) / (Mass_j + dM);
+                        #pragma omp atomic
+                        P[j].Vel[k] += dv_ej;
+                        #pragma omp atomic
+                        CellP[j].VelPred[k] += dv_ej;
+                    }
                     #pragma omp atomic
                     P[j].Mass += dM;
                     /* Accumulate actual deposition for measured-coupling reduction
@@ -522,6 +536,9 @@ int resolvedismFB_thermal_evaluate(int target, int mode, int *exportflag, int *e
 #endif
                     P[j].wakeup = -1;
                     NeedToWakeupParticles_local = 1;
+#ifdef FB_G17_BOUNDARY_INJECTION
+                    CellP[j].FBinjFlag = 1; /* gizmo2017-mimicry: triggers boundary hydro recompute */
+#endif
                 }
 
 #ifdef GALSF_RESOLVEDISM_DUST
