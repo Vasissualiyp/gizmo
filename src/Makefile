@@ -258,6 +258,23 @@ ifeq (yes,$(MG_USES_HYPRE))
 ## kokkos/4.6.02-gpu module also requires; the newer hypre modules need amd/7.x and so
 ## cannot be combined with that Kokkos build. HYPRE_ROOT/HYPRE_DIR are honored as
 ## fallbacks for a hand-built install; both lib and lib64 are searched.
+## Every hypre module that fits this stack is a CPU build. To run the MG solve on the GPUs,
+## build hypre 3.1.0 with HIP once (login node, ~15 minutes) into a project directory, e.g.
+## APPS=/lustre/orion/proj-shared/<project>/apps (Umpire, its memory pool, is built with it):
+##   module load amd/6.4.2 rocm/6.4.2 cray-mpich/9.0.1 craype-accel-amd-gfx90a cmake; module unload hypre
+##   HV=3.1.0; mkdir -p $APPS/src && cd $APPS/src
+##   git clone --branch v$HV --depth 1 https://github.com/hypre-space/hypre.git hypre-$HV
+##   cmake -S hypre-$HV/src -B hypre-$HV/build-hip-gfx90a -DCMAKE_BUILD_TYPE=Release \
+##     -DCMAKE_INSTALL_PREFIX=$APPS/hypre/$HV-hip-gfx90a -DCMAKE_C_COMPILER=cc -DCMAKE_CXX_COMPILER=CC \
+##     -DHYPRE_ENABLE_MPI=ON -DHYPRE_ENABLE_HIP=ON -DCMAKE_HIP_ARCHITECTURES=gfx90a \
+##     -DHYPRE_ENABLE_ROCSPARSE=ON -DHYPRE_ENABLE_ROCRAND=ON -DHYPRE_ENABLE_UMPIRE=ON -DHYPRE_BUILD_UMPIRE=ON \
+##     -DHYPRE_ENABLE_UNIFIED_MEMORY=OFF -DHYPRE_ENABLE_GPU_AWARE_MPI=OFF -DHYPRE_ENABLE_OPENMP=OFF \
+##     -DBUILD_SHARED_LIBS=ON
+##   cmake --build hypre-$HV/build-hip-gfx90a -j 16 && cmake --install hypre-$HV/build-hip-gfx90a
+## Then, for both the build and the run: `module unload hypre`, export
+## HYPRE_ROOT=$APPS/hypre/3.1.0-hip-gfx90a, and put $HYPRE_ROOT/lib64:$HYPRE_ROOT/lib on
+## LD_LIBRARY_PATH (the link line carries no run path). Nothing in Config.sh changes: the code
+## sees the GPU build through hypre's own HYPRE_USING_HIP and hands it the system in device memory.
 ifdef OLCF_HYPRE_ROOT
 HYPRE_INCL = -I$(OLCF_HYPRE_ROOT)/include
 HYPRE_LIBS = -L$(OLCF_HYPRE_ROOT)/lib -L$(OLCF_HYPRE_ROOT)/lib64 -lHYPRE
