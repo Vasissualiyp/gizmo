@@ -7,6 +7,7 @@
 #include "../core/proto.h"
 #include "../mesh/kernel.h"
 #include "../core/timestep_functions.h"   /* Hermite source eligibility + prediction (shared with both gravity walks) */
+#include "../mesh/gpu_neighbor_list.h"      /* gizmo_mark_kernel_radius_dirty_indices */
 
 /*! \file star_direct_gravity.cc
  *  \brief exact direct-summation gravity between star (type-5) particles.
@@ -75,7 +76,7 @@ void star_direct_gravity_build_table(void)
     for(i = 0; i < NumPart; i++)
     {
         if(P[i].Type != 5 || P[i].Mass <= 0) {continue;}
-        if(P[i].Ti_current != All.Ti_Current) {drift_particle(i, All.Ti_Current);}
+        if(P[i].Ti_current != All.Ti_Current) {drift_particle(i, All.Ti_Current); gizmo_mark_kernel_radius_dirty_indices(&i, 1);}
         sendbuf[k].Pos = P[i].Pos;
         sendbuf[k].Vel = P[i].Vel;
 #ifdef HERMITE_INTEGRATION

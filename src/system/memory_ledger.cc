@@ -674,9 +674,8 @@ int gizmo_memory_preflight(void)
 #ifdef CHIMES
                        + (long long) All.MaxPartGas * (long long) sizeof(struct gasVariables)    /* ChimesGasVars (host, outside the Base arena) */
 #endif
-#ifdef NEIGHBOR_LOOP_MODE_D
-                       + (long long) All.MaxPart    * (long long) (sizeof(unsigned int) + sizeof(int))  /* the fused walk's touched set: stamps + list */
-#endif
+                       + (long long) All.MaxPart    * (long long) (2 * sizeof(unsigned int) + sizeof(int))  /* the fused walk's touched set: stamps + list + mass verdicts */
+                       + (long long) All.MaxPart    * (long long) (3 * sizeof(MyDouble) + sizeof(unsigned char))  /* the device leaf mirror: position + type */
 #if defined(GALSF_FB_FIRE_RT_LOCALRP) || defined(GRAIN_BACKREACTION)
                        + (long long) All.MaxPart    * (long long) (sizeof(unsigned int) + sizeof(int))  /* the motion-target set of a loop that kicks its neighbours: stamps + list */
 #endif

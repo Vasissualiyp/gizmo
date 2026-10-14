@@ -652,26 +652,28 @@ struct nlr_spec_writes_neighbour_motion<Spec, std::void_t<decltype(Spec::writes_
 template <typename Spec>
 constexpr bool nlr_spec_writes_neighbour_motion_v = nlr_spec_writes_neighbour_motion<Spec>::value;
 
-/* Whether the pair kernel never moves a neighbour, never changes its type, and
- * never takes its mass to zero or below.  Those are the fields the fused device
- * walk tests a candidate on, so when this holds the walk may keep a copy of them
- * per reached particle for the rest of the call (GxScreenRecord) instead of
- * re-reading the particle record on every visit.
+/* Whether the pair kernel never takes a neighbour's mass to zero or below.  A fused
+ * device walk tests a candidate's type, position and mass; type and position come
+ * from the leaf mirror, which is exact for every loop because no pair kernel writes
+ * a neighbour's position or type (a "neighbour motion" write is a velocity kick).
+ * Mass is the one test a pair kernel can change, so when this holds the walk keeps
+ * each reached particle's answer for the rest of the call (gx_candidate_has_mass)
+ * instead of re-reading the particle record on every visit.
  *
  * A BitwiseReadonly loop writes no neighbour at all, so it holds by definition.
  * A loop that does write its neighbours declares it with
- * Spec::keeps_neighbour_screen_fields, after checking each of its neighbour
+ * Spec::keeps_neighbour_mass_positive, after checking each of its neighbour
  * writes: one that only ADDS mass keeps it, since that cannot change whether the
  * mass is positive, and so does one that changes only velocities.  Otherwise the
- * walk reads every candidate from the particle record. */
+ * walk reads Mass from the particle record at every visit. */
 template <typename Spec, typename = void>
-struct nlr_spec_keeps_neighbour_screen_fields : std::false_type {};
+struct nlr_spec_keeps_neighbour_mass_positive : std::false_type {};
 template <typename Spec>
-struct nlr_spec_keeps_neighbour_screen_fields<Spec, std::void_t<decltype(Spec::keeps_neighbour_screen_fields)>>
-    : std::integral_constant<bool, Spec::keeps_neighbour_screen_fields> {};
+struct nlr_spec_keeps_neighbour_mass_positive<Spec, std::void_t<decltype(Spec::keeps_neighbour_mass_positive)>>
+    : std::integral_constant<bool, Spec::keeps_neighbour_mass_positive> {};
 template <typename Spec>
-constexpr bool nlr_spec_keeps_neighbour_screen_fields_v =
-    nlr_spec_keeps_neighbour_screen_fields<Spec>::value ||
+constexpr bool nlr_spec_keeps_neighbour_mass_positive_v =
+    nlr_spec_keeps_neighbour_mass_positive<Spec>::value ||
     (nlr_spec_modeb_eval_omp<Spec>() == ModeBEvalOMP::BitwiseReadonly);
 
 /* SFINAE detection of optional Spec::bind_active_to_eval_context.

@@ -78,18 +78,124 @@ gpu_spatial_index_t *gpu_step_sidx_ptr(void) { return &g_step_sidx; }
 gpu_spatial_index_t *gpu_step_sidx_alltypes_ptr(void) { return &g_step_sidx_alltypes; }
 
 
-/* A radius was written (gpu_neighbor_list.h).  Each kept owned segment registers its source range
- * with the dirty tracker, so a mark reaches every segment that holds the particle; the ghost-exchange
- * supply cache holds membership only and needs none. */
+/* A particle moved or its reach changed (gpu_neighbor_list.h).  Each kept owned segment registers its
+ * source range with the dirty tracker, so a mark reaches every segment that holds the particle, and the
+ * leaf mirror takes the position from it; the ghost-exchange supply cache holds membership only and
+ * needs none. */
 void gizmo_mark_kernel_radius_dirty_indices(const int *indices, int n)
 {
     if(!indices || n <= 0) return;
-    gpu_dirty_tracker_mark_indices(indices, n);
+    gpu_dirty_tracker_mark_indices(indices, n, GPU_DIRTY_FIELD_SPATIAL);
 }
 void gizmo_mark_kernel_radius_dirty_range(int start, int end)
 {
     if(end <= start) return;
-    gpu_dirty_tracker_mark_range(start, end);
+    gpu_dirty_tracker_mark_range(start, end, GPU_DIRTY_FIELD_SPATIAL);
+}
+void gizmo_mark_kernel_radius_only_dirty_indices(const int *indices, int n)
+{
+    if(!indices || n <= 0) return;
+    gpu_dirty_tracker_mark_indices(indices, n, GPU_DIRTY_FIELD_RADIUS);
+}
+void gizmo_mark_position_dirty_indices(const int *indices, int n)
+{
+    if(!indices || n <= 0) return;
+    gpu_dirty_tracker_mark_indices(indices, n, GPU_DIRTY_FIELD_POSITION);
+}
+void gizmo_mark_type_dirty(int particle)
+{
+    if(particle >= 0) {gpu_dirty_tracker_mark_indices(&particle, 1, GPU_DIRTY_FIELD_TYPE);}
+}
+
+/* ---- The device leaf mirror (neighbor_list.h).  Position and type of every tree particle slot, indexed by
+ * particle index, sized to the slots a walk can reach (with headroom, and grown -- then filled whole -- when a
+ * later walk can reach further, which is also how a live insertion past the end is taken in).  One dirty-tracker
+ * registration on POSITION|TYPE feeds it (drifts mark it through the spatial marks; non-drift position writers
+ * and type changes mark it explicitly), and a slots-moved count forces a whole fill after a decomposition or a
+ * rearrangement, steps which already pay O(N).  Every other refresh is O(marked slots), and nothing here runs
+ * until a device walk asks for the mirror, so a step whose walks all stay on the host never touches it. ---- */
+static Vec3<MyDouble>     *g_leaf_pos = nullptr;
+static unsigned char      *g_leaf_type = nullptr;
+static int                 g_leaf_capacity = 0;
+static gpu_dirty_handle_t  g_leaf_dirty = -1;
+static int                 g_leaf_unavailable = 0;      /* setup failed: not retried until the tree is released */
+static unsigned long long  g_leaf_slots_moved = 1;          /* bumped whenever particles change slots */
+static unsigned long long  g_leaf_slots_moved_filled = 0;   /* its value at the last whole fill */
+/* Marked slots above which the next use fills the mirror whole instead of slot by slot.  This is the value
+ * the mirror's performance was measured with end to end (upkeep well under 1% of the walk it serves); the
+ * crossover between the two refresh forms has not been priced on its own. */
+#define LEAF_MIRROR_WHOLE_FILL_THRESHOLD (1 << 18)
+
+void gpu_leaf_mirror_note_slots_moved(void) {g_leaf_slots_moved++;}
+
+void gpu_leaf_mirror_release(void)
+{
+    if(g_leaf_pos)  {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_leaf_pos);  g_leaf_pos = nullptr;}
+    if(g_leaf_type) {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_leaf_type); g_leaf_type = nullptr;}
+    gpu_dirty_tracker_unregister(g_leaf_dirty); g_leaf_dirty = -1;
+    g_leaf_capacity = 0;
+    g_leaf_slots_moved_filled = 0;
+    g_leaf_unavailable = 0;
+}
+
+struct LeafMirrorCollect {std::vector<int> *list; int limit;};
+static void leaf_mirror_collect_cb(int j, void *userdata)
+{
+    LeafMirrorCollect *c = (LeafMirrorCollect *) userdata;
+    if(j >= 0 && j < c->limit) {c->list->push_back(j);}
+}
+
+GxLeafMirrorView gx_leaf_mirror_current(int n_reachable)
+{
+    const GxLeafMirrorView none;
+    const int slots = All.TreeParticleSlots;
+    if(g_leaf_unavailable || slots <= 0 || n_reachable <= 0 || n_reachable > slots || n_reachable > NumPart) {return none;}
+    if(g_leaf_capacity < n_reachable) {
+        const int capacity = (n_reachable + n_reachable / 8 + 1 < slots) ? (n_reachable + n_reachable / 8 + 1) : slots;
+        /* Both arrays and the registration, or none of them: nothing partial is ever published.  A refusal
+         * (device memory, or no free tracker slot) leaves this rank on the particle records until the tree
+         * is next released, rather than retrying the same allocation on every batch. */
+        gpu_leaf_mirror_release();
+        Vec3<MyDouble> *pos  = (Vec3<MyDouble> *) gizmo_gpu_alloc_device((size_t)capacity * sizeof(Vec3<MyDouble>), "leaf_mirror_pos");
+        unsigned char  *type = (unsigned char *) gizmo_gpu_alloc_device((size_t)capacity * sizeof(unsigned char), "leaf_mirror_type");
+        const gpu_dirty_handle_t dirty = (pos && type) ?
+            gpu_dirty_tracker_register(0, capacity, 0, GPU_DIRTY_FIELD_POSITION | GPU_DIRTY_FIELD_TYPE, LEAF_MIRROR_WHOLE_FILL_THRESHOLD) : -1;
+        if(dirty < 0) {
+            if(pos)  {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(pos);}
+            if(type) {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(type);}
+            g_leaf_unavailable = 1;
+            return none;
+        }
+        g_leaf_pos = pos; g_leaf_type = type; g_leaf_dirty = dirty; g_leaf_capacity = capacity;
+        g_leaf_slots_moved_filled = 0;
+    }
+    struct particle_data *Pd = P;
+    Vec3<MyDouble> *lp = g_leaf_pos;
+    unsigned char  *lt = g_leaf_type;
+    const int n_live = (NumPart < g_leaf_capacity) ? NumPart : g_leaf_capacity;
+    if(g_leaf_slots_moved_filled != g_leaf_slots_moved || gpu_dirty_tracker_is_all_dirty(g_leaf_dirty)) {
+        Kokkos::parallel_for("leaf_mirror_fill", n_live, KOKKOS_LAMBDA(int j) {lp[j] = Pd[j].Pos; lt[j] = (unsigned char)Pd[j].Type;});
+        Kokkos::fence();
+        gpu_dirty_tracker_clear(g_leaf_dirty);
+        g_leaf_slots_moved_filled = g_leaf_slots_moved;
+    } else if(gpu_dirty_tracker_popcount(g_leaf_dirty) > 0) {
+        static std::vector<int> marked; marked.clear();
+        LeafMirrorCollect collect = {&marked, n_live};
+        gpu_dirty_tracker_consume(g_leaf_dirty, leaf_mirror_collect_cb, &collect);
+        const int n_marked = (int) marked.size();
+        if(n_marked > 0) {
+            int *idx = (int *) gizmo_gpu_alloc_shared((size_t)n_marked * sizeof(int), "leaf_mirror_marked");
+            if(!idx) {g_leaf_slots_moved_filled = 0; return none;}   /* the marks are consumed: the next use fills whole */
+            for(int k = 0; k < n_marked; k++) {idx[k] = marked[k];}
+            Kokkos::parallel_for("leaf_mirror_refresh", n_marked, KOKKOS_LAMBDA(int k) {
+                const int j = idx[k]; lp[j] = Pd[j].Pos; lt[j] = (unsigned char)Pd[j].Type;});
+            Kokkos::fence();
+            Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(idx);
+        }
+    }
+    GxLeafMirrorView view;
+    view.pos = g_leaf_pos; view.type = g_leaf_type;
+    return view;
 }
 
 /* The owned particles' epoch: bumped whenever an index's rows over the owned
@@ -111,7 +217,7 @@ static uint64_t g_sidx_member_loss_epoch = 0;
 void gpu_sidx_notify_member_lost(int particle)
 {
     g_sidx_member_loss_epoch++;
-    gpu_dirty_tracker_mark_indices(&particle, 1);   /* the gas index retires its slot at its next maintenance */
+    gpu_dirty_tracker_mark_indices(&particle, 1, GPU_DIRTY_FIELD_ALL);   /* the gas index retires its slot at its next maintenance */
 }
 
 /* The order peano_hilbert_order last left the rank's particles in, recorded with the layout change that
@@ -1454,7 +1560,8 @@ static int sidx_build_segment_now(const struct SidxParticleSource &src, int main
      * here can mutate it, so the range starts clean: the first refresh would
      * recompute values it already holds. */
     if(maintained) {
-        seg->dirty_handle = gpu_dirty_tracker_register(src.base, src.count, 1);
+        /* Rows are computed from positions and radii; a lost member arrives as an all-fields mark. */
+        seg->dirty_handle = gpu_dirty_tracker_register(src.base, src.count, 1, GPU_DIRTY_FIELD_SPATIAL, 0);
         if(seg->dirty_handle < 0) {seg->rebuild_needed = 1;}   /* untracked, it cannot be kept: rebuilt on its next use */
     }
     return SIDX_BUILT;
@@ -2729,24 +2836,22 @@ int gx_device_tree_view_build(struct GxDeviceTreeView *out, int local_particle_s
  * handful of active particles does no work proportional to the rank. */
 static struct GxTouchedSet g_touched_set;
 
-/* The candidate screen (GxScreenRecord) lives in device memory, beside the touched set and with
- * its lifetime, because every visit of a fused walk reads it.  Its stamps are cleared only when it
- * is allocated and when the generation wraps; a new generation invalidates every copy in O(1). */
-static void touched_screen_clear_stamps(void)
+/* The mass verdicts (GX_MASS_VERDICT_NONE) live in device memory, beside the touched set and with
+ * its lifetime, because every visit of a fused device walk may read one.  They are cleared only when
+ * allocated and when the generation wraps; a new generation retires every verdict in O(1). */
+static void touched_mass_verdict_clear(void)
 {
-    if(!g_touched_set.screen_stamp) {return;}
-    unsigned int *stamp = g_touched_set.screen_stamp;
-    Kokkos::parallel_for("touched_screen_clear", Kokkos::RangePolicy<>(0, g_touched_set.capacity),
-                         KOKKOS_LAMBDA(int k) {stamp[k] = 0u;});
+    if(!g_touched_set.mass_verdict) {return;}
+    unsigned int *verdict = g_touched_set.mass_verdict;
+    Kokkos::parallel_for("touched_mass_verdict_clear", Kokkos::RangePolicy<>(0, g_touched_set.capacity),
+                         KOKKOS_LAMBDA(int k) {verdict[k] = 0u;});
     Kokkos::fence();
 }
 
-static void touched_screen_free(void)
+static void touched_mass_verdict_free(void)
 {
-    if(g_touched_set.screen)       {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_touched_set.screen);}
-    if(g_touched_set.screen_stamp) {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_touched_set.screen_stamp);}
-    g_touched_set.screen = nullptr;
-    g_touched_set.screen_stamp = nullptr;
+    if(g_touched_set.mass_verdict) {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(g_touched_set.mass_verdict);}
+    g_touched_set.mass_verdict = nullptr;
 }
 
 int gx_touched_set_ensure(int local_particle_slots)
@@ -2765,11 +2870,11 @@ int gx_touched_set_ensure(int local_particle_slots)
        drift_and_mark before this is ever reached, but the fence belongs WITH the
        release so no future caller has to know that. Skipped when there is
        nothing to release. */
-    if(g_touched_set.seen || g_touched_set.list || g_touched_set.counter || g_touched_set.screen) {Kokkos::fence();}
+    if(g_touched_set.seen || g_touched_set.list || g_touched_set.counter || g_touched_set.mass_verdict) {Kokkos::fence();}
     if(g_touched_set.seen)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.seen);}
     if(g_touched_set.list)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.list);}
     if(g_touched_set.counter) {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.counter);}
-    touched_screen_free();
+    touched_mass_verdict_free();
     g_touched_set = GxTouchedSet{};
 
     unsigned int *seen    = (unsigned int *) ngl_alloc_shared((size_t)local_particle_slots * sizeof(unsigned int), "touched_set_seen");
@@ -2790,21 +2895,19 @@ int gx_touched_set_ensure(int local_particle_slots)
     g_touched_set.capacity = local_particle_slots;
     g_touched_set.gen      = 0u;
 
-    /* The screen only saves reads, so a rank that cannot hold it answers the same without it and
+    /* The verdicts only save reads, so a rank that cannot hold them answers the same without them and
      * nothing needs to decline.  Said once, because the walk is then slower on a host-linked GPU. */
-    g_touched_set.screen       = (struct GxScreenRecord *) ngl_alloc_device((size_t)local_particle_slots * sizeof(struct GxScreenRecord), "ngl_screen_record");
-    g_touched_set.screen_stamp = (unsigned int *)          ngl_alloc_device((size_t)local_particle_slots * sizeof(unsigned int),          "ngl_screen_stamp");
-    if(!g_touched_set.screen || !g_touched_set.screen_stamp) {
-        touched_screen_free();
+    g_touched_set.mass_verdict = (unsigned int *) ngl_alloc_device((size_t)local_particle_slots * sizeof(unsigned int), "ngl_mass_verdict");
+    if(!g_touched_set.mass_verdict) {
         static int reported = 0;
         if(!reported) {
             reported = 1;
-            printf("touched set: task %d could not hold the candidate screen for %d local particles; fused walks read every candidate from the particle records\n",
+            printf("touched set: task %d could not hold the mass verdicts for %d local particles; fused walks read Mass from the particle records at every visit\n",
                    ThisTask, local_particle_slots);
             fflush(stdout);
         }
     }
-    touched_screen_clear_stamps();
+    touched_mass_verdict_clear();
     return 0;
 }
 
@@ -2861,12 +2964,12 @@ int gx_touched_set_begin_epoch_owned(int owner)
     /* Zero is the never-claimed value, so a wrap has to skip it AND clear the
      * stamps -- otherwise a slot still carrying the old maximum would read as
      * claimed by the new generation and its particle would silently go
-     * undrifted.  The generation wraps below GX_SCREEN_BEING_WRITTEN, the bit the
-     * candidate screen's stamps use to mark a copy being written, and the
-     * screen's stamps are cleared with the rest for the same reason. */
-    if(++g_touched_set.gen >= GX_SCREEN_BEING_WRITTEN) {
+     * undrifted.  The generation wraps below GX_MASS_VERDICT_NONE, the bit a
+     * mass verdict uses to say "no mass", and the verdicts are cleared with the
+     * rest for the same reason. */
+    if(++g_touched_set.gen >= GX_MASS_VERDICT_NONE) {
         for(int k = 0; k < g_touched_set.capacity; k++) {g_touched_set.seen[k] = 0u;}
-        touched_screen_clear_stamps();
+        touched_mass_verdict_clear();
         g_touched_set.gen = 1u;
     }
     *g_touched_set.counter = 0;
@@ -2939,11 +3042,11 @@ void gx_touched_set_release(void)
        does not synchronize. This runs on the controlled-stop path as well as the
        normal one, where a kernel may well still be in flight, so incidental
        completion is not an ownership contract. Fence once if anything is held. */
-    if(g_touched_set.seen || g_touched_set.list || g_touched_set.counter || g_touched_set.screen) {Kokkos::fence();}
+    if(g_touched_set.seen || g_touched_set.list || g_touched_set.counter || g_touched_set.mass_verdict) {Kokkos::fence();}
     if(g_touched_set.seen)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.seen);}
     if(g_touched_set.list)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.list);}
     if(g_touched_set.counter) {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(g_touched_set.counter);}
-    touched_screen_free();
+    touched_mass_verdict_free();
     g_touched_set = GxTouchedSet{};
 }
 
@@ -3072,19 +3175,21 @@ void gx_touched_set_drift_and_mark(integertime time1)
      * tracker over its promote-to-all threshold for nothing. */
     if(n_drifted > 0) {gizmo_mark_kernel_radius_dirty_indices(g_touched_set.list, n_drifted);}
 
-    /* The recording walk screened these particles at their old positions, and the copies it left
-     * would be read by the evaluation that follows.  Only the advanced ones moved, so only theirs
-     * are marked unread; the next visit re-reads them from the particle records. */
-    if(n_drifted > 0 && g_touched_set.screen_stamp) {
-        unsigned int *stamp = g_touched_set.screen_stamp;
+#if BOX_DEFINED_SPECIAL_XYZ_BOUNDARY_CONDITIONS_ARE_ACTIVE
+    /* A drift through an outflow face removes the particle (its Mass becomes 0), so the mass verdicts the
+     * recording walk left for the particles just advanced may no longer hold: they are retired, and the next
+     * visit reads Mass again.  Without such faces a drift cannot change whether a mass is positive. */
+    if(n_drifted > 0 && g_touched_set.mass_verdict) {
+        unsigned int *verdict = g_touched_set.mass_verdict;
         const int *advanced = g_touched_set.list;
         const int capacity = g_touched_set.capacity;
-        Kokkos::parallel_for("touched_screen_invalidate", Kokkos::RangePolicy<>(0, n_drifted),
-                             KOKKOS_LAMBDA(int k) {const int j = advanced[k]; if(j >= 0 && j < capacity) {stamp[j] = 0u;}});
+        Kokkos::parallel_for("touched_mass_verdict_retire", Kokkos::RangePolicy<>(0, n_drifted),
+                             KOKKOS_LAMBDA(int k) {const int j = advanced[k]; if(j >= 0 && j < capacity) {verdict[j] = 0u;}});
         /* Finished before anything else runs: the next pass may walk on the host, which would
          * otherwise rewrite the list this kernel reads. */
         Kokkos::fence();
     }
+#endif
 
     *g_touched_set.counter = 0;
 }

@@ -6,10 +6,9 @@
 #include <cstring>
 #include <cstdint>
 
-/* Promote-to-all threshold per cache (matches the old G_DIRTY_PROMOTE_THRESHOLD
- * in gpu_neighbor_list.cc). Above this many unique dirty indices, narrow
- * refresh costs ~the same as full, plus we'd be paying the staging cost for
- * the index list. Per-cache, not global. */
+/* Default promote-to-all count for a cache that names none. Above this many
+ * unique dirty indices, a narrow refresh costs about as much as a full one,
+ * plus the staging of the index list. */
 static const int G_DIRTY_PROMOTE_THRESHOLD = 1 << 20; /* 1M */
 
 /* Bitset word type. uint64_t lets us iterate set bits via __builtin_ctzll. */
@@ -23,6 +22,8 @@ struct dirty_cache_t {
     bword_t *bits;      /* (count + 63) / 64 words */
     int all_dirty;      /* if set, refresh all [base, base+count) */
     int popcount_hint;  /* approximate popcount; precise on demand */
+    unsigned fields;    /* the GPU_DIRTY_FIELD_* this cache depends on: a mark reaches it only if they intersect */
+    int promote_threshold;  /* this cache's promote-to-all count */
 };
 
 /* Small fixed registry. Today: gas + alltypes => 2 caches; future home/ghost
@@ -44,7 +45,7 @@ static inline void clear_cache_state_(struct dirty_cache_t *c)
     c->popcount_hint = 0;
 }
 
-gpu_dirty_handle_t gpu_dirty_tracker_register(int base, int count, int start_clean)
+gpu_dirty_handle_t gpu_dirty_tracker_register(int base, int count, int start_clean, unsigned fields, int promote_threshold)
 {
     if(count <= 0) return -1;
     for(int h = 0; h < GPU_DIRTY_MAX_CACHES; h++) {
@@ -59,6 +60,8 @@ gpu_dirty_handle_t gpu_dirty_tracker_register(int base, int count, int start_cle
              * starts all-dirty, which refreshes the whole range once. */
             g_caches[h].all_dirty = start_clean ? 0 : 1;
             g_caches[h].popcount_hint = 0;
+            g_caches[h].fields = fields;
+            g_caches[h].promote_threshold = (promote_threshold > 0) ? promote_threshold : G_DIRTY_PROMOTE_THRESHOLD;
             g_caches[h].valid = 1;
             return h;
         }
@@ -85,19 +88,20 @@ static inline void cache_set_bit_(struct dirty_cache_t *c, int local_idx)
     if((*w & mask) == 0) {
         *w |= mask;
         c->popcount_hint++;
-        if(c->popcount_hint > G_DIRTY_PROMOTE_THRESHOLD) {
+        if(c->popcount_hint > c->promote_threshold) {
             c->all_dirty = 1;
             /* leave bits set; consume() ignores them when all_dirty */
         }
     }
 }
 
-void gpu_dirty_tracker_mark_indices(const int *indices, int n)
+void gpu_dirty_tracker_mark_indices(const int *indices, int n, unsigned fields)
 {
     if(!indices || n <= 0) return;
     for(int h = 0; h < GPU_DIRTY_MAX_CACHES; h++) {
         struct dirty_cache_t *c = &g_caches[h];
         if(!c->valid) continue;
+        if(!(c->fields & fields)) continue;
         if(c->all_dirty) continue; /* already covered */
         int base = c->base, count = c->count;
         for(int k = 0; k < n; k++) {
@@ -110,19 +114,20 @@ void gpu_dirty_tracker_mark_indices(const int *indices, int n)
     }
 }
 
-void gpu_dirty_tracker_mark_range(int start, int end)
+void gpu_dirty_tracker_mark_range(int start, int end, unsigned fields)
 {
     if(end <= start) return;
     for(int h = 0; h < GPU_DIRTY_MAX_CACHES; h++) {
         struct dirty_cache_t *c = &g_caches[h];
         if(!c->valid) continue;
+        if(!(c->fields & fields)) continue;
         if(c->all_dirty) continue;
         int base = c->base, count = c->count;
         int lo = start - base; if(lo < 0) lo = 0;
         int hi = end   - base; if(hi > count) hi = count;
         if(hi <= lo) continue;
         int n = hi - lo;
-        if(c->popcount_hint + n > G_DIRTY_PROMOTE_THRESHOLD) {
+        if(c->popcount_hint + n > c->promote_threshold) {
             c->all_dirty = 1;
             continue;
         }
@@ -139,7 +144,7 @@ void gpu_dirty_tracker_mark_range(int start, int end)
                 /* popcount_hint update: only the bits that flipped 0->1 */
                 int delta = BWORD_BITS - __builtin_popcountll(prev);
                 c->popcount_hint += delta;
-                if(c->popcount_hint > G_DIRTY_PROMOTE_THRESHOLD) {
+                if(c->popcount_hint > c->promote_threshold) {
                     c->all_dirty = 1;
                     break;
                 }

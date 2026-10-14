@@ -869,7 +869,7 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
          * j). The new particle is appended, so a kept index built before it
          * fails its particle-count check and is rebuilt; this h-dirty mark keeps
          * the compact_xyzh.h slot fresh-on-next-build. */
-        gizmo_mark_kernel_radius_dirty_indices(&j, 1);
+        gizmo_mark_kernel_radius_only_dirty_indices(&j, 1);   /* its position and type are announced when it is inserted */
 #endif
 #endif
         /* The density above is only a guess for the single timestep before this cell's first density

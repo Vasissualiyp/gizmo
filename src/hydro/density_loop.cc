@@ -1318,7 +1318,7 @@ void density(void)
     density_finalize_post_runner(active_list_concat, aux, host_all);
     /* The finalize wrote each active's converged KernelRadius: a kept neighbour index takes the new
      * reaches before its next walk. */
-    gizmo_mark_kernel_radius_dirty_indices(active_list_concat.data(), (int)active_list_concat.size());
+    gizmo_mark_kernel_radius_only_dirty_indices(active_list_concat.data(), (int)active_list_concat.size());
 
     /* (7) NO downstream ghost-pool handoff here. Every downstream consumer owns
      *     its own ghost lifecycle and cleans up any prior pool before importing,

@@ -8,6 +8,7 @@
 #include "timestep_functions.h" /* apply_special_boundary_conditions_P */
 #include "../system/gpu_particles_arena.h"
 #include "../mesh/gpu_neighbor_list.h" /* gpu_sidx_notify_owned_changed */
+#include <vector>
 #ifdef CBE_INTEGRATOR
 #include "../sidm/sidm_gpu_decls.h"
 #endif
@@ -162,6 +163,18 @@ void do_second_halfstep_kick(void)
 }
 
 #ifdef HERMITE_INTEGRATION
+/* The Hermite predictor and corrector write positions outside a drift (in parallel loops); the device leaf
+ * mirror is told afterwards, on one thread, about every particle they may have moved. */
+static void mark_hermite_positions_written(void)
+{
+    std::vector<int> moved;
+    for(int _apl = 0; _apl < (int)ActiveParticleList.size(); _apl++) {
+        const int i = ActiveParticleList[_apl];
+        if(eligible_for_hermite(i, P) && P[i].Mass > 0) {moved.push_back(i);}
+    }
+    gizmo_mark_position_dirty_indices(moved.data(), (int)moved.size());
+}
+
 // Initial "prediction" step of Hermite integration, performed after the initial force evaluation 
 // Note: the below routines only account for gravitational acceleration - only appropriate for stars or collisionless particles
 void do_hermite_prediction(void)
@@ -189,6 +202,7 @@ void do_hermite_prediction(void)
             P[i].Pos = P[i].OldPos + (P[i].OldVel + (P[i].Hermite_OldAcc + P[i].OldJerk * (dt_grav/3)) * (dt_grav/2)) * dt_grav;
             P[i].Vel = P[i].OldVel + (P[i].Hermite_OldAcc + P[i].OldJerk * (dt_grav/2)) * dt_grav;
 		}}} // for (int _apl : ActiveParticleList)
+    mark_hermite_positions_written();
 }
 
 void do_hermite_correction(void) // corrector step
@@ -218,6 +232,7 @@ void do_hermite_correction(void) // corrector step
                     }
 #endif
 		}}} //     for (int _apl : ActiveParticleList)
+    mark_hermite_positions_written();
     if(gas_corrected > 0) {gpu_sidx_notify_owned_changed();}
 }
 #endif // HERMITE_INTEGRATION

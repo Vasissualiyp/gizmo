@@ -439,7 +439,7 @@ static void radfb_rp_pair_kick(
  * ========================================================================== */
 struct RadFBRPSpec {
     static constexpr const char *loop_name = "radfbrp";
-    static constexpr bool keeps_neighbour_screen_fields = true;   /* its neighbour writes are velocity/momentum kicks only */
+    static constexpr bool keeps_neighbour_mass_positive = true;   /* its neighbour writes are velocity/momentum kicks only */
     static constexpr ModeBEvalOMP modeb_eval_omp = ModeBEvalOMP::EpsilonAtomic; /* EpsilonAtomic: iter-1 kicks atomic_add Pj.Vel/Cj.VelPred/Pj.dp, ID^ID RNG + staged wt_sum order-indep, never read back -> ulp */
 
     /* Search policy. Legacy radfb_local_gpu.cc:259 used NGB_SEARCH_ONEWAY +

@@ -944,6 +944,7 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
      but it is important that the periodicity of the box be accounted for in relative positions and that we correct for this before allowing
      any other operations on the particles */
     P[i].Pos[0] += dx; P[j].Pos[0] -= dx; P[i].Pos[1] += dy; P[j].Pos[1] -= dy; P[i].Pos[2] += dz; P[j].Pos[2] -= dz;
+    gizmo_mark_position_dirty_indices(&i, 1);   /* the parent moved in place; the daughter is not in the tree until its next build */
 
     /* note: neither particle's TimestepDilationFactor is touched here. Splitting happens between the
        two half-kicks of a step, and the daughter inherits the parent's timebin and Ti_begstep rather
@@ -1593,7 +1594,7 @@ void rearrange_particle_sequence(int tree_rebuilt_before_next_walk)
      * point independently, so a collective here would be both wrong and a
      * deadlock risk. The consumer decides what to rebuild; nothing is freed from
      * here. */
-    if(identity_changed) {ghost_exchange_supply_identity_changed("rearrange_particle_sequence"); gpu_sidx_notify_owned_changed();}
+    if(identity_changed) {ghost_exchange_supply_identity_changed("rearrange_particle_sequence"); gpu_sidx_notify_owned_changed(); gpu_leaf_mirror_note_slots_moved();}
 
     MPI_Allreduce(&flag, &flag_sum, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     if(flag_sum) {reconstruct_timebins();}

@@ -137,6 +137,23 @@ struct GxDeviceTreeView {
     int                       type_mask_trusted = 0;
 };
 
+/* The device leaf mirror: for every particle slot of this rank's tree, an exact copy of the
+ * particle's position and type in device memory, so that the device neighbour walk tests a
+ * reached slot's type and geometry without reading the particle record (most of that walk's
+ * time was spent fetching those three fields from it).  Mass is never mirrored: it is read from
+ * the particle record, and only for slots that pass both tests.  The two arrays are published
+ * together: both point at current data, or both are null and the walk reads the particle
+ * records instead.  Filled whole when the tree is new or particles changed slots, otherwise
+ * refreshed only at the slots marked since the last use (gpu_neighbor_list.h); released with
+ * the tree. */
+struct GxLeafMirrorView {
+    const Vec3<MyDouble> *pos  = nullptr;
+    const unsigned char  *type = nullptr;
+};
+/* Brings the mirror current for the first `n_reachable` slots and returns it, or a null view if it
+ * cannot be had on this rank (no tree, or the device allocation failed). */
+GxLeafMirrorView gx_leaf_mirror_current(int n_reachable);
+
 
 /* The owned particles whose motion a loop changed, so that their bounds can be
  * raised once the loop is done.  A pair kernel that writes a neighbour's
@@ -192,25 +209,13 @@ enum gx_touched_owner_t {
     GX_TOUCHED_OWNER_FUSED_WALK = 1    /* the Mode-D fused walk's discovery passes */
 };
 
-/* What a fused walk's leaf tests before it takes a particle as a neighbour: its type, whether it
- * has mass, and where it is.  Most particles a walk reaches fail one of these, so on a GPU that
- * reaches the particle records across a host link (PCIe), reading the full record for each of
- * them costs a round trip per rejected candidate.  The screen keeps a copy of just these fields in
- * device memory, filled from the particle record the first time a call reaches each particle;
- * every later visit in the same call reads the copy.  The copy decides which candidates are
- * accepted as well as which are rejected, so it must be exact: it is kept only for loops that
- * cannot change these fields, and is invalidated for every particle a discovery pass drifts.  The
- * physics of an accepted neighbour is still read from the particle record itself.
- *
- * A stamp equal to the generation means the copy is complete; the generation with
- * GX_SCREEN_BEING_WRITTEN set means one work item is writing it; any other value means it has not
- * been read in this generation.  The generation therefore stays below that bit. */
-#define GX_SCREEN_BEING_WRITTEN 0x80000000u
-struct GxScreenRecord {
-    MyDouble      Pos[3];
-    short int     Type;
-    unsigned char has_mass;   /* Mass > 0 when it was read */
-};
+/* Whether a reached particle has mass is the one leaf test of a fused walk that the leaf mirror does not
+ * answer (it holds position and type, which no pair kernel changes; mass is authoritative in the
+ * particle record).  Within one call each local particle's answer is kept as a verdict in one word,
+ * mass_verdict[j]: the generation means "has mass", the generation with GX_MASS_VERDICT_NONE set means
+ * "has none", and any other value means "not asked yet this call".  The generation therefore stays below
+ * that bit.  See gx_candidate_has_mass. */
+#define GX_MASS_VERDICT_NONE 0x80000000u
 
 struct GxTouchedSet {
     unsigned int *seen     = nullptr;  /* [capacity] generation stamps, never cleared */
@@ -219,8 +224,7 @@ struct GxTouchedSet {
     int           capacity = 0;        /* owned local particle slots at the last ensure */
     unsigned int  gen      = 0;        /* this call's generation */
     int           owner    = GX_TOUCHED_OWNER_NONE;  /* constant within an epoch, like gen */
-    struct GxScreenRecord *screen       = nullptr;  /* [capacity] device memory; absent = read every candidate from the particle record */
-    unsigned int          *screen_stamp = nullptr;  /* [capacity] device memory, see GX_SCREEN_BEING_WRITTEN */
+    unsigned int *mass_verdict = nullptr;  /* [capacity] device memory, see GX_MASS_VERDICT_NONE; absent = read Mass at every visit */
 };
 
 

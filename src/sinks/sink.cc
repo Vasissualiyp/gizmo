@@ -6,6 +6,7 @@
 #include "../declarations/allvars.h"
 #include "../declarations/gpu_rng.h"
 #include "../core/proto.h"
+#include "../mesh/gpu_neighbor_list.h"   /* gizmo_mark_position_dirty_indices */
 #include "../mesh/kernel.h"
 #include "../gravity/gravtree_force_kernel.h"   /* shared angleweight SSOT (grav_sink_fb_angleweight) */
 #include "../mesh/ghost_writeback.h"
@@ -706,6 +707,7 @@ void sink_final_operations(void)
                     if(fac_sink_shift > 1.e-4) {fac_sink_shift = 1.-exp(-fac_sink_shift);} // make sure we can't overshoot by using this smooth interpolation function
                 }
                 P[n].Pos += (P[n].Sink_PotentialMinimumOfNeighborsPos - P[n].Pos) * fac_sink_shift;
+                gizmo_mark_position_dirty_indices(&n, 1);
             }
 #endif
 
@@ -752,6 +754,7 @@ void sink_final_operations(void)
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_COM) && !defined(SINK_REPOSITION_ON_POTMIN)
             P[n].Pos = (P[n].Pos*m_new + SinkTempInfo[i].accreted_centerofmass) / m_new;
+            gizmo_mark_position_dirty_indices(&n, 1);
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_ANGMOM)
             P[n].Sink_Specific_AngMom = (P[n].Sink_Specific_AngMom*P[n].Mass + SinkTempInfo[i].accreted_J) / m_new;

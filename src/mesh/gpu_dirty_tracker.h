@@ -9,8 +9,12 @@
  *  - Each cache registers a dense range [base, base+count) (segment-keyed
  *    by particle index, as the marks are).
  *    Bitset sized count bits, indexed by (j - base).
- *  - mark_indices(j[], n) walks every registered cache, range-routes per-j,
- *    sets bits in ALL caches whose range covers j. Same for mark_range.
+ *  - Each cache also names the fields it depends on (position, radius,
+ *    type); a mark names the fields that changed and reaches only the caches
+ *    that depend on one of them.
+ *  - mark_indices(j[], n, fields) walks every registered cache, range-routes
+ *    per-j, sets bits in every such cache whose range covers j. Same for
+ *    mark_range.
  *  - consume(handle, callback) iterates set bits via __builtin_ctzll,
  *    invokes callback(j) for each, clears that cache's bitset + all_dirty
  *    flag. Other caches' state is untouched.
@@ -30,6 +34,13 @@
 
 typedef int gpu_dirty_handle_t; /* opaque; -1 == invalid */
 
+/* What a mark says changed, and what a cache depends on. */
+#define GPU_DIRTY_FIELD_POSITION 1u
+#define GPU_DIRTY_FIELD_RADIUS   2u
+#define GPU_DIRTY_FIELD_TYPE     4u
+#define GPU_DIRTY_FIELD_SPATIAL  (GPU_DIRTY_FIELD_POSITION | GPU_DIRTY_FIELD_RADIUS)   /* a drift moves both */
+#define GPU_DIRTY_FIELD_ALL      (GPU_DIRTY_FIELD_SPATIAL | GPU_DIRTY_FIELD_TYPE)
+
 /* Register a dense particle-index range. Allocates a bitset sized to count
  * bits (rounded up to 64-bit word boundary). Returns a handle, or -1 on
  * out-of-slots. The caller stores the handle and unregisters it on cache
@@ -39,22 +50,26 @@ typedef int gpu_dirty_handle_t; /* opaque; -1 == invalid */
  * current. Pass 1 when the caller has just written every row from the live
  * P[] (nothing can have changed since), so the first consume does no work.
  * Pass 0 when the backing store is uninitialised or of unknown age, which
- * makes the first consume refresh the whole range. */
-gpu_dirty_handle_t gpu_dirty_tracker_register(int base, int count, int start_clean);
+ * makes the first consume refresh the whole range.
+ *
+ * fields: the GPU_DIRTY_FIELD_* the cache's rows are computed from.
+ * promote_threshold: unique dirty indices above which the cache is treated as
+ * wholly dirty (<= 0: the default). */
+gpu_dirty_handle_t gpu_dirty_tracker_register(int base, int count, int start_clean, unsigned fields, int promote_threshold);
 
 /* Free the bitset and free the slot for reuse. Safe to call with -1. */
 void gpu_dirty_tracker_unregister(gpu_dirty_handle_t handle);
 
-/* Mark a list of particle indices dirty across all registered caches.
- * Each j is range-checked against each cache; bit set in every cache that
- * covers it. Promote-to-all fires per cache when popcount > threshold.
- * O(n * n_caches) — n_caches is typically 2 (gas + alltypes).  */
-void gpu_dirty_tracker_mark_indices(const int *indices, int n);
+/* Mark a list of particle indices whose `fields` changed, in every cache that
+ * depends on one of those fields. Each j is range-checked against each cache;
+ * bit set in every cache that covers it. Promote-to-all fires per cache when
+ * popcount > that cache's threshold. O(n * n_caches). */
+void gpu_dirty_tracker_mark_indices(const int *indices, int n, unsigned fields);
 
 /* Mark a contiguous range [start, end). Faster than mark_indices when
  * marking a large region (e.g. full-drift over [0, NumPart)) because
  * each cache's bitset can be set in O((end-start)/64) word writes. */
-void gpu_dirty_tracker_mark_range(int start, int end);
+void gpu_dirty_tracker_mark_range(int start, int end, unsigned fields);
 
 /* Iterate set bits for one cache's bitset, calling callback(j) for each.
  * If the cache's all_dirty flag is set, callback fires for every j in

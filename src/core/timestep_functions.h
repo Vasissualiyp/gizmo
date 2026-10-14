@@ -1039,6 +1039,8 @@ void apply_special_boundary_conditions_body(Motion &a, double mass_for_dp, int m
 #endif
         }
         const int outflow_lower = (o == 0 || o == -1), outflow_upper = (o == 0 || o == 1);
+        /* The one place a drift changes whether a mass is positive: the fused Mode-D walk retires its mass verdicts
+         * for drifted particles under this same flag (gx_touched_set_drift_and_mark). */
         if((lower_hit && outflow_lower) || (upper_hit && outflow_upper)) {a.mass()=0; a.outflow_removed_mass(); if(mode==1) {a.zero_momentum();}}
     }
 #else
