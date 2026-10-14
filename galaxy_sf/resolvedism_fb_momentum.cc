@@ -10,6 +10,7 @@
 #endif
 #include "../mesh/kernel.h"
 #include "resolvedism_fb_shared.h"
+#include "resolvedism_selfcheck.h"
 
 /* Resolved-ISM momentum feedback injection: winds, AGB, and radiation pressure.
  * Injects momentum kicks + ejecta mass + metal yields + dust (AGB only).
@@ -227,16 +228,24 @@ void particle2in_resolvedismFB_momentum(struct INPUT_STRUCT_NAME *in, int i, int
             delta_solar[k] = cum_now - cum_prev;
             delta_sum += delta_solar[k];
         }
+        if(delta_sum <= 0 && dM_wind_solar > 0) { /* flat/stale table interval: use current surface composition */
+            delta_sum = 0;
+            for(int k = 0; k < STBL_NELEM; k++) {delta_solar[k] = stellar_surface_abundance(logM, logZ, log_age_now, k); delta_sum += delta_solar[k];}
+        }
         double scale = (delta_sum > 0 && dM_wind_solar > 0) ? dM_wind_solar / delta_sum : 0;
 
-        double metal_mass_solar = 0;
+        double metal_mass_solar = 0, sum_m_k = 0;
         for(int k = 0; k < STBL_NELEM; k++) {
             double m_k = delta_solar[k] * scale;
 #ifdef GALSF_RESOLVEDISM_METALS_INDIVIDUAL
             in->ElemYields[k] = m_k / UNIT_MASS_IN_SOLAR;
 #endif
+            sum_m_k += m_k;
             if(k >= ELEM_C) metal_mass_solar += m_k;
         }
+        STELLA_CHECK("wind_composition", dM_wind_solar <= 0 || fabs(sum_m_k / dM_wind_solar - 1) < 1e-9,
+                     "star=%llu dM=%.6e sum_elem=%.6e delta_sum=%.3e", (unsigned long long)P[i].ID, dM_wind_solar, sum_m_k, delta_sum);
+        STELLA_CHECK_RAN("wind_composition", dM_wind_solar > 0);
 
 #ifdef GALSF_RESOLVEDISM_DUST
         /* DUST FIX #1 (2026-07-05): condense dust in the WIND channel (was zero).
@@ -844,7 +853,7 @@ void resolvedism_radpressure_treerad(void)
 #endif
             }
         }
-        for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+        for(i = 0; i < NumPart; i++) /* ALL gas cells: absorbed RATE must be bounded by the emitted rate, not just the active subset */
         {
             if(P[i].Type != 0 || P[i].Mass <= 0) {continue;}
             double NH_cell_pp = P[i].Mass * UNIT_MASS_IN_CGS * HYDROGEN_MASSFRAC / PROTONMASS_CGS;
@@ -866,6 +875,8 @@ void resolvedism_radpressure_treerad(void)
         double loc[2], glob[2]; loc[0] = L_emit; loc[1] = A_abs;
         MPI_Allreduce(loc, glob, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
         if(glob[1] > glob[0] && glob[1] > 0) {fcons = glob[0] / glob[1];}
+        STELLA_CHECK("radp_photon_cap", fcons * glob[1] <= glob[0] * (1 + 1e-9) || glob[1] <= 0, "L_emit=%.6e A_abs_all=%.6e fcons=%.6e", glob[0], glob[1], fcons);
+        if(ThisTask == 0) STELLA_CHECK_RAN("radp_photon_cap", glob[1] > 0);
     }
     for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
     {

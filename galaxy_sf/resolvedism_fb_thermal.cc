@@ -353,9 +353,16 @@ int resolvedismFB_thermal_evaluate(int target, int mode, int *exportflag, int *e
                      * pre-deposit Mass_j over-injects each SN by a factor 1 + Sum wk^2*Mej/m:
                      * +30% at 10 Msun cells, +33% at 1 Msun, ~+300% at 0.1 Msun (resolution-
                      * dependent!). Measured bit-clean against FeedbackBudget's 1e51 booking.
-                     * With m_new in the denominator the cell's total energy gain is exactly
-                     * wk*Esne (+ dM*u_ambient, the physically correct ambient-u carry). */
+                     * With m_new in the denominator plus the dilution below, the cell's total
+                     * energy gain is exactly wk*Esne. */
                     double mass_j_post = Mass_j + wk * local.Mej;
+                    if(local.Mej > 0) { /* cold ejecta: dilute ambient u so the added mass carries no u_amb */
+                        double dil = Mass_j / mass_j_post;
+                        #pragma omp atomic
+                        CellP[j].InternalEnergy *= dil;
+                        #pragma omp atomic
+                        CellP[j].InternalEnergyPred *= dil;
+                    }
 #ifdef COSMIC_RAY_FLUID
                     double cr_frac = All.CosmicRay_SNeFraction;
                     double dE = wk * local.Esne * (1.0 - cr_frac) / mass_j_post;
@@ -525,6 +532,13 @@ int resolvedismFB_thermal_evaluate(int target, int mode, int *exportflag, int *e
                         P[j].Vel[k] += dv_ej;
                         #pragma omp atomic
                         CellP[j].VelPred[k] += dv_ej;
+                    }
+                    if(local.Esne <= 0) { /* no SN energy: dilute here (SN branch above already did) */
+                        double dil = Mass_j / (Mass_j + dM);
+                        #pragma omp atomic
+                        CellP[j].InternalEnergy *= dil;
+                        #pragma omp atomic
+                        CellP[j].InternalEnergyPred *= dil;
                     }
                     #pragma omp atomic
                     P[j].Mass += dM;

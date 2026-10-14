@@ -155,11 +155,21 @@ static inline double interp3d(const float *arr, double logM, double logZ, double
 /* ========================================================================
  *  HDF5 helper: read a dataset into a pre-allocated buffer
  * ======================================================================== */
+/* abort unless the dataset holds exactly n elements (table grid must match STBL_* dimensions) */
+static void check_hdf5_extent(hid_t ds, const char *name, size_t n)
+{
+    hid_t sp = H5Dget_space(ds);
+    hssize_t npts = H5Sget_simple_extent_npoints(sp);
+    H5Sclose(sp);
+    if(npts < 0 || (size_t)npts != n) { printf("ERROR: stellar table dataset '%s' has %lld elements, expected %zu (table grid does not match STBL_* in resolvedism_stellar_tables.h)\n", name, (long long)npts, n); endrun(1); }
+}
+
 static void read_hdf5_dataset_double(hid_t file, const char *name, double *buf, size_t n)
 {
     hid_t ds = H5Dopen(file, name);
     if(ds < 0) { printf("ERROR: cannot open HDF5 dataset '%s'\n", name); endrun(1); }
-    H5Dread(ds, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, buf);
+    check_hdf5_extent(ds, name, n);
+    if(H5Dread(ds, H5T_NATIVE_DOUBLE, H5S_ALL, H5S_ALL, H5P_DEFAULT, buf) < 0) { printf("ERROR: H5Dread failed for '%s'\n", name); endrun(1); }
     H5Dclose(ds);
 }
 
@@ -180,7 +190,8 @@ static void read_hdf5_dataset_int(hid_t file, const char *name, int *buf, size_t
     if(!tmp) { printf("ERROR: malloc failed for dataset '%s'\n", name); endrun(1); }
     hid_t ds = H5Dopen(file, name);
     if(ds < 0) { printf("ERROR: cannot open HDF5 dataset '%s'\n", name); endrun(1); }
-    H5Dread(ds, H5T_NATIVE_LONG, H5S_ALL, H5S_ALL, H5P_DEFAULT, tmp);
+    check_hdf5_extent(ds, name, n);
+    if(H5Dread(ds, H5T_NATIVE_LONG, H5S_ALL, H5S_ALL, H5P_DEFAULT, tmp) < 0) { printf("ERROR: H5Dread failed for '%s'\n", name); endrun(1); }
     H5Dclose(ds);
     for(size_t i = 0; i < n; i++) buf[i] = (int)tmp[i];
     free(tmp);

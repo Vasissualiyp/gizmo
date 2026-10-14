@@ -13,67 +13,34 @@
 
 #include "chem_types.h"
 #include <cmath>
+#include <algorithm>
 
 // ===========================================================================
 // lookup_temp_gamma (calc_temp.F:159-211)
 // ===========================================================================
-void cxx_lookup_temp_gamma(double abh2, double ekn, double* temp, double* gamma,
+void cxx_lookup_temp_gamma(double abh2, double abhe, double ekn, double* temp, double* gamma,
                            const ChemTables& T)
 {
-    if (ekn < 1.0 || ekn > 5e4 || abh2 == 0.0) {
+    if (ekn < 1.0 || ekn > 5e4 || abh2 <= 0.0) {
         // For ekn > 50000 the H2 content of the gas is negligible.
         *temp  = (2.0 / 3.0) * ekn;
         *gamma = 5.0 / 3.0;
         return;
     }
-
-    int idx_en     = (int)ekn;
-    double diff_en = ekn - (int)ekn;
-
-    if (abh2 == 0.5) {
-        double t1 = T.temp_table[200000 + idx_en - 1];
-        double t2 = T.temp_table[200000 + idx_en];
-        *temp = t1 + (t2 - t1) * diff_en;
-        double g1 = T.gamma_table[200000 + idx_en - 1];
-        double g2 = T.gamma_table[200000 + idx_en];
-        *gamma = g1 + (g2 - g1) * diff_en;
-        return;
-    }
-
-    // calc_temp.F:185-186 spells `0.1` without a D exponent, so it is a
-    // DEFAULT-REAL literal: float32(0.1) = 0.100000001490116119.  Reading it as
-    // the exact decimal shifts diff_h2 by ~1.5e-8 (measured: 2.6e-8 on temp).
-    // ... AND `0.1 * idx_h2` is REAL(4)*INTEGER, i.e. the product is rounded
-    // back to float32 before the REAL(8) subtraction.  That extra rounding is
-    // visible only when 0.1f*idx_h2 is not exactly representable -- idx_h2 = 3
-    // is the sole such case on this grid, which is exactly the one abh2 value
-    // (0.4) the Gate-3 golden reported failing at 1.45e-8 once the division
-    // literal had been fixed.
-    const float  p1f = 0.1f;
-    const double p1  = (double)p1f;
-    int idx_h2      = (int)(abh2 / p1);
-    double diff_h2  = (abh2 - (double)(p1f * (float)idx_h2)) / p1;
-    double temp_1, gamma_1;
-    if (idx_h2 == 0) {
-        temp_1  = (2.0 / 3.0) * ekn;
-        gamma_1 = (5.0 / 3.0);
-    } else {
-        double t1 = T.temp_table [50000 * (idx_h2 - 1) + idx_en - 1];
-        double g1 = T.gamma_table[50000 * (idx_h2 - 1) + idx_en - 1];
-        double t2 = T.temp_table [50000 * (idx_h2 - 1) + idx_en];
-        double g2 = T.gamma_table[50000 * (idx_h2 - 1) + idx_en];
-        temp_1  = t1 + (t2 - t1) * diff_en;
-        gamma_1 = g1 + (g2 - g1) * diff_en;
-    }
-    double t1 = T.temp_table [50000 * idx_h2 + idx_en - 1];
-    double g1 = T.gamma_table[50000 * idx_h2 + idx_en - 1];
-    double t2 = T.temp_table [50000 * idx_h2 + idx_en];
-    double g2 = T.gamma_table[50000 * idx_h2 + idx_en];
-    double temp_2  = t1 + (t2 - t1) * diff_en;
-    double gamma_2 = g1 + (g2 - g1) * diff_en;
-
-    *temp  = temp_1  + (temp_2  - temp_1)  * diff_h2;
-    *gamma = gamma_1 + (gamma_2 - gamma_1) * diff_h2;
+    // table is indexed by the H2 share of heavy particles, exact for any abhe
+    double xh2 = std::min(std::max(abh2 / (1.0 + abhe - abh2), 0.0), 1.0);
+    int idx_en     = std::min((int)ekn, 49999);
+    double diff_en = ekn - idx_en;
+    double rx      = xh2 * (CHEM_NETAB_X - 1);
+    int idx_x      = std::min((int)rx, CHEM_NETAB_X - 2);
+    double diff_x  = rx - idx_x;
+    int r1 = 50000 * idx_x + idx_en - 1, r2 = r1 + 50000;   // 0-based rows of blocks idx_x, idx_x+1
+    double temp_1  = T.temp_table[r1]  + (T.temp_table[r1 + 1]  - T.temp_table[r1])  * diff_en;
+    double gamma_1 = T.gamma_table[r1] + (T.gamma_table[r1 + 1] - T.gamma_table[r1]) * diff_en;
+    double temp_2  = T.temp_table[r2]  + (T.temp_table[r2 + 1]  - T.temp_table[r2])  * diff_en;
+    double gamma_2 = T.gamma_table[r2] + (T.gamma_table[r2 + 1] - T.gamma_table[r2]) * diff_en;
+    *temp  = temp_1  + (temp_2  - temp_1)  * diff_x;
+    *gamma = gamma_1 + (gamma_2 - gamma_1) * diff_x;
 }
 
 // ===========================================================================
@@ -97,7 +64,7 @@ double cxx_calc_gamma_temp(const ChemTables& T, double abh2, double temp,
     double ekn = (abh2 / (1.0 + abhe - abh2)) * en
                + ((1.0 + abhe - 2.0 * abh2) / (1.0 + abhe - abh2)) * 1.5 * temp;
     double t, g;
-    cxx_lookup_temp_gamma(abh2, ekn, &t, &g, T);
+    cxx_lookup_temp_gamma(abh2, abhe, ekn, &t, &g, T);
     return g;
 }
 

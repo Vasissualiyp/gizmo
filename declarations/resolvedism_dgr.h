@@ -28,6 +28,9 @@ static inline double resolvedism_cell_DGR_solar(int p)
 #endif
     if(dgr > 10.0) {dgr = 10.0;}
     if(dgr < 0) {dgr = 0;}
+#ifdef CHEMCOOL
+    if(CellP[p].Temp > 1.0e5) {dgr = 0;} /* sputtering regime: same gate as the chemistry input (chem_interface.cc) */
+#endif
     return dgr;
 }
 #endif

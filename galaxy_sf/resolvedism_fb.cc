@@ -8,6 +8,47 @@
 #include "../mesh/kernel.h"
 #include "resolvedism_selfcheck.h"
 #include "resolvedism_fb_shared.h"
+#include <vector>
+
+/* Death-event log rows (SNinfo/AGBinfo), written when the outcome is known (booking), so failed
+ * and no-gas events appear once each with their real (possibly zero) energy and mass return. */
+struct fb_death_row {double t, x, y, z, u, rho, mstar, mej, zej, yC, yO, ySi, yFe, age, life, E; long long id; int remtype, tb, status, agb;};
+static std::vector<fb_death_row> FbDeathRows;
+#define FB_LOG_EXPLODED 0  /* exploded/ejected and deposited */
+#define FB_LOG_FAILED   1  /* failed SN (FSN/DBH): no energy, no ejecta */
+#define FB_LOG_NOGAS    2  /* attempt reached no gas: nothing booked, retried later */
+
+static void fb_death_row_push(int i, int agb, int remtype, int status, double E, const double y[6], double age, double life)
+{
+    fb_death_row r; r.t = All.Time; r.x = P[i].Pos[0]; r.y = P[i].Pos[1]; r.z = P[i].Pos[2];
+    r.u = P[i].InternalEnergyAroundParticle; r.rho = P[i].DensityAroundParticle; r.mstar = P[i].MstarSampleIMF[0];
+    r.mej = y[0]; r.zej = y[1]; r.yC = y[2]; r.yO = y[3]; r.ySi = y[4]; r.yFe = y[5]; r.age = age; r.life = life; r.E = E;
+    r.id = (long long)P[i].ID; r.remtype = remtype; r.tb = P[i].TimeBin; r.status = status; r.agb = agb;
+    FbDeathRows.push_back(r);
+}
+
+static void fb_death_rows_flush(void)
+{
+    int n_loc = (int)FbDeathRows.size(), n_tot = 0;
+    MPI_Allreduce(&n_loc, &n_tot, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    if(n_tot == 0) {FbDeathRows.clear(); return;}
+    int nb = n_loc * (int)sizeof(fb_death_row), *cnt = NULL, *dsp = NULL; std::vector<fb_death_row> all;
+    if(ThisTask == 0) {cnt = (int *)malloc(NTask * sizeof(int)); dsp = (int *)malloc(NTask * sizeof(int)); all.resize(n_tot);}
+    MPI_Gather(&nb, 1, MPI_INT, cnt, 1, MPI_INT, 0, MPI_COMM_WORLD);
+    if(ThisTask == 0) {dsp[0] = 0; for(int t = 1; t < NTask; t++) dsp[t] = dsp[t-1] + cnt[t-1];}
+    MPI_Gatherv(FbDeathRows.data(), nb, MPI_BYTE, ThisTask == 0 ? (void *)all.data() : NULL, cnt, dsp, MPI_BYTE, 0, MPI_COMM_WORLD);
+    if(ThisTask == 0) {
+        for(int k = 0; k < n_tot; k++) {
+            const fb_death_row &r = all[k];
+            if(r.agb) fprintf(FdAGBinfo, "%12.6f  %10.6f %10.6f %10.6f  %10.3f %12.6e  %10lld  %8.3f  %8.3f  %8.3f  %8.4f %8.4f %8.4f %8.4f  %.6e  %.6e  %3d  %d\n",
+                              r.t, r.x, r.y, r.z, r.u, r.rho, r.id, r.mstar, r.mej, r.zej, r.yC, r.yO, r.ySi, r.yFe, r.age, r.life, r.tb, r.status);
+            else fprintf(FdSNinfo, "%12.6f  %10.6f %10.6f %10.6f  %10.3f %12.6e  %10lld  %8.3f  %d  %8.3f  %8.3f  %8.4f %8.4f %8.4f %8.4f  %.6e  %.6e  %3d  %.4e  %d\n",
+                              r.t, r.x, r.y, r.z, r.u, r.rho, r.id, r.mstar, r.remtype, r.mej, r.zej, r.yC, r.yO, r.ySi, r.yFe, r.age, r.life, r.tb, r.E, r.status);
+        }
+        fflush(FdSNinfo); fflush(FdAGBinfo); free(dsp); free(cnt);
+    }
+    FbDeathRows.clear();
+}
 
 /* Resolved-ISM supernova feedback for individually sampled single stars.
  * Each star particle represents ONE star drawn from the Kroupa IMF.
@@ -154,6 +195,13 @@ void resolvedism_determine_SNe(void)
 #ifdef GALSF_RESOLVEDISM_INSTANT_SN
         if(All.Time < All.TimeInstantSN && Mstar >= 8.0) {lifetime_yr = 0;}
 #endif
+#ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
+        if(All.TestSNTime0 > 0 && P[i].ID >= 1 && P[i].ID <= (MyIDType)((All.TestNumStars>0)?All.TestNumStars:1)
+           && P[i].ID_generation == 0) { /* forced-SN sites: count exactly as the flagging pass decides */
+            if(All.Time >= All.TestSNTime0 + ((double)P[i].ID - 1.0) * All.TestSNSpacing) {n_death_count++;}
+            continue;
+        }
+#endif
         if(star_age_yr > lifetime_yr) {n_death_count++;}
     }
 
@@ -265,6 +313,8 @@ void resolvedism_determine_SNe(void)
          * correct value for the FeedbackBudget log. */
         P[i].M_at_SN_trigger = (MyFloat)(P[i].Mass * UNIT_MASS_IN_SOLAR);
         /* NOTE: do NOT zero MstarSampleIMF here — particle2in needs it */
+        STELLA_CHECK("sn_log_buffer", n_logged < DMAX(n_death_count,1), "ID=%llu n_logged=%d allocated=%d", (unsigned long long)P[i].ID, n_logged, (int)DMAX(n_death_count,1));
+        STELLA_CHECK_RAN("sn_log_buffer", 1);
         sn_x[n_logged] = P[i].Pos[0];
         sn_y[n_logged] = P[i].Pos[1];
         sn_z[n_logged] = P[i].Pos[2];
@@ -401,19 +451,7 @@ void resolvedism_determine_SNe(void)
         if(ThisTask == 0)
         {
             for(i = 0; i < n_logged_total; i++) {
-                if(all_remtype[i] == REM_WD) {
-                    fprintf(FdAGBinfo, "%12.6f  %10.6f %10.6f %10.6f  %10.3f %12.6e  %10lld  %8.3f  %8.3f  %8.3f  %8.4f %8.4f %8.4f %8.4f  %.6e  %.6e  %3d\n",
-                        All.Time, all_x[i], all_y[i], all_z[i], all_u[i], all_rho[i],
-                        all_id[i], all_mstar[i], all_mej[i], all_zej[i],
-                        all_yC[i], all_yO[i], all_ySi[i], all_yFe[i],
-                        all_age[i], all_lifetime[i], all_timebin[i]);
-                } else {
-                    fprintf(FdSNinfo, "%12.6f  %10.6f %10.6f %10.6f  %10.3f %12.6e  %10lld  %8.3f  %d  %8.3f  %8.3f  %8.4f %8.4f %8.4f %8.4f  %.6e  %.6e  %3d\n",
-                        All.Time, all_x[i], all_y[i], all_z[i], all_u[i], all_rho[i],
-                        all_id[i], all_mstar[i], all_remtype[i], all_mej[i], all_zej[i],
-                        all_yC[i], all_yO[i], all_ySi[i], all_yFe[i],
-                        all_age[i], all_lifetime[i], all_timebin[i]);
-                }
+                (void)all_remtype; /* rows are written at booking (fb_death_rows_flush) */
             }
             fflush(FdSNinfo); fflush(FdAGBinfo);
             myfree(all_timebin);
@@ -549,12 +587,7 @@ void resolvedism_determine_SNe(void)
             MPI_Gatherv(ia_id, n_ia_logged, MPI_LONG_LONG, all_ia_id, recvcounts_ia, displs_ia, MPI_LONG_LONG, 0, MPI_COMM_WORLD);
             MPI_Gatherv(ia_age, n_ia_logged, MPI_DOUBLE, all_ia_age, recvcounts_ia, displs_ia, MPI_DOUBLE, 0, MPI_COMM_WORLD);
             if(ThisTask == 0) {
-                for(i = 0; i < n_ia_total; i++) {
-                    fprintf(FdSNinfo, "%12.6f  %10.6f %10.6f %10.6f  %10.3f %12.6e  %10lld  %8.3f  %d  %8.3f  %8.3f  %.6e  %.6e\n",
-                        All.Time, all_ia_x[i], all_ia_y[i], all_ia_z[i], all_ia_u[i], all_ia_rho[i],
-                        all_ia_id[i], all_ia_mstar[i], 7, IA_EJECTA_MASS, 0.0, all_ia_age[i], 0.0); /* 7=TypeIa, M_ej=Mch, Z_ej=0(Fe-peak in budget), no lifetime */
-                }
-                fflush(FdSNinfo);
+                /* Ia rows are written at booking (fb_death_rows_flush) */
                 myfree(all_ia_age); myfree(all_ia_id); myfree(all_ia_mstar); myfree(all_ia_rho);
                 myfree(all_ia_u); myfree(all_ia_z); myfree(all_ia_y); myfree(all_ia_x);
                 myfree(displs_ia); myfree(recvcounts_ia);
@@ -805,16 +838,17 @@ void resolvedism_inject_fb_energy(void)
     resolvedism_fb_serialized_pass(resolvedism_fb_thermal_calc, 1, 4);
     MBARY_STEP("post_fb_thermal");
 
-    /* Budget tracking: local accumulators for [0]=SN, [1]=AGB, [2]=wind, [3]=radpressure, [4]=Ia */
-    double n_events[5] = {0,0,0,0,0};
-    double M_injected[5] = {0,0,0,0,0};   /* ejecta mass [Msun] */
-    double M_removed[5] = {0,0,0,0,0};    /* mass removed from star [Msun] */
-    double E_injected[5] = {0,0,0,0,0};   /* energy [erg] */
-    double dp_injected[5] = {0,0,0,0,0};  /* |momentum| [g*cm/s] */
-    double Z_injected[5] = {0,0,0,0,0};   /* metals injected [Msun] */
+    /* Budget tracking: [0]=SN, [1]=AGB, [2]=wind, [3]=radpressure, [4]=Ia, [5]=failed SN / no-gas attempt (E=M=0) */
+    double n_events[6] = {0,0,0,0,0,0};
+    double M_injected[6] = {0,0,0,0,0,0};   /* ejecta mass [Msun] */
+    double M_removed[6] = {0,0,0,0,0,0};    /* mass removed from star [Msun] */
+    double E_injected[6] = {0,0,0,0,0,0};   /* energy [erg] */
+    double dp_injected[6] = {0,0,0,0,0,0};  /* |momentum| [g*cm/s] */
+    double Z_injected[6] = {0,0,0,0,0,0};   /* metals injected [Msun] */
 
     /* Wind event logging buffers */
-    int n_wind_logged = 0, n_wind_alloc = 64;
+    int n_wind_logged = 0, n_wind_alloc = 1; /* sized to this step's wind events (was a fixed 64 that dropped rows) */
+    for(int iw = FirstActiveParticle; iw >= 0; iw = NextActiveParticle[iw]) {if(P[iw].Type == 4 && P[iw].SNe_ThisTimeStep == 3) n_wind_alloc++;}
     double *wind_log_x = (double *)mymalloc("wind_log_x", n_wind_alloc * sizeof(double));
     double *wind_log_y = (double *)mymalloc("wind_log_y", n_wind_alloc * sizeof(double));
     double *wind_log_z = (double *)mymalloc("wind_log_z", n_wind_alloc * sizeof(double));
@@ -848,6 +882,12 @@ void resolvedism_inject_fb_energy(void)
             if(has_payload && !P[i].FB_Deposited) {
                 /* no gas reached: book nothing, keep the star's mass, retry next step */
                 P[i].FB_NoDepositCount++;
+                if(P[i].SNe_ThisTimeStep != 3) { /* SN/AGB/Ia attempt that reached no gas: record with zero energy and mass */
+                    const double y0[6] = {0,0,0,0,0,0}; double Ms0_, lM0_, lZ0_; int rt0_ = (P[i].SNe_ThisTimeStep == 4) ? 7 : 0;
+                    if(P[i].SNe_ThisTimeStep != 4 && get_star_info(i, &Ms0_, &lM0_, &lZ0_)) {rt0_ = stellar_remnant_type(lM0_, lZ0_);}
+                    n_events[5] += 1;
+                    fb_death_row_push(i, P[i].SNe_ThisTimeStep == 2, rt0_, FB_LOG_NOGAS, 0.0, y0, evaluate_stellar_age_Gyr(i) * 1.0e9, 0.0);
+                }
                 printf("RESOLVEDISM FB: event flag=%d ID=%llu deposited nothing (no gas); not booked, retry %d\n",
                        (int)P[i].SNe_ThisTimeStep, (unsigned long long)P[i].ID, (int)P[i].FB_NoDepositCount);
                 if(P[i].SNe_ThisTimeStep != 4) {P[i].M_at_SN_trigger = -1;} /* Ia keeps its trigger to re-fire */
@@ -967,6 +1007,9 @@ void resolvedism_inject_fb_energy(void)
             double Z_ia = 0;
             for(int kk = ELEM_C; kk < STBL_NELEM; kk++) Z_ia += stellar_type_ia_yield(kk) * yield_rescale;
             Z_injected[4] += Z_ia;
+            {double yia[6] = {M_WD, Z_ia, stellar_type_ia_yield(ELEM_C) * yield_rescale, stellar_type_ia_yield(ELEM_O) * yield_rescale,
+                              stellar_type_ia_yield(ELEM_Si) * yield_rescale, stellar_type_ia_yield(ELEM_Fe) * yield_rescale};
+             fb_death_row_push(i, 0, 7, FB_LOG_EXPLODED, IA_ENERGY_ERG, yia, evaluate_stellar_age_Gyr(i) * 1.0e9, 0.0);}
             printf("RESOLVEDISM TYPE_IA: Task=%d ID=%llu M_WD=%.3f E=%.2e[erg]\n",
                 ThisTask, (unsigned long long)P[i].ID, M_WD, IA_ENERGY_ERG);
             /* Do NOT set P[i].Mass = 0 here — the fb_thermal walk's out2particle
@@ -1032,6 +1075,20 @@ void resolvedism_inject_fb_energy(void)
             double scale_diag = (Mej_table > 0) ? Mej_actual / Mej_table : 0;
             double Mej_solar = Mej_actual;
             double Z_ej = Z_ej_table * scale_diag;
+            if(channel == 0 && (rem_type == REM_FSN || rem_type == REM_DBH)) {channel = 5;} /* failed SN: recorded, zero energy */
+            {
+                double yl[6] = {Mej_solar, Z_ej, 0, 0, 0, 0}; const int ke[4] = {ELEM_C, ELEM_O, ELEM_Si, ELEM_Fe};
+                for(int q = 0; q < 4; q++) {
+                    double m_q = (channel == 1) ? stellar_elem_ej_AGB(logM, logZ, ke[q]) : stellar_elem_ej_SN(logM, logZ, ke[q]);
+#ifndef GALSF_RESOLVEDISM_WINDS
+                    if(channel != 1) m_q += stellar_elem_ej_wind_cumulative(logM, logZ, log_age_end_acc, ke[q]);
+#endif
+                    yl[2 + q] = m_q * scale_diag;
+                }
+                double age_l = evaluate_stellar_age_Gyr(i) * 1.0e9;
+                fb_death_row_push(i, channel == 1, (channel == 1) ? REM_WD : rem_type, (channel == 5) ? FB_LOG_FAILED : FB_LOG_EXPLODED,
+                                  (channel == 0) ? 1.0e51 : 0.0, yl, age_l, get_star_lifetime(Mstar, logM, logZ));
+            }
 
             n_events[channel] += 1;
             M_injected[channel] += Mej_solar;
@@ -1048,7 +1105,7 @@ void resolvedism_inject_fb_energy(void)
              * mass is bit-exact conserved per event.  The final mass differs from
              * the table remnant mass by ~1% scatter (whatever Σ wk_j actually was);
              * trading exact-remnant-mass for exact-budget-closure on the injection. */
-            if(channel == 0) {
+            if(channel != 1) {
                 printf("RESOLVEDISM SN: Task=%d ID=%llu M_init=%.2f M_ej=%.2f M_rem=%.2f rem_type=%d E=%.2e[erg]\n",
                     ThisTask, (unsigned long long)P[i].ID, Mstar, Mej_solar, rem_mass, rem_type,
                     (rem_type==REM_FSN||rem_type==REM_DBH)?0.0:1.0e51);
@@ -1221,17 +1278,19 @@ void resolvedism_inject_fb_energy(void)
     dp_injected[3] = RadPressure_dp_thisStep; /* exact dp from particle2in */
 #endif
 
+    fb_death_rows_flush();
+
     /* ---- MPI reduce and write feedback budget ---- */
-    double glob_n[5], glob_Mi[5], glob_Mr[5], glob_E[5], glob_dp[5], glob_Z[5];
-    MPI_Reduce(n_events,    glob_n,  5, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(M_injected,  glob_Mi, 5, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(M_removed,   glob_Mr, 5, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(E_injected,  glob_E,  5, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(dp_injected, glob_dp, 5, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(Z_injected,  glob_Z,  5, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    double glob_n[6], glob_Mi[6], glob_Mr[6], glob_E[6], glob_dp[6], glob_Z[6];
+    MPI_Reduce(n_events,    glob_n,  6, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(M_injected,  glob_Mi, 6, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(M_removed,   glob_Mr, 6, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(E_injected,  glob_E,  6, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(dp_injected, glob_dp, 6, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Reduce(Z_injected,  glob_Z,  6, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
 
     if(ThisTask == 0) {
-        for(int ch = 0; ch < 5; ch++) {
+        for(int ch = 0; ch < 6; ch++) {
             if(glob_n[ch] > 0) {
                 /* Radpressure (ch=3): only log on full (domain decomp) steps to avoid flooding */
                 if(ch == 3 && All.HighestActiveTimeBin != All.HighestOccupiedTimeBin) continue;
@@ -1249,8 +1308,8 @@ void resolvedism_inject_fb_energy(void)
         fflush(FdFeedbackBudget);
         /* Print budget summary to stdout (domain decomp steps only) */
         if(All.HighestActiveTimeBin == All.HighestOccupiedTimeBin) {
-            const char *chname[5] = {"SN", "AGB", "wind", "radpres", "Ia"};
-            for(int ch = 0; ch < 5; ch++) {
+            const char *chname[6] = {"SN", "AGB", "wind", "radpres", "Ia", "failed"};
+            for(int ch = 0; ch < 6; ch++) {
                 if(glob_n[ch] > 0) {
                     printf("RESOLVEDISM BUDGET: ch=%s n=%.0f M_inj=%.4f M_rem=%.4f E=%.2e dp=%.2e Z_inj=%.4f [Msun/erg/cgs] at t=%g\n",
                         chname[ch], glob_n[ch], glob_Mi[ch], glob_Mr[ch], glob_E[ch], glob_dp[ch], glob_Z[ch], All.Time);

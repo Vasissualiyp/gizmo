@@ -124,14 +124,14 @@ void chemcxx_pure_calc_photo(double temp, double abh2, double abhd, double abco)
 double chemcxx_pure_calc_temp(double abh2, double ekn)
 {
     double t, g;
-    cxx_lookup_temp_gamma(abh2, ekn, &t, &g, g_tab);
+    cxx_lookup_temp_gamma(abh2, tl_cell.abhe, ekn, &t, &g, g_tab);
     return t;
 }
 
 double chemcxx_pure_calc_gamma(double abh2, double ekn)
 {
     double t, g;
-    cxx_lookup_temp_gamma(abh2, ekn, &t, &g, g_tab);
+    cxx_lookup_temp_gamma(abh2, tl_cell.abhe, ekn, &t, &g, g_tab);
     return g;
 }
 

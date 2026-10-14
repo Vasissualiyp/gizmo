@@ -24,7 +24,8 @@
 #define CHEM_NCONST  91
 #define CHEM_NRATES  28      /* cool_func radiative rates */
 #define CHEM_NPIX    12      /* NSIDE=1 HEALPix, as one-zone/production */
-#define CHEM_ISIZE   250000  /* energy/gamma table rows (gamma.h) */
+#define CHEM_NETAB_X 21      /* energy table blocks in x = abh2/(1+abhe-abh2) (gamma.h netab_x) */
+#define CHEM_ISIZE   (50000 * CHEM_NETAB_X)  /* energy/gamma table rows (gamma.h) */
 #define CHEM_ISIZE2  50000   /* eh2 table rows */
 #define CHEM_NABN    16      /* ABUND_NUM: cool_func abundance vector */
 
@@ -339,7 +340,7 @@ void cxx_calc_photo(double temp, double abh2, double abhd, double abco,
                     ChemCell& c);
 
 // ---- calc_temp.F / compute_gamma.F (chem_calc_temp.cc) -------------------
-void cxx_lookup_temp_gamma(double abh2, double ekn, double* temp, double* gamma,
+void cxx_lookup_temp_gamma(double abh2, double abhe, double ekn, double* temp, double* gamma,
                            const ChemTables& T);
 double cxx_calc_spec(const ChemTables& T, double temp);
 double cxx_calc_gamma_temp(const ChemTables& T, double abh2, double temp,

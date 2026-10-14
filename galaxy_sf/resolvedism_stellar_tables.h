@@ -7,6 +7,9 @@
 #define STBL_NM    110
 #define STBL_NAGE  768
 #define STBL_NELEM 27     /* element-summed yields in the table */
+#ifdef GALSF_RESOLVEDISM_METALS_ISOTOPES
+#error "GALSF_RESOLVEDISM_METALS_ISOTOPES is not implemented: tables and injection use the 27-element layout (STBL_NELEM, ELEM_*, MET_OF) but the flag sets NUM_RESOLVEDISM_ELEMENTS=40"
+#endif
 #define STBL_NISO  40     /* isotope-resolved yields in the table */
 
 /* Element index mapping (matches HDF5 'elements' dataset order).

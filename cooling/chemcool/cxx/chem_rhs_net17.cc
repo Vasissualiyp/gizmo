@@ -92,7 +92,7 @@ int chem_rhs_net17(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     double ekn = energy / (CHEM_KBOLTZ * yntot);
     if (ekn != ekn) return CHEM_RHS_RECOVERABLE;
     double temp, gamma;
-    cxx_lookup_temp_gamma(abh2, ekn, &temp, &gamma, T);
+    cxx_lookup_temp_gamma(abh2, c.abhe, ekn, &temp, &gamma, T);
     if (temp != temp || gamma != gamma) return CHEM_RHS_RECOVERABLE;
 
     // --- Jeans length EARLY, with cs2 clamp (.F:222-226) ---

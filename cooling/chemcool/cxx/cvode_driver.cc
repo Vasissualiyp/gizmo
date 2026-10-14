@@ -244,7 +244,7 @@ int cxx_evolve_abundances(double time, double dl, double yn, double divv,
         double yntot_byp = (1.0 + c.abhe + y[ihp] - y[ih2]) * yn;
         double ekn_byp = y[itmp] / (CHEM_KBOLTZ * yntot_byp);
         double temp_byp, gam_byp;
-        cxx_lookup_temp_gamma(y[ih2], ekn_byp, &temp_byp, &gam_byp, *c.tab);
+        cxx_lookup_temp_gamma(y[ih2], c.abhe, ekn_byp, &temp_byp, &gam_byp, *c.tab);
         if (temp_byp > CHEMCOOL_TNOCHEM) {
             y[ih2] = 0.0;
             y[ico] = 0.0;
@@ -273,7 +273,7 @@ int cxx_evolve_abundances(double time, double dl, double yn, double divv,
                 if (t_start >= t_end - 1e-10 * t_end) { done = 1; break; }  // WEDGEFIX 3
                 yntot_byp = (1.0 + c.abhe + y[ihp] - y[ih2]) * yn;
                 ekn_byp = y[itmp] / (CHEM_KBOLTZ * yntot_byp);
-                cxx_lookup_temp_gamma(y[ih2], ekn_byp, &temp_byp, &gam_byp, *c.tab);
+                cxx_lookup_temp_gamma(y[ih2], c.abhe, ekn_byp, &temp_byp, &gam_byp, *c.tab);
                 if (temp_byp <= CHEMCOOL_TNOCHEM) break;    // hand off to stiff path
             }
             // budget exhausted while hot: accept state (.F:257-259)

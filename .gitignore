@@ -29,4 +29,5 @@ test/unit/test_yield_invariants
 galaxy_sf/stellar_tables/*.hdf5
 galaxy_sf/stellar_tables/spectra/atlas9/*.pck
 cooling/chemcool/energy-table.txt
+cooling/chemcool/energy-table-x.txt
 galaxy_sf/stellar_tables/spectra

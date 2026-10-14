@@ -54,7 +54,7 @@ int chem_rhs_net5(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     double yntot = (1.0 + c.abhe - abh2 + abe) * yn;
     double ekn = energy / (yntot * CHEM_KBOLTZ);
     double temp, gamma;
-    cxx_lookup_temp_gamma(abh2, ekn, &temp, &gamma, T);
+    cxx_lookup_temp_gamma(abh2, c.abhe, ekn, &temp, &gamma, T);
 
     // --- temperature bounds / table index (.F:150-168) ---
     ChemTIdx ti = chem_temp_index(temp, T);

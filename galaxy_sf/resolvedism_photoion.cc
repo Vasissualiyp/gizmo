@@ -492,7 +492,8 @@ void resolvedism_photoionize(void)
      * stars' histograms (Ionized==2 skip, at zero cost — same multi-star
      * bookkeeping as v1). */
     PRINT_STATUS(" ..photo-ionizing gas around single stars");
-    int iter = 0, max_iter = 20;
+    int nslots_tot = 0; MPI_Allreduce(&nslots, &nslots_tot, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    int iter = 0, max_iter = (int)DMIN(20 + nslots_tot, 1000); /* ID serialization finalizes >=1 star per overlap cluster per pass */
     int incomplete_total = 0;
     do {
         /* --- sweep A: cost histograms for all unfinished ionizing stars --- */
@@ -655,6 +656,7 @@ void resolvedism_photoionize(void)
         MPI_Allreduce(&incomplete_local, &incomplete_total, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         iter++;
     } while(incomplete_total > 0 && iter < max_iter);
+    if(ThisTask == 0 && iter >= max_iter && max_iter >= 1000) {printf("WARNING: RESOLVEDISM PI hit max_iter=%d with %d sources: final pass finalized overlapping sources together (shared cells billed more than once)\n", max_iter, nslots_tot);}
 
     FirstActiveParticle = pi_saved_first_active; /* unsplice */
 

@@ -529,7 +529,14 @@ void star_formation_parent_routine(void)
 
 #ifdef GALSF_RESOLVEDISM_SF_INSTANT_CUTOFF
                 {double nH = CellP[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS * HYDROGEN_MASSFRAC / PROTONMASS_CGS;
-                if(nH > All.nHcutoffSF) {prob = 2.0;}} /* instant SF above density cutoff */
+                if(nH > All.nHcutoffSF && prob < 2.0) { /* instant SF above density cutoff */
+#ifdef GALSF_RESOLVEDISM_SAMPLE_IMF
+                    /* forced formation skips the 1/M acceptance: redraw by number (accept mass-weighted draw with M_min/M) */
+                    double m_lo = DMAX(All.IMFSampleMinMass, 0.08);
+                    do {M_drawn_imf = draw_one_mass_from_kroupa_IMF();} while(gsl_rng_uniform(random_generator) > m_lo / M_drawn_imf);
+                    m_drawn_code = M_drawn_imf / UNIT_MASS_IN_SOLAR;
+#endif
+                    prob = 2.0;}}
 #endif
 
 #if defined(METALS) && defined(GALSF_EFFECTIVE_EQS) // does instantaneous enrichment //

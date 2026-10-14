@@ -492,7 +492,7 @@ static int kernels(const ChemTables& TT, const char* tag, int net)
             double ekn = 0.5 + i * 12.5;         // spans below 1 and above 5e4
             double tF, gF, tC, gC;
             fort_lookup_temp_gamma(h2s[hi], ekn, &tF, &gF);
-            cxx_lookup_temp_gamma(h2s[hi], ekn, &tC, &gC, TT);
+            cxx_lookup_temp_gamma(h2s[hi], CHEM_COMP.abhe, ekn, &tC, &gC, TT);
             rt.add(tF, tC); rg.add(gF, gC); per[hi].add(tF, tC);
         }
         std::printf("PHASE %s -- lookup_temp_gamma\n", tag);

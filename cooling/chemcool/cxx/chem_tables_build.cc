@@ -193,7 +193,7 @@ static int read_temp_gamma(const std::string& dir, ChemTableStore& S)
     S.gamma_table.assign(CHEM_ISIZE, 0.0);
     S.eh2_table.assign(CHEM_ISIZE2, 0.0);
 
-    std::string p1 = dir + "/energy-table.txt";
+    std::string p1 = dir + "/energy-table-x.txt";
     FILE* f = std::fopen(p1.c_str(), "r");
     if (!f) { std::printf("CHEMCOOL_CXX: cannot open %s\n", p1.c_str()); return 1; }
     for (int I = 0; I < CHEM_ISIZE; I++) {

@@ -22,6 +22,8 @@
 #include "../../declarations/allvars.h"
 #include "../../core/proto.h"
 #include "chem_interface.h"
+#include "../../declarations/resolvedism_dgr.h"
+#include "../../galaxy_sf/resolvedism_selfcheck.h"
 
 #ifdef CHEMCOOL
 
@@ -568,6 +570,11 @@ void chem_fill_inputs(int target, struct ChemInputs *in)
      * grain-assisted recombination must survive.  Below 1e5 K the 10x-MW
      * certified-domain cap above still applies.  Stored fields untouched. */
     if(temp > 1.0e5) {in->dust_to_gas_ratio = 0;}
+    STELLA_CHECK("dgr_consistent", !(temp > 1.0e5 && CellP[target].Temp > 1.0e5) || resolvedism_cell_DGR_solar(target) == 0,
+                 "ID=%llu T=%g Temp_stored=%g DGR_shared=%g", (unsigned long long)P[target].ID, temp, (double)CellP[target].Temp, resolvedism_cell_DGR_solar(target));
+#ifdef STELLA_SELFCHECK
+    if(temp > 1.0e5 && CellP[target].Temp > 1.0e5) {static int n_dgrchk = 0; if(++n_dgrchk == 1 || n_dgrchk % 1000 == 0) STELLA_CHECK_RAN("dgr_consistent", 1);}
+#endif
 
 
 #ifdef TREE_RAD

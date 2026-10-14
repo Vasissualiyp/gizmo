@@ -85,14 +85,14 @@ static double relax(const ChemTables& T, int net, double T0, double nH,
         ntot = nH * (1.0 + c.abhe - ab[CIH2]);
         double ekn = energy / (ntot * KBOLTZ_D);
         double tt, gg;
-        cxx_lookup_temp_gamma(ab[CIH2], ekn, &tt, &gg, T);
+        cxx_lookup_temp_gamma(ab[CIH2], c.abhe, ekn, &tt, &gg, T);
         T0 = tt;
     }
     if (rc_out) *rc_out = rc;
     ntot = nH * (1.0 + c.abhe - ab[CIH2]);
     double ekn = energy / (ntot * KBOLTZ_D);
     double tt, gg;
-    cxx_lookup_temp_gamma(ab[CIH2], ekn, &tt, &gg, T);
+    cxx_lookup_temp_gamma(ab[CIH2], c.abhe, ekn, &tt, &gg, T);
     return tt;
 }
 
