@@ -28,9 +28,9 @@ if (ROOTFUNC_a * ROOTFUNC_b > 0) {
     double bracket_fac = 1.1;
     int bracket_iter = 0;
     do {
-        double tmp = ROOTFIND_X_a; // let a be the lower value
-        ROOTFIND_X_a = DMIN(ROOTFIND_X_a, ROOTFIND_X_b) / bracket_fac;
-        ROOTFIND_X_b = DMAX(tmp, ROOTFIND_X_b) * bracket_fac;
+        double lo_tmp = DMIN(ROOTFIND_X_a, ROOTFIND_X_b), hi_tmp = DMAX(ROOTFIND_X_a, ROOTFIND_X_b);
+        if (lo_tmp > 0) {ROOTFIND_X_a = lo_tmp / bracket_fac; ROOTFIND_X_b = hi_tmp * bracket_fac;} // positive variable: geometric widening keeps it positive
+        else {double w_tmp = hi_tmp - lo_tmp; ROOTFIND_X_a = lo_tmp - w_tmp; ROOTFIND_X_b = hi_tmp + w_tmp;} // sign-agnostic widening
         ROOTFUNC_a = ROOTFUNC(ROOTFIND_X_a);
         ROOTFUNC_b = ROOTFUNC(ROOTFIND_X_b);
         bracket_iter++;
@@ -54,10 +54,14 @@ if (fabs(ROOTFUNC_a) < fabs(ROOTFUNC_b)) { // in our convention 'a' represents
 
 double ROOTFIND_X_c = ROOTFIND_X_a, ROOTFUNC_c = ROOTFUNC_a;
 int USED_BISECTION = 1, DO_BISECTION = 0, ROOTFIND_ITER = 0;
-double ROOTFIND_X_c_old = ROOTFIND_X_c, ROOTFIND_X_new, ROOTFUNC_new = ROOTFUNC_c, ROOTFIND_X_error = 1e100, DELTA_TOL = 0.;
+double ROOTFIND_X_c_old = ROOTFIND_X_c, ROOTFIND_X_new = ROOTFIND_X_b, ROOTFUNC_new = ROOTFUNC_b, ROOTFIND_X_error = 1e100, DELTA_TOL = 0.;
+if (ROOTFUNC_b == 0 || ROOTFUNC_a == 0) { // exact zero at an end point: return it as is
+    if (ROOTFUNC_b != 0) {ROOTFIND_X_new = ROOTFIND_X_a; ROOTFUNC_new = ROOTFUNC_a;}
+    ROOTFIND_X_error = 0;
+}
 
 /* now we do a Brent 1973 method root-find */
-do {
+while (ROOTFIND_X_error > DELTA_TOL) {
     ROOTFIND_X_new = 0;
     if ((ROOTFUNC_a != ROOTFUNC_c) && (ROOTFUNC_b != ROOTFUNC_c)) { // inverse quadratic interpolation
         ROOTFIND_X_new += ROOTFIND_X_a * ROOTFUNC_c * ROOTFUNC_b / (ROOTFUNC_a - ROOTFUNC_b) / (ROOTFUNC_a - ROOTFUNC_c);
@@ -66,15 +70,15 @@ do {
     } else { // secant method
         ROOTFIND_X_new = (ROOTFIND_X_a * ROOTFUNC_b - ROOTFIND_X_b * ROOTFUNC_a) / (ROOTFUNC_b - ROOTFUNC_a);
     }
-    DELTA_TOL = DMAX(fabs(ROOTFIND_ABS_X_tol), ROOTFIND_REL_X_tol * fabs(ROOTFIND_X_new)); // new absolute tolerance, incorporating relative tolerance
+    DELTA_TOL = DMAX(fabs(ROOTFIND_ABS_X_tol), ROOTFIND_REL_X_tol * fabs(ROOTFIND_X_b)); // tolerance relative to the best estimate b, not to the proposed point
 
     DO_BISECTION = 0;
     double ROOTFIND_X_midpoint_a = 0.25 * (3 * ROOTFIND_X_a + ROOTFIND_X_b);
     if ((ROOTFIND_X_new < DMIN(ROOTFIND_X_midpoint_a, ROOTFIND_X_b)) || (ROOTFIND_X_new > DMAX(ROOTFIND_X_midpoint_a, ROOTFIND_X_b))) {
         DO_BISECTION = 1;
-    } else { // accept the interpolation and bug out if it looks converged
+    } else { // accept the interpolation; a step shorter than the tolerance becomes a minimal step (Brent 1973), not an exit
         if (fabs(ROOTFIND_X_new - ROOTFIND_X_b) < DELTA_TOL) {
-            break;
+            ROOTFIND_X_new = ROOTFIND_X_b + ((ROOTFIND_X_a > ROOTFIND_X_b) ? DELTA_TOL : -DELTA_TOL);
         }
     }
     if (USED_BISECTION) {
@@ -109,6 +113,7 @@ do {
     else {
         USED_BISECTION = 0;
     }
+    DELTA_TOL = DMAX(fabs(ROOTFIND_ABS_X_tol), ROOTFIND_REL_X_tol * fabs(ROOTFIND_X_b)); // tolerance relative to the best estimate b, not to the (possibly wild) proposed point
     ROOTFUNC_new = ROOTFUNC(ROOTFIND_X_new);
     if (ROOTFUNC_new == 0) {
         break;
@@ -138,7 +143,8 @@ do {
     if (ROOTFIND_ITER > MAXITER) {
         break;
     }
-} while (ROOTFIND_X_error > DELTA_TOL);
+}
+if (ROOTFUNC_new != 0 && fabs(ROOTFUNC_b) < fabs(ROOTFUNC_new)) {ROOTFIND_X_new = ROOTFIND_X_b; ROOTFUNC_new = ROOTFUNC_b;} // return the best evaluated estimate, not whichever point was evaluated last
 
 #undef ROOTFUNC
 
