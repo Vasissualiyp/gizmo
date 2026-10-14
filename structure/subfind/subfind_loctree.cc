@@ -377,7 +377,7 @@ int subfind_locngb_compare_key(const void *a, const void *b)
 
 
 /*!   -- this subroutine is not openmp parallelized at present, so there's not any issue about conflicts over shared memory. if you make it openmp, make sure you protect the writes to shared memory here! -- */
-double subfind_locngb_treefind(MyDouble xyz[3], int desngb, double hguess)
+double subfind_locngb_treefind(Vec3<double>& xyz, int desngb, double hguess)
 {
   int numngb;
   double part_dens;
@@ -415,7 +415,7 @@ double subfind_locngb_treefind(MyDouble xyz[3], int desngb, double hguess)
 
 
 /*!   -- this subroutine is not openmp parallelized at present, so there's not any issue about conflicts over shared memory. if you make it openmp, make sure you protect the writes to shared memory here! -- */
-int subfind_locngb_treefind_variable(MyDouble searchcenter[3], double hguess)
+int subfind_locngb_treefind_variable(Vec3<double>& searchcenter, double hguess)
 {
   int numngb, no, p;
   double dx, dy, dz, r2, h2;

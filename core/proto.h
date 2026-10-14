@@ -6,6 +6,16 @@
 #ifdef COOLING
 #include "../cooling/cooling.h"
 #endif
+#ifdef JACO
+#include "../cooling/microphysics_func_jac.h"
+void call_jaco(struct particle_data *p, struct gas_cell_data *c);
+void gizmo_to_jaco(int i, SolveVars *sv, Params *pr, struct particle_data *pp, struct gas_cell_data *cell);
+void jaco_to_gizmo(int i, const SolveVars *sv, const Params *pr, struct particle_data *pp, struct gas_cell_data *cell);
+int jaco_solve(SolveVars *sv, const Params *pr, double tol);
+double jaco_eos_pressure(const SolveVars *sv, const Params *pr);
+double jaco_T_to_u(double T, const SolveVars *sv, const Params *pr, double *cv_out);
+double jaco_u_to_T(double u, const SolveVars *sv, const Params *pr);
+#endif
 #ifdef SINK_PARTICLES
 #include "../sinks/sink.h"
 #endif
@@ -53,14 +63,14 @@ int is_particle_a_special_zoom_target(int i);
 #endif
 int merge_particles_ij(int i, int j);
 int split_particle_i(int i, int n_particles_split, int i_nearest);
-double gamma_eos(int i);
 void do_first_halfstep_kick(void);
 void do_second_halfstep_kick(void);
+double matrix_invert_ndims(Mat3<double>& T, Mat3<double>& Tinv);
 double matrix_invert_ndims(double T[3][3], double Tinv[3][3]);
 #ifdef HERMITE_INTEGRATION
 int eligible_for_hermite(int i);
 void do_hermite_prediction(void);
-void do_hermite_correction(void);
+void do_hermite_correction(int final_pass);
 #endif
 #ifdef KETJU_REGULARIZATION
 void ketju_tag_regions(void);
@@ -92,10 +102,10 @@ double get_disk_mass(double time);
 void growing_disk_init(void);
 
 double get_turb_pot(double x, double y, double z);
-void calculate_and_assign_nonideal_mhd_coefficients(int i);
-void calculate_and_assign_conduction_and_viscosity_coefficients(int i);
+void calculate_and_assign_nonideal_mhd_coefficients(int i, struct particle_data *pp, struct gas_cell_data *cell);
+void calculate_and_assign_conduction_and_viscosity_coefficients(int i, struct particle_data *pp, struct gas_cell_data *cell);
 #ifdef TURB_DIFFUSION
-void calculate_and_assign_turbulent_diffusion_coefficients(int i);
+void calculate_and_assign_turbulent_diffusion_coefficients(int i, struct particle_data *pp = P, struct gas_cell_data *cell = CellP);
 #endif
 
 void   sub_turb_move_perturbers(double t0, double t1);
@@ -128,6 +138,16 @@ void make_list_of_active_particles(void);
 void output_extra_log_messages(void);
 
 
+/* Per-rank share of a balanced particle assignment, rounded UP. Plain TotNumPart/NTask throws
+   away the remainder before PartAllocFactor is applied, which is invisible at large N and is the
+   whole budget at small N (3 particles on 4 ranks truncates to 0, and nothing fits in 0). Every
+   place that derives the per-rank assignment cap calls this. */
+static inline long long balanced_particles_per_rank(long long total, int ntask)
+{
+    if(ntask <= 0) {return total;}
+    return total / (long long) ntask + ((total % (long long) ntask) != 0);   /* not (total+ntask-1)/ntask, which can overflow */
+}
+
 static inline double WRAP_POSITION_UNIFORM_BOX(double x)
 {
     while(x >= All.BoxSize) {x -= All.BoxSize;}
@@ -143,9 +163,22 @@ static inline double MINMOD(double a, double b) {return (a>0) ? ((b<0) ? 0 : DMI
 /* special version of MINMOD below: a is always the "preferred" choice, b the stability-required one. here we allow overshoot, just not opposite signage */
 static inline double MINMOD_G(double a, double b) {return a;}
 
+static inline double c_light_code_reduced(int k_freq, struct particle_data *pp, struct gas_cell_data *cell) {
+#if defined(RT_FLUXLIMITER)
+    return C_LIGHT_CODE;
+#else
+    return RT_SPEEDOFLIGHT_REDUCTION * C_LIGHT_CODE;
+#endif
+}
+static inline double rsol_correction_factor_for_velocity_terms(int k_freq, struct particle_data *pp, struct gas_cell_data *cell) {return RT_SPEEDOFLIGHT_REDUCTION;}
+
 double ForceSoftening_KernelRadius(int p);
 double sigmoid_sqrt(double x);
-double velocity_gradient_norm(int i);
+/* velocity_gradient_norm is now a member function of gas_cell_data — use cell[i].velocity_gradient_norm() */
+/* Free-function compat shims for modules synced verbatim from gizmo-cpp (the dust chemistry
+   module calls these as globals; here they are member functions): */
+static inline double Get_Particle_Size(int i) {return P[i].Get_Particle_Size();}
+static inline double velocity_gradient_norm(int i) {return CellP[i].velocity_gradient_norm();}
 
 #ifdef BOX_SHEARING
 void calc_shearing_box_pos_offset(void);
@@ -155,10 +188,12 @@ void calc_shearing_box_pos_offset(void);
 int ngb_treefind_variable_threads_targeted(MyDouble searchcenter[3], MyFloat rkern, int target, int *startnode,
                                            int mode, int *exportflag, int *exportnodecount, int *exportindex,
                                            int *ngblist, int TARGET_BITMASK);
+inline int ngb_treefind_variable_threads_targeted(const Vec3<MyDouble>& searchcenter, MyFloat rkern, int target, int *startnode, int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist, int TARGET_BITMASK) { return ngb_treefind_variable_threads_targeted(const_cast<MyDouble*>(searchcenter.data), rkern, target, startnode, mode, exportflag, exportnodecount, exportindex, ngblist, TARGET_BITMASK); }
 
 int ngb_treefind_pairs_threads_targeted(MyDouble searchcenter[3], MyFloat rkern, int target, int *startnode,
                                            int mode, int *exportflag, int *exportnodecount, int *exportindex,
                                            int *ngblist, int TARGET_BITMASK);
+inline int ngb_treefind_pairs_threads_targeted(const Vec3<MyDouble>& searchcenter, MyFloat rkern, int target, int *startnode, int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist, int TARGET_BITMASK) { return ngb_treefind_pairs_threads_targeted(const_cast<MyDouble*>(searchcenter.data), rkern, target, startnode, mode, exportflag, exportnodecount, exportindex, ngblist, TARGET_BITMASK); }
 
 
 
@@ -169,16 +204,17 @@ void do_kick_for_extra_physics(int i, integertime tstart, integertime tend, doub
 void do_fewbody_kick(int i, double fewbody_kick_dv[3], double dt);
 #endif
 
-void check_particle_for_temperature_minimum(int i);
-void set_eos_pressure(int i);
-double get_pressure(int i);
-double get_temperature(int i);
-double compute_temperature(int i);
+void set_eos_pressure(int i, struct particle_data *pp = P, struct gas_cell_data *cell = CellP);
+#if defined(EOS_GAMMA_PROBE) && defined(EOS_GENERAL)
+void eos_gamma_probe_report(void);
+#endif
 double return_user_desired_target_density(int i);
 double return_user_desired_target_pressure(int i);
 #ifdef EOS_TILLOTSON
-double calculate_eos_tillotson(int i);
 void tillotson_eos_init(void);
+#endif
+#ifdef EOS_ANEOS
+#include "../eos/aneos.h"
 #endif
 
 #ifdef SPECIAL_POINT_WEIGHTED_MOTION
@@ -239,7 +275,7 @@ void parallel_sort_special_P_GrNr_ID(void);
 void calculate_power_spectra(int num, long long *ntot_type_all);
 
 
-int pmforce_is_particle_high_res(int type, MyDouble *pos);
+int pmforce_is_particle_high_res(int type, Vec3<double>& Pos);
 
 void compare_partitions(void);
 void assign_unique_ids(void);
@@ -305,31 +341,29 @@ void kinetic_evaluate(int target, int mode);
 
 int fof_find_dmparticles_evaluate(int target, int mode, int *nexport, int *nsend_local);
 
-double INLINE_FUNC Get_Particle_Size(int i);
-double INLINE_FUNC Get_Gas_density_for_energy_i(int i);
+/* Get_Particle_Size is now a member function of particle_data — use P[i].Get_Particle_Size() or pp[i].Get_Particle_Size() */
 double INLINE_FUNC Get_Particle_Expected_Area(double h);
-double get_cell_Bfield_in_microGauss(int i);
-double Get_Gas_Ionized_Fraction(int i);
-double CR_calculate_adiabatic_gasCR_exchange_term(int i, double dt_entr, double gamma_minus_eCR_tmp, int mode);
-double INLINE_FUNC Get_CosmicRayEnergyDensity_cgs(int i);
-double CR_gas_heating(int target, double n_elec, double nH0, double nHcgs);
-double Get_CosmicRayIonizationRate_cgs(int i);
+double Get_Gas_Ionized_Fraction(int i, struct particle_data *pp = P, struct gas_cell_data *cell = CellP);
+double CR_calculate_adiabatic_gasCR_exchange_term(int i, double dt_entr, double gamma_minus_eCR_tmp, int mode, struct particle_data *pp, struct gas_cell_data *cell);
+double INLINE_FUNC Get_CosmicRayEnergyDensity_cgs(int i, struct particle_data *pp, struct gas_cell_data *cell);
+double CR_gas_heating(int target, double n_elec, double nH0, double nHcgs, struct particle_data *pp, struct gas_cell_data *cell);
+double Get_CosmicRayIonizationRate_cgs(int i, struct particle_data *pp, struct gas_cell_data *cell);
 #ifdef COSMIC_RAY_FLUID
-void CalculateAndAssign_CosmicRay_DiffusionAndStreamingCoefficients(int i);
-double INLINE_FUNC Get_Gas_CosmicRayPressure(int i, int k_CRegy);
-double Get_CosmicRayGradientLength(int i, int k_CRegy);
-double CosmicRay_Update_DriftKick(int i, double dt_entr, int mode);
+void CalculateAndAssign_CosmicRay_DiffusionAndStreamingCoefficients(int i, struct particle_data *pp, struct gas_cell_data *cell);
+double Get_CosmicRayGradientLength(int i, int k_CRegy, struct particle_data *pp, struct gas_cell_data *cell);
+double CosmicRay_Update_DriftKick(int i, double dt_entr, int mode, struct particle_data *pp, struct gas_cell_data *cell);
 double CR_cooling_and_gas_heating(int target, double n_elec, double nH_cgs, double dtime_cgs, int mode);
-double CR_energy_spectrum_injection_fraction(int k_CRegy, int source_type, double shock_vel, int return_index_in_bin, int target);
-double return_cosmic_ray_anisotropic_closure_function_threechi(int target, int k_CRegy);
-void inject_cosmic_rays(double CR_energy_to_inject, double injection_velocity, int source_type, int target, double *dir);
+double CR_energy_spectrum_injection_fraction(int k_CRegy, int source_type, double shock_vel, int return_index_in_bin, int target, struct particle_data *pp, struct gas_cell_data *cell);
+double return_cosmic_ray_anisotropic_closure_function_threechi(int target, int k_CRegy, struct gas_cell_data *cell);
+void inject_cosmic_rays(double CR_energy_to_inject, double injection_velocity, int source_type, int target, double *dir, struct gas_cell_data *cell);
 double return_CRbin_M1speed(int k_CRegy);
-double evaluate_cr_transport_reductionfactor(int target, int k_CRegy, int mode);
-double Get_AlfvenMachNumber_Local(int i, double vA_idealMHD_codeunits, int use_shear_corrected_vturb_flag);
-double diffusion_coefficient_constant(int target, int k_CRegy);
+double INLINE_FUNC cosmicrayfluid_rsol_corrfac(int k);
+double INLINE_FUNC Get_Gas_CosmicRayPressure(int i, int k_CRegy, struct gas_cell_data *cell);
+double evaluate_cr_transport_reductionfactor(int target, int k_CRegy, int mode, struct gas_cell_data *cell);
+double Get_AlfvenMachNumber_Local(int i, double vA_idealMHD_codeunits, int use_shear_corrected_vturb_flag, struct gas_cell_data *cell);
+double diffusion_coefficient_constant(int target, int k_CRegy, struct gas_cell_data *cell);
 double diffusion_coefficient_extrinsic_turbulence(int mode, int target, int k_CRegy, double M_A, double L_scale, double b_muG, double vA_noion, double rho_cgs, double temperature, double cs_thermal, double nh0, double nHe0, double f_ion);
 double diffusion_coefficient_self_confinement(int mode, int target, int k_CRegy, double M_A, double L_scale, double b_muG, double vA_noion, double rho_cgs, double temperature, double cs_thermal, double nh0, double nHe0, double f_ion);
-double return_CRbin_numberdensity_in_cgs(int target, int k_CRegy);
 double return_CRbin_CR_energies_in_GeV(int target, int k_CRegy);
 double return_CRbin_CR_charge_in_e(int target, int k_CRegy);
 int return_CRbin_CR_species_ID(int k_CRegy);
@@ -337,29 +371,28 @@ double return_CRbin_kinetic_energy_in_GeV(int target, int k_CRegy);
 double return_CRbin_gamma_factor(int target, int k_CRegy);
 double gamma_eos_of_crs_in_bin(int k_CRegy);
 double return_CRbin_beta_factor(int target, int k_CRegy);
-double get_cell_Urad_in_eVcm3(int i);
-void CR_cooling_and_losses(int target, double n_elec, double nHcgs, double dtime_cgs);
+void CR_cooling_and_losses(int target, double n_elec, double nHcgs, double dtime_cgs, struct particle_data *pp, struct gas_cell_data *cell);
 double return_CRbin_CRmass_in_mp(int target, int k_CRegy);
 double return_CRbin_CR_rigidity_in_GV(int target, int k_CRegy);
-double CR_get_streaming_loss_rate_coefficient(int target, int k_CRegy);
-double Get_Gas_ion_Alfven_speed_i(int i);
-double return_CRbin_nuplusminus_asymmetry(int i, int k_CRegy);
+double CR_get_streaming_loss_rate_coefficient(int target, int k_CRegy, struct gas_cell_data *cell);
+double Get_Gas_ion_Alfven_speed_i(int i, struct gas_cell_data *cell);
+double return_CRbin_nuplusminus_asymmetry(int i, int k_CRegy, struct gas_cell_data *cell);
 #if defined(CRFLUID_EVOLVE_SPECTRUM)
 void CR_spectrum_define_bins(void);
 void CR_initialize_multibin_quantities(void);
-void CR_cooling_and_losses_multibin(int target, double n_elec, double nHcgs, double dtime_cgs, int mode_driftkick);
+void CR_cooling_and_losses_multibin(int target, double n_elec, double nHcgs, double dtime_cgs, int mode_driftkick, struct particle_data *pp, struct gas_cell_data *cell);
 double CR_return_slope_from_number_and_energy_in_bin(double energy_in_code_units, double number_effective_in_code_units, double bin_centered_energy_in_GeV, int k_bin);
 double CR_return_new_bin_edge_from_rate(double rate_dt_dimless, double x_m_bin, double x_p_bin, int loss_mode, int NR_key, double additional_variable_dummy);
 double CR_coulomb_energy_integrand(double x, double tau, double slope);
 double CR_reaccel_energy_integrand(double x, double tau, double slope, double delta_slope, int NR_key);
 double CR_compton_energy_integrand(double x, double tau, double slope);
 int CR_check_if_bin_is_nonrelativistic(int k_bin);
-double CR_return_true_number_in_bin(int target, int k_bin);
-double CR_return_effective_number_in_bin_in_codeunits(int target, int k_bin);
-double CR_return_spectral_slope_target(int target, int k_bin);
+double CR_return_true_number_in_bin(int target, int k_bin, struct gas_cell_data *cell);
+double CR_return_effective_number_in_bin_in_codeunits(int target, int k_bin, struct gas_cell_data *cell);
+double CR_return_spectral_slope_target(int target, int k_bin, struct gas_cell_data *cell);
 double CR_get_number_in_bin_from_slope(int target, int k_bin, double energy, double slope);
-double CR_return_mean_energy_in_bin_in_GeV(int target, int k_bin);
-double CR_return_mean_rigidity_in_bin_in_GV(int target, int k_bin);
+double CR_return_mean_energy_in_bin_in_GeV(int target, int k_bin, struct gas_cell_data *cell);
+double CR_return_mean_rigidity_in_bin_in_GV(int target, int k_bin, struct gas_cell_data *cell);
 int compare_CR_rigidity_for_sort(const void *a, const void *b);
 double return_CRbin_kinetic_energy_in_GeV_binvalsNRR(int k_CRegy);
 #endif
@@ -367,23 +400,19 @@ double return_CRbin_kinetic_energy_in_GeV_binvalsNRR(int k_CRegy);
 #ifdef EOS_ELASTIC
 void elastic_body_update_driftkick(int i, double dt_entr, int mode);
 #endif
-#if defined(EOS_ELASTIC) || defined(EOS_TILLOTSON)
+#if defined(EOS_ELASTIC) || defined(EOS_TILLOTSON) || defined(EOS_ANEOS)
 double get_negative_pressure_tensilecorrfac(double r, double h_i, double h_j);
 #endif
-double INLINE_FUNC convert_internalenergy_soundspeed2(int i, double u);
-double INLINE_FUNC Get_Gas_effective_soundspeed_i(int i);
-double INLINE_FUNC Get_Gas_thermal_soundspeed_i(int i);
-double Get_Gas_Alfven_speed_i(int i);
-double Get_Gas_Fast_MHD_wavespeed_i(int i);
-double Get_Gas_Mean_Molecular_Weight_mu(double T_guess, double rho, double *xH0, double *ne_guess, double urad_from_uvb_in_G0, int target);
-void update_explicit_molecular_fraction(int i, double dtime_cgs);
+/* Get_Gas_effective_soundspeed_i is now cell[i].effective_soundspeed() */
+/* Get_Gas_Fast_MHD_wavespeed_i is now cell[i].fast_MHD_wavespeed() */
+double Get_Gas_Mean_Molecular_Weight_mu(double T_guess, double rho, double *xH0, double *ne_guess, double urad_from_uvb_in_G0, int target, struct particle_data *pp, struct gas_cell_data *cell);
+void update_explicit_molecular_fraction(int i, double dtime_cgs, struct particle_data *pp, struct gas_cell_data *cell);
 double molecfrac_rootfind_function(double fH2, double x00, double x01, double x_b_0, double x_c, double y_a, double G_LW_dt_unshielded);
-double return_dust_to_metals_ratio_vs_solar(int i, double T_dust_manual_override);
-double yhelium(int target);
-double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral_fraction, double free_electron_ratio, double urad_from_uvb_in_G0);
-double INLINE_FUNC Get_Gas_BField(int i_particle_id, int k_vector_component);
+double return_dust_to_metals_ratio_vs_solar(int i, double T_dust_manual_override, struct particle_data *pp, struct gas_cell_data *cell);
+double INLINE_FUNC yhelium(int target, struct particle_data *pp);
+double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral_fraction, double free_electron_ratio, double urad_from_uvb_in_G0, struct particle_data *pp, struct gas_cell_data *cell);
 #ifdef MAGNETIC
-double Get_DtB_FaceArea_Limiter(int i);
+double Get_DtB_FaceArea_Limiter(int i, struct particle_data *pp, struct gas_cell_data *cell);
 #ifdef DIVBCLEANING_DEDNER
 double INLINE_FUNC Get_Gas_PhiField(int i_particle_id);
 double INLINE_FUNC Get_Gas_PhiField_DampingTimeInv(int i_particle_id);
@@ -415,11 +444,12 @@ double INLINE_FUNC hubble_function_external(double a);
 
 void sink_accretion(void);
 #ifdef SINK_WIND_SPAWN
-void get_random_orthonormal_basis(int seed, double *nx, double *ny, double *nz);
-void get_wind_spawn_direction(int i, int num_spawned_this_call, int mode, double *ny, double *nz, double *veldir, double *dpdir);
-double get_spawned_cell_launch_speed(int i);
+void get_random_orthonormal_basis(int seed, Vec3<double>& nx, Vec3<double>& ny, Vec3<double>& nz);
+void set_spawn_orthonormal_basis(int i, int mode, Vec3<double>& jx, Vec3<double>& jy, Vec3<double>& jz);
+void get_wind_spawn_direction(int i, int num_spawned_this_call, int mode, Vec3<double>& ny, Vec3<double>& nz, Vec3<double>& veldir, Vec3<double>& dpdir);
+double get_spawned_cell_launch_speed(int i, struct particle_data *pp);
 #ifdef MAGNETIC
-void get_wind_spawn_magnetic_field(int j, int mode, double *ny, double *nz,  double *dpdir, double d_r);
+void get_wind_spawn_magnetic_field(int j, int mode, Vec3<double>& ny, Vec3<double>& nz, Vec3<double>& dpdir, double d_r);
 #endif
 int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_already_spawned );
 void spawn_sink_wind_feedback(void);
@@ -491,7 +521,7 @@ void treat_outflowing_particles(void);
 void set_injection_accel(void);
 
 int density_isactive(int n);
-int GasGrad_isactive(int i);
+int GasGrad_isactive(int i, struct particle_data *pp, struct gas_cell_data *cell);
 
 #ifdef HYDRO_VOLUME_CORRECTIONS
 void cellcorrections_calc(void);
@@ -503,6 +533,7 @@ size_t sizemax(size_t a, size_t b);
 void reconstruct_timebins(void);
 void init_peano_map(void);
 peano1D domain_double_to_int(double d);
+peanokey domain_peano_key(int i, peanokey *morton); /* the ONLY place a position becomes a key; see domain.cc */
 peanokey peano_hilbert_key(peano1D x, peano1D y, peano1D z, int bits);
 peanokey peano_and_morton_key(peano1D x, peano1D y, peano1D z, int bits, peanokey *morton);
 peanokey morton_key(peano1D x, peano1D y, peano1D z, int bits);
@@ -542,7 +573,8 @@ void st_turbdrive_init_ouseq(void);
 void st_turbdrive_calc_phases(void);
 double st_return_driving_scale(void);
 #endif
-double evaluate_NH_from_GradRho(MyFloat gradrho[3], double rkern, double rho, double numngb_ndim, double include_h, int target);
+double evaluate_NH_from_GradRho(MyFloat gradrho[3], double rkern, double rho, double numngb_ndim, double include_h, int target, struct particle_data *pp = P);
+inline double evaluate_NH_from_GradRho(const Vec3<MyFloat>& gradrho, double rkern, double rho, double numngb_ndim, double include_h, int target, struct particle_data *pp = P) { return evaluate_NH_from_GradRho(const_cast<MyFloat*>(gradrho.data), rkern, rho, numngb_ndim, include_h, target, pp); }
 double evaluate_time_since_t_initial_in_Gyr(double t_initial);
 
 #ifdef GALSF
@@ -603,7 +635,6 @@ void ISMDustChem_get_elem_yields_from_species_yields(double *dust_yields, double
 void ISMDustChem_get_species_key_elem(int spec_indx, double *dust_metallicity, int *key_elem, double *key_num_atoms, double *key_mass);
 void ISMDustChem_get_species_properties(int spec_indx, double *dust_atomic_weight, double *bulk_dens);
 void ISMDustChemEvo_renormalize_dust_fields(int i);
-void check_dust_fields(int i, int update_process);
 #if defined(GALSF_ISMDUSTCHEM_GRAINSIZEEVO)
 void Initialize_ISMDustChemEvo_Particle_Variables(int i);
 double get_ISMDustChemEvo_bin_mass(int i, int j, int k);
@@ -614,14 +645,15 @@ void ISMDustChemEvo_get_wind_dust_grain_size_yields(double *yields, double Msne)
 void ISMDustChemEvo_update_bins_given_grain_size_change(int i, int j, double *bin_da, double mass_limit);
 void update_dust_shattering_and_coagulation(int i, double dtime_gyr, double temp, double rho);
 void update_dust_photodestruction(int i, double dtime_gyr);
-double shattering_coagulation_polynomial(int i, int spec_indx, int bin_i, int bin_j);
+void ISMDustChemEvo_precompute_poly_coeffs(void);
+double ISMDustChemEvo_fast_shat_coag_poly(int i, int spec_indx, int bin_i, int bin_j);
+double ISMDustChemEvo_explicit_shat_coag_poly(double ail, double aiu, double aic, double ajl, double aju, double ajc, double Ni, double si, double Nj, double sj);
 void ISMDustChemEvo_update_bins_given_mass_change(int i, int j, double *bin_dM, double bulk_dens);
 void ISMDustChemEvo_get_new_bin_N_and_slope_given_mass_change(double *bin_dM, double *bin_M, double *bin_N, double *bin_slope, double *new_bin_N, double *new_bin_slope, double bulk_dens);
 void ISMDustChem_SNe_sputtering_step(int spec_indx, double *init_bin_N, double *init_bin_slope, double *init_bin_M, double *final_bin_N, double *final_bin_slope, double *final_bin_M, double bulk_dens);
 void ISMDustChem_SNe_shattering_step(int spec_indx, double *init_bin_N, double *init_bin_slope, double *init_bin_M, double *final_bin_N, double *final_bin_slope, double *final_bin_M, double bulk_dens);
 // Below functions only for debugging
-void ISMDustChemEvo_check_Z_injected(int i, double m0, double mf, double *Z_injected); 
-void ISMDustChemEvo_check_bins_after_update(int i, int update_process, double mass); 
+void ISMDustChemEvo_check_bins_after_update(int i, int update_process, double mass);
 void ISMDustChemEvo_check_yields_before_update(double *bin_nums, double *bin_slopes, double *bin_masses, int yields_process, int species_num, double total_mass);
 #endif
 #endif
@@ -642,14 +674,14 @@ void resolvedism_mass_balance_log(const char *tag);
 void update_stellarnumber_and_timedistribofstarformation(void);
 #endif
 
-
-#ifdef RT_SPEEDOFLIGHT_REDUCTION_VARIABLE_RSL
-double c_light_RSL_reductionfactor_local(int i);
-#endif
-
-
 #ifdef SINGLE_STAR_FB_JETS
 double single_star_jet_velocity(int n);
+double single_star_jet_mdot(int n);
+#endif
+#ifdef SINGLE_STAR_DIRECT_GRAVITY
+void star_direct_gravity_build_table(void);
+void star_direct_gravity_compute(void);
+void star_direct_gravity_free_table(void);
 #endif
 #ifdef SINGLE_STAR_FB_TIMESTEPLIMIT
 double single_star_feedback_velocity_fortimestep(int n);
@@ -694,8 +726,8 @@ void apply_grain_dragforce(void);
 #ifdef RT_INFRARED
 double get_min_allowed_dustIRrad_temperature(void);
 double get_rt_ir_lambdadust_effective(double T, double rho, double *nH0_guess, double *ne_guess, int target, int update_Tdust);
-double dust_dE_cooling(int i, double Tgas, double Tdust, double *Tdust_fixedpoint_1, double *Tdust_fixedpoint_2);
-double rt_ir_lambdadust(int i, double Tgas);
+double dust_dE_cooling(int i, double Tgas, double Tdust, double *Tdust_fixedpoint_1, double *Tdust_fixedpoint_2, struct particle_data *pp, struct gas_cell_data *cell);
+double rt_ir_lambdadust(int i, double Tgas, struct particle_data *pp, struct gas_cell_data *cell);
 #endif
 
 #if defined(GALSF_FB_FIRE_RT_HIIHEATING) || (defined(RT_CHEM_PHOTOION) && defined(GALSF))
@@ -735,7 +767,7 @@ char *GetMultiSpeciesFilename(int i, int hk);
 #endif
 #endif
 
-double sink_fb_angleweight(double sink_lum_input, MyFloat sink_angle[3], double dx, double dy, double dz);
+double sink_fb_angleweight(double sink_lum_input, Vec3<double>& sink_angle, double dx, double dy, double dz);
 double sink_fb_angleweight_localcoupling(int j, double cos_theta, double r, double H_kernel);
 
 #if defined(GALSF_SUBGRID_WINDS)
@@ -759,20 +791,20 @@ void disp_density(void);
 
 
 #ifdef COSMIC_RAY_SUBGRID_LEBRON
-double cr_get_source_injection_rate(int i);
-double cr_get_source_shieldfac(int i);
+double cr_get_source_injection_rate(int i, struct particle_data *pp, struct gas_cell_data *cell);
+double cr_get_source_shieldfac(int i, struct particle_data *pp, struct gas_cell_data *cell);
 #endif
 
 
 #ifdef CHIMES
-double chimes_convert_u_to_temp(double u, double rho, int target);
-void chimes_update_gas_vars(int target);
+double chimes_convert_u_to_temp(double u, double rho, int target, struct particle_data *pp, struct gas_cell_data *cell);
+void chimes_update_gas_vars(int target, struct particle_data *pp, struct gas_cell_data *cell);
 void chimes_gizmo_exit(void);
 #ifdef COOL_METAL_LINES_BY_SPECIES
-void chimes_update_element_abundances(int i);
+void chimes_update_element_abundances(int i, struct particle_data *pp, struct gas_cell_data *cell);
 #endif
 #ifdef CHIMES_TURB_DIFF_IONS
-void chimes_update_turbulent_abundances(int i, int mode);
+void chimes_update_turbulent_abundances(int i, int mode, struct particle_data *pp, struct gas_cell_data *cell);
 #endif
 #ifdef CHIMES_METAL_DEPLETION
 void chimes_init_depletion_data(void);
@@ -853,6 +885,9 @@ void density_decouple(void);
 void determine_interior(void);
 int dissolvegas(void);
 void do_box_wrapping(void);
+#ifdef RANDOMIZE_GRAVTREE_PERIODIC
+void domain_apply_random_shift(void);
+#endif
 double enclosed_mass(double R);
 void energy_statistics(void);
 void ensure_neighbours(void);
@@ -871,32 +906,38 @@ integertime find_next_time_walk(int node);
 void free_memory(void);
 void advance_and_find_timesteps(void);
 integertime get_timestep(int p, double *a, int flag);
-double return_timestep_dilation_factor(int i, int mode);
+double return_timestep_dilation_factor(int i, int mode, struct particle_data *pp = P);
+double timestep_dilation_factor(int i, int mode, struct particle_data *pp = P);
+double unit_integertime_in_physical(int i, struct particle_data *pp = P);
+double get_physical_timestep_from_timebin(int bin, int i, struct particle_data *pp = P);
+double get_particle_timestep_in_physical(int i, struct particle_data *pp = P);
+double get_particle_feedback_timestep_in_physical(int i, struct particle_data *pp = P);
 
 void determine_PMinterior(void);
 void gravity_tree(void);
 void hydro_force(void);
 void init(void);
-void do_the_cooling_for_particle(int i);
-double get_equilibrium_dust_temperature_estimate(int i, double shielding_factor_for_exgalbg, double T);
-double gas_dust_heating_coeff(int i, double T, double Tdust);
-double rt_eqm_dust_temp(int i, double T, double dust_absorption_rate);
-double dust_dEdt(int i, double T, double Tdust, double dust_absorption_rate, double fdustmet_init);
-double return_electron_fraction_from_heavy_ions(int target, double temperature, double density_cgs, double n_elec_HHe);
-MyFloat return_electron_fraction_from_Cplus(int target, MyFloat temp, MyFloat x_elec, MyFloat shieldfac);
-MyFloat return_electron_fraction_from_Oplus(int target, MyFloat nHp);
-MyFloat return_electron_fraction_from_molecular_ions(int target, MyFloat temp);
-MyFloat return_electron_fraction_from_alkali(int i, MyFloat temp);
-MyFloat get_FUV_G0(int i, MyFloat shieldfac, int mode);
-MyFloat f_Cplus(int i, MyFloat temp, MyFloat x_elec, MyFloat shieldfac); 
+void do_the_cooling_for_particle(int i, struct particle_data *pp, struct gas_cell_data *cell);
+double GetCoolingTime(double u_old, double rho, double ne_guess, double *ne_eval, int target, struct particle_data *pp, struct gas_cell_data *cell);
+double get_equilibrium_dust_temperature_estimate(int i, double shielding_factor_for_exgalbg, double T, struct particle_data *pp, struct gas_cell_data *cell);
+double gas_dust_heating_coeff(int i, double T, double Tdust, struct particle_data *pp, struct gas_cell_data *cell);
+double rt_eqm_dust_temp(int i, double T, double dust_absorption_rate, struct particle_data *pp, struct gas_cell_data *cell);
+double dust_dEdt(int i, double T, double Tdust, double dust_absorption_rate, double fdustmet_init, struct particle_data *pp, struct gas_cell_data *cell);
+double return_electron_fraction_from_heavy_ions(int target, double temperature, double density_cgs, double n_elec_HHe, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat return_electron_fraction_from_Cplus(int target, MyFloat temp, MyFloat x_elec, MyFloat shieldfac, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat return_electron_fraction_from_Oplus(int target, MyFloat nHp, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat return_electron_fraction_from_molecular_ions(int target, MyFloat temp, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat return_electron_fraction_from_alkali(int i, MyFloat temp, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat get_FUV_G0(int i, MyFloat shieldfac, int mode, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat f_Cplus(int i, MyFloat temp, MyFloat x_elec, MyFloat shieldfac, struct particle_data *pp, struct gas_cell_data *cell); 
 MyFloat f_Oplus(MyFloat nHp);
-MyFloat f_CO(int i, MyFloat temp, MyFloat x_elec, MyFloat shieldfac, MyFloat nHp);
-MyFloat alpha_recomb_grain(int i, MyFloat temp, MyFloat x_slec, MyFloat shieldfac, char *ion_name);
-MyFloat grain_charge_psi(int i, MyFloat temp, MyFloat x_elec, MyFloat shieldfac);
-MyFloat total_ionization_rate_C(int i, MyFloat shieldfac);
-MyFloat cosmic_ray_ionization_rate_C(int i);
-MyFloat photoionization_rate_C(int i, MyFloat shieldfac);
-int ion_name_to_index(char *ion_name);
+MyFloat f_CO(int i, MyFloat temp, MyFloat x_elec, MyFloat shieldfac, MyFloat nHp, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat alpha_recomb_grain(int i, MyFloat temp, MyFloat x_slec, MyFloat shieldfac, const char *ion_name, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat grain_charge_psi(int i, MyFloat temp, MyFloat x_elec, MyFloat shieldfac, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat total_ionization_rate_C(int i, MyFloat shieldfac, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat cosmic_ray_ionization_rate_C(int i, struct particle_data *pp, struct gas_cell_data *cell);
+MyFloat photoionization_rate_C(int i, MyFloat shieldfac, struct particle_data *pp, struct gas_cell_data *cell);
+int ion_name_to_index(const char *ion_name, struct gas_cell_data *cell);
 double get_starformation_rate(int i, int mode);
 void update_internalenergy_for_galsf_effective_eos(int i, double tcool, double tsfr, double cloudmass_fraction, double rateOfSF);
 void init_clouds(void);
@@ -918,6 +959,12 @@ int read_outputlist(char *fname);
 void read_parameter_file(char *fname);
 void rearrange_particle_sequence(void);
 void swap_treewalk_pointers(int i, int j);
+void force_validate_tree_links(const char *tag);
+void force_tree_check_walkable(const char *tag);
+int domain_any_local_particle_escaped(void);
+#ifdef TREE_INTEGRITY_AUDITS
+void force_tree_full_audit(int audit_moments, const char *tag);
+#endif
 void remove_particle_from_tree(int i);
 void reorder_gas(void);
 void reorder_particles(void);
@@ -977,54 +1024,84 @@ void pm_setup_nonperiodic_kernel(void);
 #ifdef CHIMES_STELLAR_FLUXES
 double chimes_G0_luminosity(double stellar_age, double stellar_mass);
 double chimes_ion_luminosity(double stellar_age, double stellar_mass);
-int rt_get_source_luminosity_chimes(int i, int mode, double *lum, double *chimes_lum_G0, double *chimes_lum_ion);
+int rt_get_source_luminosity_chimes(int i, int mode, double *lum, double *chimes_lum_G0, double *chimes_lum_ion, struct particle_data *pp, struct gas_cell_data *cell);
 #endif
-int rt_get_source_luminosity(int i, int mode, double *lum);
+int rt_get_source_luminosity(int i, int mode, double *lum, struct particle_data *pp, struct gas_cell_data *cell);
 int rt_get_donation_target_bin(int bin);
-int rt_get_lum_band_stellarpopulation(int i, int mode, double *lum);
-int rt_get_lum_band_agn(int i, int mode, double *lum);
-int rt_get_lum_band_singlestar(int i, int mode, double *lum);
+int rt_get_lum_band_stellarpopulation(int i, int mode, double *lum, struct particle_data *pp, struct gas_cell_data *cell);
+int rt_get_lum_band_agn(int i, int mode, double *lum, struct particle_data *pp, struct gas_cell_data *cell);
+int rt_get_lum_band_singlestar(int i, int mode, double *lum, struct particle_data *pp, struct gas_cell_data *cell);
 #if defined(GALSF_RESOLVEDISM_STELLAR_TABLES) && (defined(RADTRANSFER) || defined(RT_USE_GRAVTREE))
-int rt_get_lum_band_resolvedism(int i, int mode, double *lum);
+int rt_get_lum_band_resolvedism(int i, int mode, double *lum, struct particle_data *pp, struct gas_cell_data *cell);
 #endif
 void rt_define_effective_frequencies_in_bands(void);
-void eddington_tensor_dot_vector(double ET[6], double vec_in[3], double vec_out[3]);
-double return_flux_limiter(int target, int k_freq);
-double rt_kappa(int j, int k_freq);
+double rt_kappa(int j, int k_freq, struct particle_data *pp, struct gas_cell_data *cell);
 int check_if_absorbed_photons_can_be_reemitted_into_same_band(int kfreq);
-double rt_absorb_frac_albedo(int j, int k_freq);
-double rt_absorption_rate(int i, int k_freq);
-double rt_diffusion_coefficient(int i, int k_freq);
-void rt_eddington_update_calculation(int j);
-void rt_update_driftkick(int i, double dt_entr, int mode);
+double rt_absorb_frac_albedo(int j, int k_freq, struct particle_data *pp, struct gas_cell_data *cell);
+double rt_absorption_rate(int i, int k_freq, struct particle_data *pp, struct gas_cell_data *cell);
+double rt_diffusion_coefficient(int i, int k_freq, struct gas_cell_data *cell);
+void rt_eddington_update_calculation(int j, struct gas_cell_data *cell);
+void rt_update_driftkick(int i, double dt_entr, int mode, struct particle_data *pp, struct gas_cell_data *cell);
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+void rt_diag_ir_double_count_report(void);
+enum {RT_DIAG_ABSORBED, RT_DIAG_DONATED_IN, RT_DIAG_IR_GAS_SHARE, RT_DIAG_COOLING_TO_BAND, RT_DIAG_INJECTED, RT_DIAG_KICK_SOURCE, RT_DIAG_NCHAN, RT_DIAG_COOL_GAS, RT_DIAG_COOL_OFFERED};
+void rt_diag_add(int channel, int k, double de);
+/* scalar tallies written to rt_cool_diag.txt; names in rt_diag_sc_names (rt_utilities.cc), same order */
+enum {RT_DIAG_SC_DEU, RT_DIAG_SC_Q, RT_DIAG_SC_DTIE, RT_DIAG_SC_DTIE_CODE, RT_DIAG_SC_THICK, RT_DIAG_SC_MOL, RT_DIAG_SC_MOL_HEAT,
+      RT_DIAG_SC_DUST, RT_DIAG_SC_METAL, RT_DIAG_SC_HHE, RT_DIAG_SC_COMPTON, RT_DIAG_SC_CR, RT_DIAG_SC_PE, RT_DIAG_SC_ION_HEAT,
+      RT_DIAG_SC_HEAT, RT_DIAG_SC_LAMBDA, RT_DIAG_SC_ROUTED_GAS, RT_DIAG_SC_UNROUTED, RT_DIAG_SC_OFFER_NUV, RT_DIAG_SC_OFFER_IR,
+      RT_DIAG_SC_RET_NUV, RT_DIAG_SC_RET_IR, RT_DIAG_SC_CLIP_MAX_10UM, RT_DIAG_SC_CLIP_MAX_DEU, RT_DIAG_SC_CLIP_MAX_ZERO,
+      RT_DIAG_SC_CLIP_MIN_099E, RT_DIAG_SC_CLIP_MIN_DEU, RT_DIAG_SC_CLIP_MIN_ZERO, RT_DIAG_SC_DEU_WORK, RT_DIAG_SC_DEU_RADABS,
+      RT_DIAG_SC_N_TOUSE_POS, RT_DIAG_SC_N_COOL, RT_DIAG_SC_DC_ABS_IR, RT_DIAG_SC_DC_ABS_NONIR, RT_DIAG_SC_DC_EMIT, RT_DIAG_SC_DC_COUPLE,
+      RT_DIAG_SC_DK_REEMIT, RT_DIAG_SC_DK_EMIT_IMPLIED, RT_DIAG_SC_DK_COUPLE_IMPLIED, RT_DIAG_SC_M_COOL, RT_DIAG_SC_MT_GAS,
+      RT_DIAG_SC_MT_DUST_COOL, RT_DIAG_SC_MT_RAD, RT_DIAG_SC_M_KICK, RT_DIAG_SC_MT_DUST_KICK, RT_DIAG_SC_MT_GAS_KICK, RT_DIAG_SC_KICK_DU,
+      RT_DIAG_SC_KICK_DERAD, RT_DIAG_SC_DTIE_DISCARD, RT_DIAG_SC_DEPOSIT_K1, RT_DIAG_SC_DEPOSIT_K2, RT_DIAG_NSC};
+void rt_diag_sc(int idx, double v);
+extern int rt_diag_kick_mode; /* do_the_kick's mode: 0 = opening half-kick, 1 = closing */
+/* terms of the most recent CoolingRate call for a cell, erg cm^3 s^-1 (lambda-type: positive = gas cooling); after DoCooling
+   this is the converged-u call. dc_*: the dust balance of rt_ir_lambdadust at its final Tdust, in band energy units */
+struct rt_diag_cool_terms {double mol, dust, metal, hhe, compton, neb, pelec, h_ion, h_cr, heat, lambda, q_pre, q_post, dtie, fcorr,
+    dc_abs_ir, dc_abs_nonir, dc_emit, dc_couple;};
+extern thread_local struct rt_diag_cool_terms rt_diag_cr;
+#endif
 #endif
 #ifdef RT_SOURCE_INJECTION
 void rt_source_injection(void);
 #endif
 MyFloat dust_planck_mean_opacity(MyFloat Trad, MyFloat Tdust);
 
+#ifdef TRANSPORT_SUBCYCLE
+void transport_subcycle_build_cache(void);
+void transport_subcycle_pack_state(void);
+void transport_subcycle_unpack_state(void);
+void transport_subcycle_exchange_fluxes(void);
+void transport_subcycle_kick(void);
+void transport_subcycle_halo_exchange(void);
+void transport_subcycle_free_cache(void);
+#endif
+
 #ifdef RADTRANSFER
 void rt_set_simple_inits(int RestartFlag);
 #if defined(RT_EVOLVE_INTENSITIES)
 void rt_init_intensity_directions(void);
 #endif
-void rt_get_lum_gas(int target, double *je);
+void rt_get_lum_gas(int target, double *je, struct particle_data *pp, struct gas_cell_data *cell);
 #ifdef RT_ISRF_BACKGROUND
-void rt_apply_boundary_conditions(int i);
+void rt_apply_boundary_conditions(int i, struct particle_data *pp, struct gas_cell_data *cell);
 void get_background_isrf_urad(int i, double *urad);
 double background_isrf_cmb_Teff(void);
 #endif
 double slab_averaging_function(double x);
 double blackbody_lum_frac(double E_lower, double E_upper, double T_eff);
-double stellar_lum_in_band(int i, double E_lower, double E_upper);
-double rt_irband_egydensity_in_band(int i, double E_lower, double E_upper);
+double stellar_lum_in_band(int i, double E_lower, double E_upper, struct particle_data *pp, struct gas_cell_data *cell);
+double rt_irband_egydensity_in_band(int i, double E_lower, double E_upper, struct gas_cell_data *cell);
 
 #ifdef RT_DIFFUSION_CG
 void rt_diffusion_cg_solve(void);
 #endif
 
 #ifdef RT_CHEM_PHOTOION
-double rt_return_photon_number_density(int i, int k);
+/* rt_return_photon_number_density is now cell[i].rt_photon_number_density(k) */
 double rt_photoion_chem_return_temperature(int i, double internal_energy);
 void rt_update_chemistry(void);
 void rt_get_sigma(void);
@@ -1032,7 +1109,7 @@ void rt_write_chemistry_stats(void);
 #endif
 
 #endif
-double rt_kappa_adaptive_IR_band(int i, double T_dust, double Trad, int do_emission_absorption_scattering_opacity, int dust_or_gas_opacity_only_flag);
+double rt_kappa_adaptive_IR_band(int i, double T_dust, double Trad, int do_emission_absorption_scattering_opacity, int dust_or_gas_opacity_only_flag, struct particle_data *pp, struct gas_cell_data *cell);
 
 
 void find_block(char *label,FILE *fd);
@@ -1059,7 +1136,7 @@ void AGSForce_calc(void);
 
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
 void advect_mesh_point(int i, double dt);
-double calculate_face_area_for_cartesian_mesh(double *dp, double rinv, double l_side, double *Face_Area_Vec);
+double calculate_face_area_for_cartesian_mesh(const Vec3<double>& dp, double rinv, double l_side, Vec3<double>& Face_Area_Vec);
 #endif
 
 #if (SINGLE_STAR_TIMESTEPPING > 0)
@@ -1069,8 +1146,13 @@ void subtract_companion_gravity(int i);
 
 void hydro_gradient_calc(void);
 int GasGrad_evaluate(int target, int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist, int gradient_iteration);
-void construct_gradient(double *grad, int i);
+void construct_gradient(Vec3<MyDouble>& grad, int i);
+#ifdef MHD_MODIFIED_GRADIENT
+void mg_gradient_correction_calc(void);
+#endif
+inline void construct_gradient(double *grad, int i) { Vec3<MyDouble> v{grad[0],grad[1],grad[2]}; construct_gradient(v,i); grad[0]=v[0]; grad[1]=v[1]; grad[2]=v[2]; }
 void local_slopelimiter(double *grad, double valmax, double valmin, double alim, double h, double shoot_tol, int pos_preserve, double d_max, double val_cen);
+inline void local_slopelimiter(Vec3<double>& grad, double valmax, double valmin, double alim, double h, double shoot_tol, int pos_preserve, double d_max, double val_cen) { local_slopelimiter(grad.data, valmax, valmin, alim, h, shoot_tol, pos_preserve, d_max, val_cen); }
 
 #ifdef TURB_DIFF_DYNAMIC
 void dynamic_diff_vel_calc(void);
@@ -1085,16 +1167,16 @@ void apply_excision();
 #endif
 
 #ifdef DM_SIDM
-double prob_of_interaction(double mass, double r, double h_si, double dV[3], double dt);
+double prob_of_interaction(double mass, double r, double h_si, Vec3<double>&  dV, double dt);
 double g_geo(double r);
-void calculate_interact_kick(double dV[3], double kick[3], double m);
+void calculate_interact_kick(Vec3<double>& dV, Vec3<double>& kick, double m);
 void init_geofactor_table(void);
 double geofactor_integ(double x, void * params);
 double geofactor_angle_integ(double u, void * params);
 void init_self_interactions();
 #ifdef GRAIN_COLLISIONS
 double return_grain_cross_section_per_unit_mass(int i);
-double prob_of_grain_interaction(double cx_per_unitmass, double mass, double r, double h_si, double dV[3], double dt, int j_ngb);
+double prob_of_grain_interaction(double cx_per_unitmass, double mass, double r, double h_si, Vec3<double>& dV, double dt, int j_ngb);
 #endif
 #endif
 
@@ -1118,29 +1200,47 @@ double do_cbe_nvt_inversion_for_faces(int i);
 void do_dm_fuzzy_initialization(void);
 void do_dm_fuzzy_drift_kick(int pindex, double dt_entr, int mode);
 void DMGrad_gradient_calc(void);
-void do_dm_fuzzy_flux_computation(double HLLwt, double dt, double prev_a, double dv[3],
+void do_dm_fuzzy_flux_computation(double HLLwt, double dt, double prev_a, Vec3<double>& dv,
                                   double GradRho_L[3], double GradRho_R[3],
                                   double GradRho2_L[3][3], double GradRho2_R[3][3],
                                   double rho_L, double rho_R, double dv_Right_minus_Left,
-                                  double Area[3], double fluxes[3], double AGS_Numerical_QuantumPotential_L, double AGS_Numerical_QuantumPotential_R, double *dt_egy_Numerical_QuantumPotential);
-void do_dm_fuzzy_flux_computation_old(double HLLwt, double dt, double m0, double prev_a, double dp[3], double dv[3],
+                                  Vec3<double>& Area, Vec3<double>& fluxes, double AGS_Numerical_QuantumPotential_L, double AGS_Numerical_QuantumPotential_R, double *dt_egy_Numerical_QuantumPotential);
+void do_dm_fuzzy_flux_computation_old(double HLLwt, double dt, double m0, double prev_a, Vec3<double>& dp, Vec3<double>& dv,
                                   double GradRho_L[3], double GradRho_R[3],
                                   double GradRho2_L[3][3], double GradRho2_R[3][3],
                                   double rho_L, double rho_R, double dv_Right_minus_Left,
-                                  double Area[3], double fluxes[3], double AGS_Numerical_QuantumPotential, double *dt_egy_Numerical_QuantumPotential);
-void dm_fuzzy_reconstruct_and_slopelimit_sub(double *u_R_f, double *u_L_f, double q_R, double dq_R_0[3], double q_L, double dq_L_0[3], double dx[3]);
+                                  Vec3<double>& Area, Vec3<double>& fluxes, double AGS_Numerical_QuantumPotential, double *dt_egy_Numerical_QuantumPotential);
+void dm_fuzzy_reconstruct_and_slopelimit_sub(double *u_R_f, double *u_L_f, double q_R, const Vec3<double>& dq_R_0, double q_L, const Vec3<double>& dq_L_0, const Vec3<double>& dx);
 void dm_fuzzy_reconstruct_and_slopelimit(double *u_R, double du_R[3], double *u_L, double du_L[3],
-                                         double q_R, double dq_R[3], double d2q_R[3][3],
-                                         double q_L, double dq_L[3], double d2q_L[3][3],
-                                         double dx[3]);
+                                         double q_R, Vec3<double> dq_R, const Mat3<double>& d2q_R,
+                                         double q_L, Vec3<double> dq_L, const Mat3<double>& d2q_L,
+                                         const Vec3<double>& dx);
 #endif
 
 
 #ifdef SINGLE_STAR_TIMESTEPPING
-void kepler_timestep(int i, double dt, double kick_dv[3], double drift_dx[3], int mode);
-void odeint_super_timestep(int i, double dt_super, double kick_dv[3], double drift_dx[3], int mode);
+void kepler_timestep(int i, double dt, Vec3<double>& kick_dv, Vec3<double>& drift_dx, int mode);
+void odeint_super_timestep(int i, double dt_super, Vec3<double>& kick_dv, Vec3<double>& drift_dx, int mode);
 double gravfac(double r, double mass);
 double gravfac2(double r, double mass);
-void grav_accel_jerk(double mass, double dx[3], double dv[3], double accel[3], double jerk[3]);
+void grav_accel_jerk(double mass, Vec3<double>& dx, Vec3<double>& dv, Vec3<double>& accel, Vec3<double>& jerk);
 double eccentric_anomaly(double mean_anomaly, double ecc);
+#endif
+
+#ifdef ENERGY_BUDGET_DIAGNOSTIC
+/* Total gas energy at full synchronization; see energy_budget_sync_report() in run.cc. The
+   per-phase breakdown this once accompanied lives on branch diag/energy-budget-phases. */
+void energy_budget_sync_report(void);
+#define EB_SYNC_REPORT() energy_budget_sync_report()
+#ifdef EVALPOTENTIAL
+/* Kinetic+gravitational energy over all types at full synchronization -- the conserved quantity
+   for a collisionless self-gravitating run, which the gas-only report above cannot see. */
+void energy_budget_gravity_report(void);
+#define EB_GRAV_REPORT() energy_budget_gravity_report()
+#else
+#define EB_GRAV_REPORT()
+#endif
+#else
+#define EB_SYNC_REPORT()
+#define EB_GRAV_REPORT()
 #endif

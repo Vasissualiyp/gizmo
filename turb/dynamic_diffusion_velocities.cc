@@ -27,7 +27,7 @@
 #define NV_MYSIGN(x) (( x > 0 ) - ( x < 0 ))
 
 struct kernel_DiffFilter {
-    double dp[3], r, wk_i, wk_j, dwk_i, dwk_j, h_i;
+    Vec3<double> dp; double r, wk_i, wk_j, dwk_i, dwk_j, h_i;
 };
 
 
@@ -38,7 +38,7 @@ struct kernel_DiffFilter {
 #include "../system/code_block_xchange_initialize.h" /* pre-define all the ALL_CAPS variables we will use below, so their naming conventions are consistent and they compile together, as well as defining some of the function calls needed */
 
 struct INPUT_STRUCT_NAME {
-    MyDouble Pos[3];
+    Vec3<MyDouble> Pos;
     MyFloat Mass;
     MyFloat KernelRadius;
     MyDouble Density;
@@ -46,12 +46,12 @@ struct INPUT_STRUCT_NAME {
 #ifdef GALSF_SUBGRID_WINDS
     MyFloat DelayTime;
 #endif
-    MyDouble VelPred[3];
+    Vec3<MyDouble> VelPred;
 }
 *DATAIN_NAME, *DATAGET_NAME;
 
 static inline void particle2in_DiffFilter(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration) {
-    int k; for(k = 0; k < 3; k++) {in->Pos[k] = P[i].Pos[k]; in->VelPred[k] = CellP[i].VelPred[k];}
+    in->Pos = P[i].Pos; in->VelPred = CellP[i].VelPred;
     in->Density = CellP[i].Density;
     in->KernelRadius = P[i].KernelRadius;
     in->Mass = DMAX(0,P[i].Mass);
@@ -83,14 +83,13 @@ void dynamic_diff_vel_calc_initial_operations_preloop(void);
 void dynamic_diff_vel_calc_initial_operations_preloop(void)
 {
     /* Because of the smoothing operation, need to set bar quantity to current fluid value first */
-    int i;
-    for (i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+    for (int i : ActiveParticleList) {
         if (P[i].Type == 0) {
             CellP[i].Norm_hat = 0;
-            CellP[i].h_turb = Get_Particle_Size(i); // All.cf_atime unnecessary, will multiply later
+            CellP[i].h_turb = P[i].Get_Particle_Size(); // All.cf_atime unnecessary, will multiply later
             CellP[i].FilterWidth_bar = 0;
             CellP[i].MaxDistance_for_grad = 0;
-            int k; for (k = 0; k < 3; k++) {CellP[i].Velocity_bar[k] = CellP[i].VelPred[k] / All.TurbDynamicDiffSmoothing;}
+            CellP[i].Velocity_bar = CellP[i].VelPred / All.TurbDynamicDiffSmoothing;
         }
     }
 }
@@ -139,7 +138,7 @@ int DiffFilter_evaluate(int target, int mode, int *exportflag, int *exportnodeco
                 kernel.dp[0] = local.Pos[0] - P[j].Pos[0];
                 kernel.dp[1] = local.Pos[1] - P[j].Pos[1];
                 kernel.dp[2] = local.Pos[2] - P[j].Pos[2];
-                NEAREST_XYZ(kernel.dp[0],kernel.dp[1],kernel.dp[2],1); /*  now find the closest image in the given box size  */
+                nearest_xyz(kernel.dp);
                 r2 = kernel.dp[0] * kernel.dp[0] + kernel.dp[1] * kernel.dp[1] + kernel.dp[2] * kernel.dp[2];
                 double mean_weight = 0.5 * (local.Density + CellP[j].Density) / (local.Density * CellP[j].Density);
                 double h_j = P[j].KernelRadius;

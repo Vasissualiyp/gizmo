@@ -35,7 +35,7 @@ void apply_grain_dragforce(void)
 {
     CPU_Step[CPU_MISC] += measure_time();
     int i, k; PRINT_STATUS("Beginning particulate/grain/PIC force evaluation.");
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) /* loop over active particles */
+    for (int i : ActiveParticleList) /* loop over active particles */
     {
         if(!((1 << P[i].Type) & (GRAIN_PTYPES))) {P[i].Grain_AccelTimeMin = MAX_REAL_NUMBER;} /* for active elements, set this large to re-set below */
 #ifdef BOX_BND_PARTICLES
@@ -50,11 +50,10 @@ void apply_grain_dragforce(void)
 #endif
 #endif
 #if defined(GRAIN_BACKREACTION)
-            for(k=0;k<3;k++) {P[i].Grain_DeltaMomentum[k]=0;} /* reset momentum to couple back to gas (or else would diverge) */
+            P[i].Grain_DeltaMomentum = {}; /* reset momentum to couple back to gas (or else would diverge) */
 #endif
-            double dt = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);
-            double vgas_mag = 0.0; for(k=0;k<3;k++) {vgas_mag+=(P[i].Gas_Velocity[k]-P[i].Vel[k])*(P[i].Gas_Velocity[k]-P[i].Vel[k]);}
-            vgas_mag = sqrt(vgas_mag) / All.cf_atime; /* convert to physical units */
+            double dt = get_particle_timestep_in_physical(i);
+            double vgas_mag = sqrt((P[i].Gas_Velocity - P[i].Vel).norm_sq()) / All.cf_atime; /* convert to physical units */
             int grain_subtype = 1; /* default assumption about particulate sub-type for operations below */
 #if defined(PIC_MHD)
             grain_subtype = P[i].MHD_PIC_SubType;
@@ -97,7 +96,7 @@ void apply_grain_dragforce(void)
 #ifdef COOLING  // in this case, have the ability to calculate more accurate ionization fraction
                     double u_tmp, ne_tmp = 1, nh0_tmp = 0, mu_tmp = 1, temp_tmp, nHeII_tmp, nhp_tmp, nHe0_tmp, nHepp_tmp;
                     u_tmp = T_Kelvin / (2.3 * U_TO_TEMP_UNITS); // needs to be in code units; 2.3 for mean molecular weight factor and gamma_eos factor //
-                    temp_tmp = ThermalProperties(u_tmp, rho_gas, -1, &mu_tmp, &ne_tmp, &nh0_tmp, &nhp_tmp, &nHe0_tmp, &nHeII_tmp, &nHepp_tmp);
+                    temp_tmp = ThermalProperties(u_tmp, rho_gas, -1, &mu_tmp, &ne_tmp, &nh0_tmp, &nhp_tmp, &nHe0_tmp, &nHeII_tmp, &nHepp_tmp, P, CellP);
                     f_ion_to_use = DMIN(ne_tmp , 1.);
 #endif
                     tstop_Coulomb_inv *= f_ion_to_use; // correct for ionization fraction
@@ -109,7 +108,7 @@ void apply_grain_dragforce(void)
                 /* this external_forcing parameter includes additional grain-specific forces. note that -anything- which imparts an
                  identical acceleration onto gas and dust will cancel in the terms in t_stop, and just act like a 'normal' acceleration
                  on the dust. for this reason the gravitational acceleration doesn't need to enter our 'external_forcing' parameter */
-                double external_forcing[3]={0}, eps=MIN_REAL_NUMBER; P[i].Grain_AccelTimeMin = DMAX(1./(eps+tstop_inv) , sqrt(Get_Particle_Size(i)*All.cf_atime/(eps+vgas_mag*tstop_inv)));
+                double external_forcing[3]={0}, eps=MIN_REAL_NUMBER; P[i].Grain_AccelTimeMin = DMAX(1./(eps+tstop_inv) , sqrt(P[i].Get_Particle_Size()*All.cf_atime/(eps+vgas_mag*tstop_inv)));
 #ifdef GRAIN_LORENTZFORCE
                 if(grain_subtype == 1)
                 {
@@ -121,9 +120,9 @@ void apply_grain_dragforce(void)
                     lorentz_units *= (ELECTRONCHARGE_CGS/C_LIGHT_CGS) * UNIT_VEL_IN_CGS / UNIT_MASS_IN_CGS; // converts acceleration to cgs
                     lorentz_units /= UNIT_VEL_IN_CGS / UNIT_TIME_IN_CGS; // converts it to code-units acceleration
 
-                    double bhat[3], bmag=0, efield[3]={0}, efield_coeff=0, dv[3]; /* define unit vectors and B for evolving the lorentz force */
-                    for(k=0;k<3;k++) {bhat[k]=P[i].Gas_B[k]*All.cf_a2inv; bmag+=bhat[k]*bhat[k]; dv[k]=(P[i].Vel[k]-P[i].Gas_Velocity[k])/All.cf_atime;}
-                    if(bmag>0) {bmag=sqrt(bmag); for(k=0;k<3;k++) {bhat[k]/=bmag;}} else {bmag=0;}
+                    Vec3<double> bhat, efield={}; double bmag=0, efield_coeff=0; /* define unit vectors and B for evolving the lorentz force */
+                    bhat = P[i].Gas_B * All.cf_a2inv; bmag = bhat.norm_sq(); Vec3<double> dv = (P[i].Vel - P[i].Gas_Velocity) / All.cf_atime;
+                    if(bmag>0) {bmag=sqrt(bmag); bhat /= bmag;} else {bmag=0;}
                     double grain_charge_cinv = Z_grain / grain_mass * lorentz_units;
 #ifdef GRAIN_RDI_TESTPROBLEM
                     if(All.Grain_Charge_Parameter != 0) {grain_charge_cinv = -All.Grain_Charge_Parameter*sqrt(1.)/((All.Grain_Internal_Density/UNIT_DENSITY_IN_CGS)*(All.Grain_Size_Max/UNIT_LENGTH_IN_CGS)) * pow(All.Grain_Size_Max/P[i].Grain_Size,2);} // set charge manually; this gives 1/t_Lorentz in code units: the sqrt[1] reflects the expected mean density of the box in code units [this is hard-coded for the RDI_testproblem set!] //
@@ -131,18 +130,16 @@ void apply_grain_dragforce(void)
 #endif
                     /* now apply the boris integrator */
                     double lorentz_coeff = (0.5*dt) * bmag * grain_charge_cinv; // dimensionless half-timestep term for boris integrator //
-                    double v_m[3]={0}, v_t[3]={0}, v_p[3]={0}, vcrosst[3]={0};
-                    for(k=0;k<3;k++) {v_m[k] = dv[k] + 0.5*efield_coeff*efield[k];} // half-step from E-field
-                    /* cross-product for rotation */
-                    vcrosst[0] = v_m[1]*bhat[2] - v_m[2]*bhat[1]; vcrosst[1] = v_m[2]*bhat[0] - v_m[0]*bhat[2]; vcrosst[2] = v_m[0]*bhat[1] - v_m[1]*bhat[0];
-                    double tL=1./(eps+0.5*bmag*fabs(grain_charge_cinv)), vgasXB_mag=0; for(k=0;k<3;k++) {vgasXB_mag+=vcrosst[k]*vcrosst[k];}
-                    P[i].Grain_AccelTimeMin = DMIN(P[i].Grain_AccelTimeMin, DMAX(tL , sqrt(Get_Particle_Size(i)*All.cf_atime/(eps+sqrt(vgasXB_mag)/tL))));
-                    for(k=0;k<3;k++) {v_t[k] = v_m[k] + lorentz_coeff * vcrosst[k];} // first half-rotation
-                    vcrosst[0] = v_t[1]*bhat[2] - v_t[2]*bhat[1]; vcrosst[1] = v_t[2]*bhat[0] - v_t[0]*bhat[2]; vcrosst[2] = v_t[0]*bhat[1] - v_t[1]*bhat[0];
-                    for(k=0;k<3;k++) {v_p[k] = v_m[k] + (2.*lorentz_coeff/(1.+lorentz_coeff*lorentz_coeff)) * vcrosst[k];} // second half-rotation
-                    for(k=0;k<3;k++) {v_p[k] += 0.5*efield_coeff*efield[k];} // half-step from E-field
+                    Vec3<double> v_m = dv + efield * (0.5*efield_coeff); // half-step from E-field
+                    Vec3<double> vcrosst = cross(v_m, bhat); /* cross-product for rotation */
+                    double tL=1./(eps+0.5*bmag*fabs(grain_charge_cinv)), vgasXB_mag=vcrosst.norm_sq();
+                    P[i].Grain_AccelTimeMin = DMIN(P[i].Grain_AccelTimeMin, DMAX(tL , sqrt(P[i].Get_Particle_Size()*All.cf_atime/(eps+sqrt(vgasXB_mag)/tL))));
+                    Vec3<double> v_t = v_m + vcrosst * lorentz_coeff; // first half-rotation
+                    vcrosst = cross(v_t, bhat);
+                    Vec3<double> v_p = v_m + vcrosst * (2.*lorentz_coeff/(1.+lorentz_coeff*lorentz_coeff)); // second half-rotation
+                    v_p += efield * (0.5*efield_coeff); // half-step from E-field
                     /* calculate effective acceleration from discrete step in velocity */
-                    for(k=0;k<3;k++) {external_forcing[k] += (v_p[k] - dv[k]) / dt;} // boris integrator
+                    Vec3<double> ef_update = (v_p - dv) / dt; for(k=0;k<3;k++) {external_forcing[k] += ef_update[k];} // boris integrator
                 }
 #endif
 
@@ -189,45 +186,34 @@ void apply_grain_dragforce(void)
 #ifdef PIC_MHD_NEW_RSOL_METHOD
                 lorentz_units *= PIC_SPEEDOFLIGHT_REDUCTION; /* the rsol enters by slowing down the forces here, acts as a unit shift for time */
 #endif
-                double efield[3], bhat[3]={0}, Bmag=0, beta_true_gas[3]; /* define unit vectors and B for evolving the lorentz force */
-                for(k=0;k<3;k++) {
-                    bhat[k]=P[i].Gas_B[k]*All.cf_a2inv;
-                    Bmag+=bhat[k]*bhat[k];
-                    beta_true_gas[k]=P[i].Gas_Velocity[k]/(All.cf_atime*C_LIGHT_CODE);} /* get magnitude and unit vector for B, and vector beta [-true- beta here] */
-                if(Bmag>0) {
-                    Bmag=sqrt(Bmag);
-                    for(k=0;k<3;k++) {bhat[k]/=Bmag;}}
+                Vec3<double> bhat={}; double Bmag=0; /* define unit vectors and B for evolving the lorentz force */
+                bhat = P[i].Gas_B * All.cf_a2inv;
+                Bmag = bhat.norm_sq();
+                Vec3<double> beta_true_gas = P[i].Gas_Velocity / (All.cf_atime*C_LIGHT_CODE); /* vector beta [-true- beta here] */
+                if(Bmag>0) {Bmag=sqrt(Bmag); bhat /= Bmag;}
                 else {Bmag=0;} /* take it correctly assuming its non-zero */
                 double Bmag_cgs = Bmag * UNIT_B_IN_GAUSS; /* convert to cgs */
                 double efield_coeff = (0.5*dt_cgs) * (charge_to_mass_ratio_dimensionless * ELECTRONCHARGE_CGS/PROTONMASS_CGS) * Bmag_cgs * lorentz_units; /* dimensionless half-timestep term for boris integrator */
-                efield[0] = -beta_true_gas[1]*bhat[2] + beta_true_gas[2]*bhat[1]; /* E = -(ugas/c) cross B used here */
-                efield[1] = -beta_true_gas[2]*bhat[0] + beta_true_gas[0]*bhat[2];
-                efield[2] = -beta_true_gas[0]*bhat[1] + beta_true_gas[1]*bhat[0]; /* efield term, but with magnitude of B factored out for units above */
-                double betagamma_0[3],beta_true_cr_0[3],beta_true_cr_f[3],beta2_true_cr=0;
-                for(k=0;k<3;k++) {
-                    beta_true_cr_0[k]=P[i].Vel[k]/(All.cf_atime*reduced_C);
-                    beta2_true_cr+=beta_true_cr_0[k]*beta_true_cr_0[k];} /* magnitude of velocity [this is reduced from c] */
+                Vec3<double> efield = cross(beta_true_gas, bhat) * (-1.0); /* E = -(ugas/c) cross B, but with magnitude of B factored out for units above */
+                Vec3<double> beta_true_cr_0 = P[i].Vel / (All.cf_atime*reduced_C);
+                double beta2_true_cr = beta_true_cr_0.norm_sq(); /* magnitude of velocity [this is reduced from c] */
                 if(beta2_true_cr >= 1) {PRINT_WARNING("VELOCITY HAS EXCEEDED THE SPEED OF LIGHT. BAD.");} /* check against reduced c */
-                double gamma_0=1/sqrt(1-beta2_true_cr); for(k=0;k<3;k++) {betagamma_0[k]=beta_true_cr_0[k]*gamma_0;} /* calculate true gamma, convert to the momentum term ~gamma*beta (this times mc is true scalar momentum) */
+                double gamma_0=1/sqrt(1-beta2_true_cr);
+                Vec3<double> betagamma_0 = beta_true_cr_0 * gamma_0; /* calculate true gamma, convert to the momentum term ~gamma*beta (this times mc is true scalar momentum) */
 
                 /* now apply the boris integrator */
-                double betagamma_m[3]={0}, betagamma_t[3]={0}, betagamma_p[3]={0}, beta_b_crosst[3]={0};
-                for(k=0;k<3;k++) {betagamma_m[k] = betagamma_0[k] + efield_coeff*efield[k];} /* first half-step from E-field */
+                Vec3<double> betagamma_m = betagamma_0 + efield * efield_coeff; /* first half-step from E-field */
                 /* for the integrator, we want to write the equation of motion as dudt = u cross Q. currently have d[beta_gamma]dtau = lorentz_coeff_0 * beta cross bhat, [with lorentz_coeff_0 = efield_coeff identical from above]
                     so need to multiply RHS by gamma/gamma -> d[beta_gamma]dtau = (lorentz_coeff_0/gamma)* (beta_gamma cross bhat) = lorentz_coeff_tau * (beta_gamma cross bhat).
                     use 1/sqrt[1+|beta_gamma|^2] = 1/gamma, to convert this appropriately */
-                double lorentz_coeff_tau = efield_coeff / sqrt(1+betagamma_m[0]*betagamma_m[0]+betagamma_m[1]*betagamma_m[1]+betagamma_m[2]*betagamma_m[2]); /* lorentz factor at this mid-point jump (recall betagamma_m is a 'beta~v/c' here) is needed to correct the factor for the B-field term */
-                beta_b_crosst[0] = betagamma_m[1]*bhat[2] - betagamma_m[2]*bhat[1];
-                beta_b_crosst[1] = betagamma_m[2]*bhat[0] - betagamma_m[0]*bhat[2];
-                beta_b_crosst[2] = betagamma_m[0]*bhat[1] - betagamma_m[1]*bhat[0]; /* cross-product for rotation */
-                for(k=0;k<3;k++) {betagamma_t[k] = betagamma_m[k] + lorentz_coeff_tau * beta_b_crosst[k];} /* first half-rotation [generates the intermediate state we need for this integrator] */
-                beta_b_crosst[0] = betagamma_t[1]*bhat[2] - betagamma_t[2]*bhat[1];
-                beta_b_crosst[1] = betagamma_t[2]*bhat[0] - betagamma_t[0]*bhat[2];
-                beta_b_crosst[2] = betagamma_t[0]*bhat[1] - betagamma_t[1]*bhat[0];
-                for(k=0;k<3;k++) {betagamma_p[k] = betagamma_m[k] + (2.*lorentz_coeff_tau/(1.+lorentz_coeff_tau*lorentz_coeff_tau)) * beta_b_crosst[k];} /* second half-rotation */
-                for(k=0;k<3;k++) {betagamma_p[k] += efield_coeff*efield[k];} /* second half-step from E-field. betagamma_p now contains the final scalar momentum in dimensionless units, i.e. gamma*beta. so this divided by gamma gives final beta */
-                double betagamma2_p=betagamma_p[0]*betagamma_p[0]+betagamma_p[1]*betagamma_p[1]+betagamma_p[2]*betagamma_p[2], gamma_f=sqrt(1+betagamma2_p); /* this converts from betagamma to just gamma */
-                for(k=0;k<3;k++) {beta_true_cr_f[k]=betagamma_p[k]/gamma_f;} /* convert back to a velocity 'beta_true_cr_f' which is always <= 1 - this is now the 'effective' velocity with which CRs will propagate */
+                double lorentz_coeff_tau = efield_coeff / sqrt(1+betagamma_m.norm_sq()); /* lorentz factor at this mid-point jump (recall betagamma_m is a 'beta~v/c' here) is needed to correct the factor for the B-field term */
+                Vec3<double> beta_b_crosst = cross(betagamma_m, bhat); /* cross-product for rotation */
+                Vec3<double> betagamma_t = betagamma_m + beta_b_crosst * lorentz_coeff_tau; /* first half-rotation [generates the intermediate state we need for this integrator] */
+                beta_b_crosst = cross(betagamma_t, bhat);
+                Vec3<double> betagamma_p = betagamma_m + beta_b_crosst * (2.*lorentz_coeff_tau/(1.+lorentz_coeff_tau*lorentz_coeff_tau)); /* second half-rotation */
+                betagamma_p += efield * efield_coeff; /* second half-step from E-field. betagamma_p now contains the final scalar momentum in dimensionless units, i.e. gamma*beta. so this divided by gamma gives final beta */
+                double betagamma2_p=betagamma_p.norm_sq(), gamma_f=sqrt(1+betagamma2_p); /* this converts from betagamma to just gamma */
+                Vec3<double> beta_true_cr_f = betagamma_p / gamma_f; /* convert back to a velocity 'beta_true_cr_f' which is always <= 1 - this is now the 'effective' velocity with which CRs will propagate */
 
                 for(k=0;k<3;k++)
                 {
@@ -270,9 +256,9 @@ void apply_grain_dragforce(void)
 /* this structure defines the variables that need to be sent -from- the 'searching' element */
 struct INPUT_STRUCT_NAME
 {
-    int NodeList[NODELISTLENGTH]; MyDouble Pos[3], KernelRadius; /* these must always be defined */
+    int NodeList[NODELISTLENGTH]; Vec3<MyDouble> Pos; MyDouble KernelRadius; /* these must always be defined */
 #if defined(GRAIN_BACKREACTION)
-    double Grain_DeltaMomentum[3], Gas_Density, Grain_AccelTimeMin;
+    Vec3<double> Grain_DeltaMomentum; double Gas_Density, Grain_AccelTimeMin;
 #endif
 }
 *DATAIN_NAME, *DATAGET_NAME; /* dont mess with these names, they get filled-in by your definitions automatically */
@@ -280,10 +266,10 @@ struct INPUT_STRUCT_NAME
 /* this subroutine assigns the values to the variables that need to be sent -from- the 'searching' element */
 static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
 {   /* "i" is the particle from which data will be assigned, to structure "in" */
-    int k; for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k];} /* good example - always needed */
+    in->Pos=P[i].Pos; /* good example - always needed */
     in->KernelRadius = P[i].KernelRadius; /* also always needed for search (can change the radius "P[i].KernelRadius" but in->KernelRadius must be defined */
 #if defined(GRAIN_BACKREACTION)
-    for(k=0;k<3;k++) {in->Grain_DeltaMomentum[k]=P[i].Grain_DeltaMomentum[k];}
+    in->Grain_DeltaMomentum = P[i].Grain_DeltaMomentum;
     in->Gas_Density = P[i].Gas_Density;
     in->Grain_AccelTimeMin = P[i].Grain_AccelTimeMin;
 #endif
@@ -323,8 +309,8 @@ int grain_backrx_evaluate(int target, int mode, int *exportflag, int *exportnode
             {
                 j = ngblist[n]; /* since we use the -threaded- version above of ngb-finding, its super-important this is the lower-case ngblist here! */
                 if((P[j].Mass <= 0)||(P[j].KernelRadius <= 0)) {continue;} /* make sure neighbor is valid */
-                int k; double dp[3]; for(k=0;k<3;k++) {dp[k]=local.Pos[k]-P[j].Pos[k];} /* position offset */
-                NEAREST_XYZ(dp[0],dp[1],dp[2],1); double r2=dp[0]*dp[0]+dp[1]*dp[1]+dp[2]*dp[2]; /* box-wrap appropriately and calculate distance */
+                int k; Vec3<double> dp=local.Pos-P[j].Pos; /* position offset */
+                nearest_xyz(dp); double r2=dp.norm_sq(); /* box-wrap appropriately and calculate distance */
 #ifdef BOX_BND_PARTICLES
                 if(P[j].ID > 0) {r2 = -1;} /* ignore frozen boundary particles */
 #endif
@@ -341,12 +327,14 @@ int grain_backrx_evaluate(int target, int mode, int *exportflag, int *exportnode
                         P[j].Vel[k] += dv; // add the velocity (checking for thread safety in doing so!)
                         #pragma omp atomic
                         CellP[j].VelPred[k] += dv; // add the velocity (checking for thread safety in doing so!)
+                        #pragma omp atomic
+                        P[j].dp[k] += dv * P[j].Mass; // track momentum change for tree node update
                     }
                     
                     double taccel_min_prev = 0, taccel_min_new = 0;
                     #pragma omp atomic read
                     taccel_min_prev = P[j].Grain_AccelTimeMin; // this can be modified below so needs to be done in a thread-safe manner here //
-                    taccel_min_new = DMIN(DMIN(2.*All.ErrTolIntAccuracy*Get_Particle_Size(j)*All.cf_atime*All.cf_atime/sqrt(dv2+MIN_REAL_NUMBER) , 4.*local.Grain_AccelTimeMin), taccel_min_prev);
+                    taccel_min_new = DMIN(DMIN(2.*All.ErrTolIntAccuracy*P[j].Get_Particle_Size()*All.cf_atime*All.cf_atime/sqrt(dv2+MIN_REAL_NUMBER) , 4.*local.Grain_AccelTimeMin), taccel_min_prev);
                     if(taccel_min_new < taccel_min_prev)
                     {
                         #pragma omp atomic write
@@ -396,7 +384,7 @@ double return_grain_cross_section_per_unit_mass(int i)
     where here 'All.DM_InteractionCrossSection' is the cross-section read in from the params file, and other params like DM_InteractionVelocityScale
     allow the user to control the collision velocity dependence. This function should be appropriately modified to the actual grain physics being represented.
     Here, the default assumption is simple hard-sphere scattering with a constant cross section per unit grain mass, set by the grain size */
-double prob_of_grain_interaction(double cx_per_unitmass, double mass, double r, double h_si, double dV[3], double dt, int j_ngb)
+double prob_of_grain_interaction(double cx_per_unitmass, double mass, double r, double h_si, Vec3<double>& dV, double dt, int j_ngb)
 {
     double dVmag = sqrt(dV[0]*dV[0]+dV[1]*dV[1]+dV[2]*dV[2]) / All.cf_atime; // velocity in physical
     double rho_eff = 0.5*(mass + P[j_ngb].Mass) / (h_si*h_si*h_si) * All.cf_a3inv; // density in physical
@@ -409,7 +397,7 @@ double prob_of_grain_interaction(double cx_per_unitmass, double mass, double r, 
 /*! This routine sets the kicks for each grain after it has been decided that they will interact. By default at present this results only in velocity 'kicks',
     but one can modify this function to allow other types of interactions. By default, it will assume elastic collisions,
     and an algorithm that conserves energy and momentum but picks a random direction so it does not conserves angular momentum. */
-void calculate_interact_kick(double dV[3], double kick[3], double m)
+void calculate_interact_kick(Vec3<double>& dV, Vec3<double>& kick, double m)
 {
     double dVmag = (1-All.DM_DissipationFactor)*sqrt(dV[0]*dV[0]+dV[1]*dV[1]+dV[2]*dV[2]);
     if(dVmag<0) {dVmag=0;}
@@ -435,12 +423,12 @@ void calculate_interact_kick(double dV[3], double kick[3], double m)
 
 /* this structure defines the variables that need to be sent -from- the 'searching' element */
 struct INPUT_STRUCT_NAME {
-    int NodeList[NODELISTLENGTH], Type; MyDouble Mass, KernelRadius, Pos[3], Vel[3], Grain_Size, Grain_Abs_Coeff[N_RT_FREQ_BINS]; /* these must always be defined */
+    int NodeList[NODELISTLENGTH], Type; MyDouble Mass, KernelRadius; Vec3<MyDouble> Pos, Vel; MyDouble Grain_Size, Grain_Abs_Coeff[N_RT_FREQ_BINS]; /* these must always be defined */
 } *DATAIN_NAME, *DATAGET_NAME; /* dont mess with these names, they get filled-in by your definitions automatically */
 
 /* this subroutine assigns the values to the variables that need to be sent -from- the 'searching' element */
 static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration) {   /* "i" is the particle from which data will be assigned, to structure "in" */
-    in->Type=P[i].Type; in->Mass=P[i].Mass; in->KernelRadius=P[i].KernelRadius; int k; for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k]; in->Vel[k]=P[i].Vel[k];}
+    in->Type=P[i].Type; in->Mass=P[i].Mass; in->KernelRadius=P[i].KernelRadius; int k; in->Pos=P[i].Pos; in->Vel=P[i].Vel;
     if((1 << P[i].Type) & (GRAIN_PTYPES))
     {
         in->Grain_Size=P[i].Grain_Size; int k_freq;
@@ -448,14 +436,14 @@ static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int l
         for(k_freq=0;k_freq<N_RT_FREQ_BINS;k_freq++)
         {
             double Q_abs_eff = return_grain_extinction_efficiency_Q(i, k_freq); /* need this to calculate the absorption efficiency in each band */
-            in->Grain_Abs_Coeff[k_freq] = Q_abs_eff * 3. / (4. * C_LIGHT_CODE_REDUCED(j) * rho_grain_code * R_grain_code * rho_gas_code);
+            in->Grain_Abs_Coeff[k_freq] = Q_abs_eff * 3. / (4. * C_LIGHT_CODE_REDUCED * rho_grain_code * R_grain_code * rho_gas_code);
         }
     }
 }
 
 /* this structure defines the variables that need to be sent -back to- the 'searching' element */
 struct OUTPUT_STRUCT_NAME { /* define variables below as e.g. "double X;" */
-    MyDouble Interpolated_Radiation_Acceleration[3]; /* flux values to return to grains */
+    Vec3<MyDouble> Interpolated_Radiation_Acceleration; /* flux values to return to grains */
     MyDouble Interpolated_Opacity[N_RT_FREQ_BINS]; /* opacity values interpolated to gas positions */
     MyDouble InterpolatedGeometricDustCrossSection; /* geometric opacity (no wavelength dependence) interpolated to gas positions */
 } *DATARESULT_NAME, *DATAOUT_NAME; /* dont mess with these names, they get filled-in by your definitions automatically */
@@ -465,7 +453,7 @@ static inline void OUTPUTFUNCTION_NAME(struct OUTPUT_STRUCT_NAME *out, int i, in
     int k,k_freq;
     if(P[i].Type==0) {ASSIGN_ADD(CellP[i].InterpolatedGeometricDustCrossSection,out->InterpolatedGeometricDustCrossSection,mode);
         for(k_freq=0;k_freq<N_RT_FREQ_BINS;k_freq++) {ASSIGN_ADD(CellP[i].Interpolated_Opacity[k_freq],out->Interpolated_Opacity[k_freq],mode);}}
-    if((1 << P[i].Type) & (GRAIN_PTYPES)) {for(k=0;k<3;k++) {P[i].GravAccel[k] += out->Interpolated_Radiation_Acceleration[k]/All.cf_a2inv;}} /* this simply adds to the 'gravitational' acceleration for kicks */ // currently incompatible with hermite integrator -- need to update to Other_Accel
+    if((1 << P[i].Type) & (GRAIN_PTYPES)) {P[i].GravAccel += out->Interpolated_Radiation_Acceleration/All.cf_a2inv;} /* this simply adds to the 'gravitational' acceleration for kicks */ // currently incompatible with hermite integrator -- need to update to Other_Accel
 }
 
 /* this subroutine does the actual neighbor-element calculations (this is the 'core' of the loop, essentially) */
@@ -489,8 +477,8 @@ int interpolate_fluxes_opacities_gasgrains_evaluate(int target, int mode, int *e
             {
                 j = ngblist[n]; /* since we use the -threaded- version above of ngb-finding, its super-important this is the lower-case ngblist here! */
                 if((P[j].Mass <= 0)||(P[j].KernelRadius <= 0)) {continue;} /* make sure neighbor is valid */
-                int k,k_freq; double dp[3],h_to_use; for(k=0;k<3;k++) {dp[k]=local.Pos[k]-P[j].Pos[k];} /* position offset */
-                NEAREST_XYZ(dp[0],dp[1],dp[2],1); double r2=dp[0]*dp[0]+dp[1]*dp[1]+dp[2]*dp[2]; /* box-wrap appropriately and calculate distance */
+                int k,k_freq; double h_to_use; Vec3<double> dp=local.Pos-P[j].Pos; /* position offset */
+                nearest_xyz(dp); double r2=dp.norm_sq(); /* box-wrap appropriately and calculate distance */
                 if(local.Type == 0) {h_to_use = P[j].KernelRadius;} else {h_to_use = local.KernelRadius;}
                 if((r2>0)&&(r2<h_to_use*h_to_use)) /* only keep elements inside search radius */
                 {
@@ -510,24 +498,24 @@ int interpolate_fluxes_opacities_gasgrains_evaluate(int target, int mode, int *e
                         }
                     } else { /* sitting on a -grain- element, want to interpolate flux to it and calculate radiation pressure force */
                         wt = CellP[j].Density*All.cf_a3inv * wk_i; /* weight of element to 'i, with appropriate coefficient from above */
-                        double radacc[3]={0},vel_i[3]={0},dtEgamma_work_done=0; for(k=0;k<3;k++) {vel_i[k]=RSOL_CORRECTION_FACTOR_FOR_VELOCITY_TERMS(j)*local.Vel[k]/All.cf_atime;} /* velocity of interest here is the grain velocity (radiation in lab frame) */
+                        double radacc[3]={0},vel_i[3]={0},dtEgamma_work_done=0; for(k=0;k<3;k++) {vel_i[k]=RSOL_CORRECTION_FACTOR_FOR_VELOCITY_TERMS*local.Vel[k]/All.cf_atime;} /* velocity of interest here is the grain velocity (radiation in lab frame) */
                         for(k_freq=0;k_freq<N_RT_FREQ_BINS;k_freq++)
                         {
                             double f_kappa_abs=0.5,vdot_h[3]={0},flux_i[3]={0},flux_mag=0,erad_i=0,flux_corr=1;
-                            f_kappa_abs = 0.5; // rt_absorb_frac_albedo(i,k_freq); -- this is set to 1/2 anyways but would require extra passing, ignore for now //
+                            f_kappa_abs = 0.5; // rt_absorb_frac_albedo(i,k_freq, P, CellP); -- this is set to 1/2 anyways but would require extra passing, ignore for now //
 #if defined(RT_EVOLVE_FLUX) || (defined(RT_USE_GRAVTREE_SAVE_RAD_FLUX) && defined(RT_USE_GRAVTREE_SAVE_RAD_ENERGY))
                             erad_i = CellP[j].Rad_E_gamma_Pred[k_freq];
-                            eddington_tensor_dot_vector(CellP[j].ET[k_freq],vel_i,vdot_h); for(k=0;k<3;k++) {vdot_h[k] = erad_i * (vel_i[k] + vdot_h[k]);} // calculate volume integral of scattering coefficient t_inv * (gas_vel . [e_rad*I + P_rad_tensor]), which gives an additional time-derivative term. this is the P term //
+                            {Vec3<double> v_i{vel_i[0],vel_i[1],vel_i[2]}; Vec3<double> vdh = erad_i * (v_i + CellP[j].ET[k_freq].matvec(v_i)); vdot_h[0]=vdh[0]; vdot_h[1]=vdh[1]; vdot_h[2]=vdh[2];} // P_rad term + eI term //
                             for(k=0;k<3;k++) {flux_i[k]=CellP[j].Rad_Flux_Pred[k_freq][k]; flux_mag+=flux_i[k]*flux_i[k];}
                             if(flux_mag>0 && isfinite(flux_mag)) {flux_mag=sqrt(flux_mag);} else {flux_mag=MIN_REAL_NUMBER; flux_i[0]=flux_i[1]=0; flux_i[2]=flux_mag;}
 #elif (defined(RT_OTVET) || defined(RT_FLUXLIMITEDDIFFUSION))
                             erad_i = CellP[j].Rad_E_gamma_Pred[k_freq];
                             for(k=0;k<3;k++) {flux_i[k] = -CellP[j].Gradients.Rad_E_gamma_ET[k_freq][k]; flux_mag+=flux_i[k]*flux_i[k];}
                             if(flux_mag>0) {for(k=0;k<3;k++) {flux_i[k]/=sqrt(flux_mag);}} else {flux_i[0]=0;flux_i[1]=0;flux_i[2]=1;}
-                            flux_mag = erad_i*C_LIGHT_CODE_REDUCED(j); for(k=0;k<3;k++) {flux_i[k]*=flux_mag;}
+                            flux_mag = erad_i*C_LIGHT_CODE_REDUCED; for(k=0;k<3;k++) {flux_i[k]*=flux_mag;}
 #endif
                             if(!isfinite(flux_mag) || flux_mag<=MIN_REAL_NUMBER) {flux_mag=MIN_REAL_NUMBER; flux_i[0]=flux_i[1]=0; flux_i[2]=flux_mag;}
-                            double flux_thin = erad_i * C_LIGHT_CODE_REDUCED(j); if(!isfinite(flux_thin) || flux_thin<=0) {flux_thin=0;}
+                            double flux_thin = erad_i * C_LIGHT_CODE_REDUCED; if(!isfinite(flux_thin) || flux_thin<=0) {flux_thin=0;}
                             flux_corr = DMIN(1., 100.*flux_thin/flux_mag);
                             for(k=0;k<3;k++)
                             {
@@ -535,7 +523,7 @@ int interpolate_fluxes_opacities_gasgrains_evaluate(int target, int mode, int *e
                                 dtEgamma_work_done += (2.*f_kappa_abs-1.) * radacc[k] * vel_i[k] * local.Mass; // PdV work done by photons [absorbed ones are fully-destroyed, so their loss of energy and momentum is already accounted for by their deletion in this limit -- note that we have to be careful about the RSOL factors here! //
                             }
                         }
-                        for(k=0;k<3;k++) {out.Interpolated_Radiation_Acceleration[k] += radacc[k];} /* prepare to send back to grain */
+                        for(int kk=0;kk<3;kk++) {out.Interpolated_Radiation_Acceleration[kk] += radacc[kk];} /* prepare to send back to grain */
                     }
                 }
             } // numngb_inbox loop

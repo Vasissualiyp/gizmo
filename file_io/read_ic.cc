@@ -317,7 +317,7 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
                 int nmax=NUM_ISMDUSTCHEM_SIZE_BINS;
                 // The code outputs the bin mass but does not track it directly, instead tracking the bin slope
                 // which depends on the bin number, mass, and bin edges. Bin mass is temporarily stored in 
-                // the slope field and then the slope is recalculated in Initialize_ISMDustChemEvo_Particle_Variables()
+                // the slope field and then the slope is recalculated in Initialize_ISMDustChemEvo_Particle_Variables(, P, CellP)
                 for(k=0;k<NUM_ISMDUSTCHEM_SPECIES;k++) {
                     int kf;
                     for(kf=0;kf<nmax;kf++) { // normal read-in
@@ -419,9 +419,7 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
             break;
 
         case IO_EOSTEMP:
-#ifdef EOS_CARRIES_TEMPERATURE
             for(n = 0; n < pc; n++) {CellP[offset + n].Temperature = *fp++;}
-#endif
             break;
 
         case IO_EOSABAR:
@@ -431,9 +429,12 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
             break;
 
         case IO_EOSCOMP:
-#ifdef EOS_TILLOTSON
+#if defined(EOS_TILLOTSON) || defined(EOS_ANEOS)
             for(n = 0; n < pc; n++) {CellP[offset + n].CompositionType = *ip_int++;}
 #endif
+            break;
+
+        case IO_EOSPHASE:
             break;
 
         case IO_EOSYE:
@@ -485,7 +486,7 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
         case IO_EDDINGTON_TENSOR:
 #if defined(RADTRANSFER) && defined(OUTPUT_EDDINGTON_TENSOR)
             for(n = 0; n < pc; n++) {
-                for(k=0;k<6;k++) {int kf; for(kf=0;kf<N_RT_FREQ_BINS;kf++) {CellP[offset + n].ET[kf][k] = fp[N_RT_FREQ_BINS*k + kf];}}
+                for(k=0;k<6;k++) {int kf; for(kf=0;kf<N_RT_FREQ_BINS;kf++) {CellP[offset + n].ET[kf].data[k] = fp[N_RT_FREQ_BINS*k + kf];}}
                 fp += 6*N_RT_FREQ_BINS;
             }
 #endif
@@ -513,7 +514,7 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
     	        allocate_gas_abundances_memory(&(ChimesGasVars[offset + n]), &ChimesGlobalVars);
 	            for (k = 0; k < ChimesGlobalVars.totalNumberOfSpecies; k++) {ChimesGasVars[offset + n].abundances[k] = (ChimesFloat) (*fp++);}
 #ifdef CHIMES_TURB_DIFF_IONS
-                chimes_update_turbulent_abundances(n, 1);
+                chimes_update_turbulent_abundances(n, 1, P, CellP);
 #endif
             }
 #endif
@@ -560,10 +561,16 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
             break;
 
         case IO_UNSPMASS:
-#if defined(SINK_WIND_SPAWN) && defined(OUTPUT_UNSPAWNED_SINKMASS)
+#if defined(SINK_WIND_SPAWN)
              for(n = 0; n < pc; n++) {P[offset + n].unspawned_wind_mass = *fp++;}
 #endif
-            break; 
+            break;
+
+        case IO_UNSPJETMASS:
+#if defined(SINK_WIND_SPAWN) && defined(SINGLE_STAR_FB_JETS)
+             for(n = 0; n < pc; n++) {P[offset + n].unspawned_jet_mass = *fp++;}
+#endif
+            break;
             
         case IO_TURB_DYNAMIC_COEFF:
 #ifdef TURB_DIFF_DYNAMIC
@@ -843,6 +850,12 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
         case IO_DUSTCHEM_COAG_MASSRATE:
         case IO_DUSTCHEM_SHAT_MASSRATE:
         case IO_MACHNUM:
+        case IO_DUST_TO_GAS:
+        case IO_AMBIPOLAR:
+        case IO_OHMIC:
+        case IO_HALL:
+        case IO_SOFT:
+        case IO_SHOCKMACHNUM:
             break;
 
         case IO_LASTENTRY:
@@ -869,6 +882,7 @@ void read_file(char *fname, int readTask, int lastTask)
 
 
     int rank, pcsum;
+    int n_blocks_zerofilled = 0; /* datasets the code asked for but the file did not have */
     hid_t hdf5_file = 0, hdf5_grp[6], hdf5_dataspace_in_file;
     hid_t hdf5_datatype = 0, hdf5_dataspace_in_memory, hdf5_dataset;
     hsize_t dims[2], count[2], start[2];
@@ -973,8 +987,8 @@ void read_file(char *fname, int readTask, int lastTask)
 
         for(i = 0; i < 6; i++) {All.MassTable[i] = header.mass[i];}
 
-        All.MaxPart = (int) (All.PartAllocFactor * (All.TotNumPart / NTask));
-        All.MaxPartGas = (int) (All.PartAllocFactor * (All.TotN_gas / NTask));	/* sets the maximum number of particles that may reside on a processor */
+        All.MaxPart = (int) (All.PartAllocFactor * balanced_particles_per_rank(All.TotNumPart, NTask));
+        All.MaxPartGas = (int) (All.PartAllocFactor * balanced_particles_per_rank(All.TotN_gas, NTask));	/* sets the maximum number of particles that may reside on a processor */
 #ifdef ALLOW_IMBALANCED_GASPARTICLELOAD
         All.MaxPartGas = All.MaxPart; // PFH: increasing All.MaxPartGas according to this line can allow better load-balancing in some cases. however it leads to more memory problems
         // (PFH: needed to revert the change -- i.e. INCLUDE the line above: commenting it out, while it improved memory useage, causes some instability in the domain decomposition for
@@ -1080,8 +1094,18 @@ void read_file(char *fname, int readTask, int lastTask)
 #ifdef INPUT_READ_COSMICRAYENERGY
                    && blocknr != IO_COSMICRAY_ENERGY
 #endif
-#ifdef EOS_CARRIES_TEMPERATURE
+                   /* Temperature is derived output, not input: blockpresent() is keyed off
+                    * OUTPUT_TEMPERATURE (implicit for any COOLING run), so this demanded a
+                    * Temperature block in the ICs. The HDF5 reader probes with H5Dopen and skips
+                    * a missing dataset, but gadget-binary ICs carry no block labels, so absence
+                    * cannot be detected and the sequential fread ran off the end of the file
+                    * (endrun 778) -- which made every legacy binary IC unreadable, e.g. the MUSIC
+                    * zoom ICs behind the FIRE suite. Skip it for the binary formats ONLY, so HDF5
+                    * behaviour is untouched; INPUT_READ_TEMPERATURE forces the read regardless. */
+#ifdef INPUT_READ_TEMPERATURE
                    && blocknr != IO_EOSTEMP
+#else
+                   && (blocknr != IO_EOSTEMP || All.ICFormat == 1 || All.ICFormat == 2)
 #endif
 #ifdef EOS_CARRIES_ABAR
                    && blocknr != IO_EOSABAR
@@ -1089,7 +1113,7 @@ void read_file(char *fname, int readTask, int lastTask)
 #ifdef EOS_CARRIES_YE
                    && blocknr != IO_EOSYE
 #endif
-#ifdef EOS_TILLOTSON
+#if defined(EOS_TILLOTSON) || defined(EOS_ANEOS)
                    && blocknr != IO_EOSCOMP
 #endif
 #if defined(HYDRO_MESHLESS_FINITE_VOLUME) && ((HYDRO_FIX_MESH_MOTION==1)||(HYDRO_FIX_MESH_MOTION==2)||(HYDRO_FIX_MESH_MOTION==3))
@@ -1114,6 +1138,13 @@ void read_file(char *fname, int readTask, int lastTask)
                    && blocknr != IO_STAGE_PROTOSTAR
                    && blocknr != IO_AGE_PROTOSTAR
                    && blocknr != IO_LUM_SINGLESTAR
+#endif
+#if defined(SINGLE_STAR_SINK_DYNAMICS) && defined(INPUT_READ_SINKPROPS)
+                   /* age is not a protostellar-evolution property: eligible_for_hermite()'s
+                      settling window keys on it, so a pure-gravity sink build must be able to
+                      read a mature age from the IC too. Same gate init.cc uses to preserve the
+                      read value for type 5. Absent datasets zero-fill (= formed at t=0). */
+                   && blocknr != IO_AGE
 #endif
                    )
                                 continue;	/* ignore all other blocks in initial conditions */
@@ -1166,10 +1197,6 @@ void read_file(char *fname, int readTask, int lastTask)
             if(RestartFlag == 2 && blocknr == IO_EDDINGTON_TENSOR) {continue;}
 #endif
 
-#if !defined(EOS_CARRIES_TEMPERATURE)
-            if(RestartFlag == 2 && blocknr == IO_EOSTEMP) {continue;}
-#endif
-            
 #if defined(SINGLE_STAR_AND_SSP_HYBRID_MODEL) && defined(SINGLE_STAR_RESTART_FROM_FIRESIM)
             if(RestartFlag == 2 && blocknr == IO_RADGAMMA) {continue;}
             if(RestartFlag == 2 && blocknr == IO_RAD_OPACITY) {continue;}
@@ -1264,6 +1291,29 @@ void read_file(char *fname, int readTask, int lastTask)
                     }
                     else
                     {
+                        /* Report a dataset this block wants that the file does not have; the read
+                           below zero-fills it without comment. That is right for a fresh IC, which
+                           carries a few fields and takes the rest from the parameter file. On a
+                           snapshot restart it is not: blockpresent() governs both write and read,
+                           so a snapshot from the same build has no absences, and one here means a
+                           config change, a field added since, or a renamed dataset -- with the
+                           zeros reaching the physics. Probed once per (block, type); the read loop
+                           below repeats per communication chunk. */
+                        if(ThisTask == readTask && All.ICFormat == 3 && n_in_file > 0)
+                        {
+                            get_dataset_name(blocknr, buf);
+                            H5E_auto_t old_func; void *old_client_data;
+                            H5Eget_auto(&old_func, &old_client_data); H5Eset_auto(NULL, NULL);
+                            hid_t probe = H5Dopen(hdf5_grp[type], buf);
+                            H5Eset_auto(old_func, old_client_data);
+                            if(probe < 0)
+                            {
+                                n_blocks_zerofilled++;
+                                if(RestartFlag >= 2)
+                                    {printf("WARNING: PartType%d/%s not in %s: %lld values zero-filled\n", type, buf, fname, n_in_file); fflush(stdout);}
+                            }
+                            else {H5Dclose(probe);}
+                        }
                         for(task = readTask; task <= lastTask; task++)
                         {
                             n_for_this_task = n_in_file / ntask;
@@ -1294,8 +1344,15 @@ void read_file(char *fname, int readTask, int lastTask)
                                     if(All.ICFormat == 3 && pc > 0)
                                     {
                                         get_dataset_name(blocknr, buf);
+                                        /* suppress HDF5 error messages for optional datasets that may not exist in the file */
+                                        H5E_auto_t old_func; void *old_client_data;
+                                        H5Eget_auto(&old_func, &old_client_data);
+                                        H5Eset_auto(NULL, NULL);
                                         hdf5_dataset = H5Dopen(hdf5_grp[type], buf);
+                                        H5Eset_auto(old_func, old_client_data);
 
+                                      if(hdf5_dataset >= 0)
+                                      {
                                         dims[0] = header.npart[type];
                                         dims[1] = get_values_per_blockelement(blocknr);
 #if (CRFLUID_ALT_SPECTRUM_SPECIALSNAPRESTART==1)
@@ -1330,7 +1387,7 @@ void read_file(char *fname, int readTask, int lastTask)
                                             case 0:
                                                 hdf5_datatype = H5Tcopy(H5T_NATIVE_UINT);
                                                 break;
-                                                
+
                                             case 1:
 #ifdef INPUT_IN_DOUBLEPRECISION
                                                 hdf5_datatype = H5Tcopy(H5T_NATIVE_DOUBLE);
@@ -1338,7 +1395,7 @@ void read_file(char *fname, int readTask, int lastTask)
                                                 hdf5_datatype = H5Tcopy(H5T_NATIVE_FLOAT);
 #endif
                                                 break;
-                                                
+
                                             case 2:
                                                 hdf5_datatype = H5Tcopy(H5T_NATIVE_UINT64);
                                                 break;
@@ -1357,6 +1414,16 @@ void read_file(char *fname, int readTask, int lastTask)
                                         H5Sclose(hdf5_dataspace_in_memory);
                                         H5Sclose(hdf5_dataspace_in_file);
                                         H5Dclose(hdf5_dataset);
+                                      }
+                                      else
+                                      {
+                                          /* Optional dataset absent from this file. Without this the fill below
+                                             would read the PREVIOUS block's bytes still sitting in CommBuffer --
+                                             stale-buffer garbage into whatever field this block feeds. Zero it so
+                                             an absent block deterministically reads as zero (e.g. reservoirs added
+                                             after a snapshot was written restart at zero, not at garbage). */
+                                          memset(CommBuffer, 0, ((size_t) bytes_per_blockelement) * pc);
+                                      }
                                     }
 
                                 }
@@ -1412,6 +1479,11 @@ void read_file(char *fname, int readTask, int lastTask)
 
         if(All.ICFormat == 3)
         {
+            /* Repeated after the per-block lines, which scroll past on a big read. At RestartFlag 0
+               the count is the whole report: a fresh IC is expected to be missing most blocks. */
+            if(n_blocks_zerofilled > 0)
+                {printf("%s: %d block(s) absent and zero-filled%s\n", fname, n_blocks_zerofilled,
+                        (RestartFlag >= 2) ? " -- see the WARNING lines above" : " (normal for a fresh IC)"); fflush(stdout);}
             for(type = 5; type >= 0; type--) {if(header.npart[type] > 0) {H5Gclose(hdf5_grp[type]);}}
             H5Fclose(hdf5_file);
         }

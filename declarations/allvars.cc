@@ -59,10 +59,7 @@ int *Send_offset, *Send_count, *Recv_count, *Recv_offset, *Sendcount;
 
 int TakeLevel;
 
-int FirstActiveParticle;
-int *NextActiveParticle;
-int *ActiveParticleList;
-int ActiveParticleNumber;
+std::vector<int> ActiveParticleList;
 unsigned char *ProcessedFlag;
 
 int TimeBinCount[TIMEBINS];
@@ -71,8 +68,8 @@ int TimeBinActive[TIMEBINS];
 
 int FirstInTimeBin[TIMEBINS];
 int LastInTimeBin[TIMEBINS];
-int *NextInTimeBin;
-int *PrevInTimeBin;
+std::vector<int> NextInTimeBin;
+std::vector<int> PrevInTimeBin;
 
 size_t HighMark_run, HighMark_domain, HighMark_gravtree,
   HighMark_pmperiodic, HighMark_pmnonperiodic, HighMark_gasdensity, HighMark_hydro, HighMark_GasGrad;
@@ -163,6 +160,17 @@ int Flag_FullStep;		/*!< Flag used to signal that the current step involves all 
 
 
 int TreeReconstructFlag;
+int TreeMomentsStaleFlag;
+int DomainReconstructFlag;
+int NtotSwallowedThisStep;
+int TreeWalkValidatePending;
+int TreeAuditMomentsPending;
+int TreeDiscardImminent;
+long long TreeOpsCount[TREEOPS_N];
+double TreeMaintTime_SwapPointers;
+double TreeMaintTime_Rearrange;
+long long TreeMaintCount_SwapPointers;
+long long ForceAddElementToTree_CallsSinceBuild;
 #ifdef WAKEUP
 int NeedToWakeupParticles;      /*!< Flags used to signal that wakeups need to be processed at the beginning of the next timestep */
 int NeedToWakeupParticles_local;
@@ -190,7 +198,7 @@ int Stars_converted;		/*!< current number of star particles in gas particle bloc
 
 double TimeOfLastTreeConstruction;	/*!< holds what it says */
 
-int *Ngblist;			/*!< Buffer to hold indices of neighbours retrieved by the neighbour search
+std::vector<int> Ngblist;			/*!< Buffer to hold indices of neighbours retrieved by the neighbour search
 				   routines */
 double *R2ngblist;
 

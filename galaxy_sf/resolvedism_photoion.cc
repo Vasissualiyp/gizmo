@@ -469,11 +469,11 @@ void resolvedism_photoionize(void)
     /* the sweep template iterates the ACTIVE chain only: splice inactive
      * ionizing stars in for the driver (restored below), else their regions
      * are wiped by the global reset on every star-inactive fine step */
-    int pi_saved_first_active = FirstActiveParticle;
+    size_t pi_saved_n_active = ActiveParticleList.size();
     for(i = 0; i < NumPart; i++) {
         if(PISlot[i] < 0) continue;
         if(TimeBinActive[P[i].TimeBin]) continue;
-        NextActiveParticle[i] = FirstActiveParticle; FirstActiveParticle = i;
+        ActiveParticleList.push_back(i);
     }
 
     /* Iterative driver. Per iteration:
@@ -658,7 +658,7 @@ void resolvedism_photoionize(void)
     } while(incomplete_total > 0 && iter < max_iter);
     if(ThisTask == 0 && iter >= max_iter && max_iter >= 1000) {printf("WARNING: RESOLVEDISM PI hit max_iter=%d with %d sources: final pass finalized overlapping sources together (shared cells billed more than once)\n", max_iter, nslots_tot);}
 
-    FirstActiveParticle = pi_saved_first_active; /* unsplice */
+    ActiveParticleList.resize(pi_saved_n_active); /* unsplice */
 
     if(iter > 1) {
         double local_max_r = 0, local_min_r = MAX_REAL_NUMBER;

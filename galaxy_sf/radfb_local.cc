@@ -21,12 +21,12 @@ void radiation_pressure_winds_consolidated(void)
     age_threshold_in_gyr = 1.0e10; // for the single-star problems, or updated algorithm [where it adds little expense], we want to include everything, for completeness //
 #endif
     if(All.RP_Local_Momentum_Renormalization<=0) return;
-    Ngblist = (int *) mymalloc("Ngblist",NumPart * sizeof(int));
+    Ngblist.resize(NumPart);
     PRINT_STATUS("Local Radiation-Pressure acceleration calculation");
-    MyDouble *pos; int N_MAX_KERNEL,N_MIN_KERNEL,MAXITER_FB,NITER,startnode,dummy,numngb_inbox,i,j,k,n;
+    Vec3<double> pos={}; int N_MAX_KERNEL,N_MIN_KERNEL,MAXITER_FB,NITER,startnode,dummy,numngb_inbox,i,j,k,n;
     double h,wt_sum,delta_v_imparted_rp=0,total_n_wind=0,total_mom_wind=0,total_prob_kick=0,avg_v_kick=0,avg_taufac=0;
 
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         if((P[i].Type == 4)||((All.ComovingIntegrationOn==0)&&((P[i].Type == 2)||(P[i].Type==3))))
         {
@@ -38,14 +38,14 @@ void radiation_pressure_winds_consolidated(void)
                 double lm_ssp = evaluate_light_to_mass_ratio(star_age, i); // light-to-mass ratio in solar
                 double lum_cgs = (lm_ssp * SOLAR_LUM_CGS) * (P[i].Mass*UNIT_MASS_IN_SOLAR); // total L in CGS of star particle
                 double f_lum_ion = particle_ionizing_luminosity_in_cgs(i) / lum_cgs; f_lum_ion=DMAX(0.,DMIN(1.,f_lum_ion)); // fraction of luminosity in H-ionizing radiation
-                double dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(i);
+                double dt = get_particle_feedback_timestep_in_physical(i);
                 if(dt <= 0 || !isfinite(dt)) {continue;}
                 double dE_over_c = All.RP_Local_Momentum_Renormalization * lum_cgs * (dt*UNIT_TIME_IN_CGS) / C_LIGHT_CGS; // total photon momentum emitted in timestep, in CGS (= L*dt/c)
                 dE_over_c /= (UNIT_MASS_IN_CGS * UNIT_VEL_IN_CGS); // total photon momentum now in code units
                 total_prob_kick += dE_over_c; // sum contributions
 
                 /* calculate some pre-amble properties */
-                double RtauMax = P[i].KernelRadius * (5. + 2.0 * rt_kappa(i,RT_FREQ_BIN_FIRE_UV) * P[i].KernelRadius*P[i].DensityAroundParticle*All.cf_a2inv); // guess search radius which is a few H, plus larger factor if optically thick //
+                double RtauMax = P[i].KernelRadius * (5. + 2.0 * rt_kappa(i,RT_FREQ_BIN_FIRE_UV, P, CellP) * P[i].KernelRadius*P[i].DensityAroundParticle*All.cf_a2inv); // guess search radius which is a few H, plus larger factor if optically thick //
                 RtauMax = DMAX( 1./(UNIT_LENGTH_IN_KPC*All.cf_atime) , DMIN( 10./(UNIT_LENGTH_IN_KPC*All.cf_atime) , RtauMax )); // restrict to 1-10 kpc here
                 
                 /* if kicks are stochastic, we don't want to waste time doing a neighbor search every timestep; it can be much faster to pre-estimate the kick probabilities */
@@ -57,7 +57,7 @@ void radiation_pressure_winds_consolidated(void)
                 double v_grav_guess; v_grav_guess = DMIN( 1.82*(65.748/UNIT_VEL_IN_KMS)*pow(1.+rho_phys*UNIT_DENSITY_IN_NHCGS,-0.25) , sqrt(All.G*(P[i].Mass + VOLUME_NORM_COEFF_FOR_NDIMS*rho_phys*h_phys*h_phys*h_phys)/h_phys) ); // don't want to 'under-kick' if there are small local characteristic velocities in the region of interest
                 delta_v_imparted_rp = v_wind_threshold; // always couple this 'discrete' kick, to avoid having to couple every single timestep for every single star particle
                 double dv_imparted_perpart_guess = (dE_over_c/P[i].Mass); // estimate of summed dv_imparted [in code units] from single-scattering: = momentum/mass of particle
-                double tau_IR_guess = rt_kappa(i,RT_FREQ_BIN_FIRE_IR) * rho_phys*h_phys; // guess of IR optical depth. everything in physical code units //
+                double tau_IR_guess = rt_kappa(i,RT_FREQ_BIN_FIRE_IR, P, CellP) * rho_phys*h_phys; // guess of IR optical depth. everything in physical code units //
                 dv_imparted_perpart_guess += (dE_over_c/P[i].Mass) * tau_IR_guess; // estimate of additional IR term [1+tau_IR]*L/c assumed here as coupling //
                 double prob = dv_imparted_perpart_guess / delta_v_imparted_rp; prob *= 2000.; // need to include a buffer for errors in the estimates above
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2)
@@ -87,10 +87,10 @@ void radiation_pressure_winds_consolidated(void)
 #endif
                                 if((P[j].Mass>0) && (CellP[j].Density>0))
                                 {
-                                    double dp[3],r2=0; for(k=0;k<3;k++) {dp[k]=P[j].Pos[k]-P[i].Pos[k];}
-                                    NEAREST_XYZ(dp[0],dp[1],dp[2],1); for(k=0;k<3;k++) {r2+=dp[k]*dp[k];} /* find the closest image in the given box size */
+                                    Vec3<double> dp = P[j].Pos - P[i].Pos;
+                                    nearest_xyz(dp); double r2 = dp.norm_sq(); /* find the closest image in the given box size */
                                     if(r2>=h*h || r2<=0) {continue;}
-                                    double h_eff_j = Get_Particle_Size(j); wt_sum += h_eff_j*h_eff_j; // weight factor for neighbors
+                                    double h_eff_j = P[j].Get_Particle_Size(); wt_sum += h_eff_j*h_eff_j; // weight factor for neighbors
                                 } /* if( (P[j].Mass>0) && (CellP[j].Density>0) ) */
                             } /* for(n=0; n<numngb_inbox; n++) */
                             if(wt_sum <= 0) {h*= 1.2123212335; startnode=All.MaxPart;} /* wt_sum <= 0; no particles found inside corners - expand */
@@ -114,10 +114,10 @@ void radiation_pressure_winds_consolidated(void)
 #endif
                             if((P[j].Mass>0) && (CellP[j].Density>0))
                             {
-                                double dp[3],r2=0; for(k=0;k<3;k++) {dp[k]=P[j].Pos[k]-P[i].Pos[k];}
-                                NEAREST_XYZ(dp[0],dp[1],dp[2],1); for(k=0;k<3;k++) {r2+=dp[k]*dp[k];} /* find the closest image in the given box size */
+                                Vec3<double> dp = P[j].Pos - P[i].Pos;
+                                nearest_xyz(dp); double r2 = dp.norm_sq(); /* find the closest image in the given box size */
                                 if(r2>=h*h || r2<=0) {continue;}
-                                double h_eff_i = DMIN(h, Get_Particle_Size(i)), h_eff_j = Get_Particle_Size(j);
+                                double h_eff_i = DMIN(h, P[i].Get_Particle_Size()), h_eff_j = P[j].Get_Particle_Size();
                                 r2 += MIN_REAL_NUMBER + (h_eff_i/5.)*(h_eff_i/5.); // just a small number to prevent errors on near-overlaps
                                 double wk = h_eff_j*h_eff_j / wt_sum; // dimensionless weight factor
 
@@ -126,7 +126,7 @@ void radiation_pressure_winds_consolidated(void)
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2)
                                 /* estimate fraction of the available single-scattering RP that can actually be absorbed in the cell */
                                 double sigma_cell_to_total = (1./wk) * (P[j].Mass / (h_eff_j*All.cf_atime * h_eff_j*All.cf_atime)); // code units -- correct back to 'total' column through all neighbors, since thats what determines the total fraction that will be absorbed here //
-                                double tau_uv = rt_kappa(j,RT_FREQ_BIN_FIRE_UV) * sigma_cell_to_total, tau_op = rt_kappa(j,RT_FREQ_BIN_FIRE_OPT) * sigma_cell_to_total; // opacity in uv and optical bands
+                                double tau_uv = rt_kappa(j,RT_FREQ_BIN_FIRE_UV, P, CellP) * sigma_cell_to_total, tau_op = rt_kappa(j,RT_FREQ_BIN_FIRE_OPT, P, CellP) * sigma_cell_to_total; // opacity in uv and optical bands
                                 double frac_abs = f_lum_ion + (1.-f_lum_ion) * (1. - 0.5*(exp(-tau_uv) + exp(-tau_op))); // absorbed fraction in the actual cell
                                 dv_imparted_singlescattering *= frac_abs; // reduce the single-scattering flux by the fraction of that flux actually absorbed
                                 if(jet_momentum_tocouple > 0) {
@@ -134,7 +134,7 @@ void radiation_pressure_winds_consolidated(void)
                                     P[i].NewStar_Momentum_For_JetFeedback -= wk * jet_momentum_tocouple;} // remove it from the budget
 #endif
                                 /* velocity imparted by IR acceleration : = kappa*flux/c, flux scales as 1/r2 from source, kappa with metallicity */
-                                double kappa_ir_codeunits = rt_kappa(j,RT_FREQ_BIN_FIRE_IR); // opacity in code units
+                                double kappa_ir_codeunits = rt_kappa(j,RT_FREQ_BIN_FIRE_IR, P, CellP); // opacity in code units
                                 double dv_imparted_multiplescattering = All.RP_Local_Momentum_Renormalization * (dE_over_c / P[j].Mass) * kappa_ir_codeunits * (P[j].Mass/(4.*M_PI*r2*All.cf_atime*All.cf_atime));
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2)
                                 delta_v_imparted_rp = dv_imparted_multiplescattering + dv_imparted_singlescattering;
@@ -150,23 +150,23 @@ void radiation_pressure_winds_consolidated(void)
                                     avg_taufac +=  (P[j].Mass*delta_v_imparted_rp) * (dv_imparted_multiplescattering / (dE_over_c / P[j].Mass));
 
                                     /* determine the direction of the kick */
-                                    double dir[3], norm=0;
+                                    Vec3<double> dir = {}; double norm=0;
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2)
                                     delta_v_imparted_rp = dv_imparted_multiplescattering; // ir kick: directed along opacity gradient //
-                                    for(k=0;k<3;k++) {dir[k]=-P[j].GradRho[k]; norm+=dir[k]*dir[k];} // based on density gradient near star //
+                                    dir = -P[j].GradRho; norm = dir.norm_sq(); // based on density gradient near star //
 #else
-                                    if(dv_imparted_singlescattering > dv_imparted_multiplescattering) {for(k=0;k<3;k++) {dir[k]=dp[k]; norm+=dir[k]*dir[k];}} // if kick is primarily from uv, then orient directly //
-                                        else {for(k=0;k<3;k++) {dir[k]=-P[j].GradRho[k]; norm+=dir[k]*dir[k];}} // otherwise, along opacity gradient //
+                                    if(dv_imparted_singlescattering > dv_imparted_multiplescattering) {dir = dp; norm = dir.norm_sq();} // if kick is primarily from uv, then orient directly //
+                                        else {dir = -P[j].GradRho; norm = dir.norm_sq();} // otherwise, along opacity gradient //
 #endif
-                                    if(norm>0) {norm=sqrt(norm); for(k=0;k<3;k++) dir[k] /= norm;} else {dir[0]=0; dir[1]=0; dir[2]=1; norm=1;}
-                                    for(k=0;k<3;k++) {P[j].Vel[k] += delta_v_imparted_rp * All.cf_atime * dir[k]; CellP[j].VelPred[k] += delta_v_imparted_rp * All.cf_atime * dir[k];} /* apply the kick [put into comoving code units as oppropriate */
+                                    if(norm>0) {norm=sqrt(norm); dir /= norm;} else {dir = {0,0,1}; norm=1;}
+                                    {auto dv_kick = delta_v_imparted_rp * All.cf_atime * dir; P[j].Vel += dv_kick; CellP[j].VelPred += dv_kick; P[j].dp += dv_kick * P[j].Mass;} /* apply the kick [put into comoving code units as oppropriate */
 
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2)
                                     /* if we're not forcing the kick orientation, need to separately apply the UV kick */
                                     delta_v_imparted_rp = dv_imparted_singlescattering; // uv kick: directed from star //
-                                    norm=0; for(k=0;k<3;k++) {dir[k]=dp[k]; norm+=dir[k]*dir[k];}
-                                    if(norm>0) {norm=sqrt(norm); for(k=0;k<3;k++) {dir[k] /= norm;}} else {dir[0]=0; dir[1]=0; dir[2]=1; norm=1;}
-                                    for(k=0; k<3; k++) {P[j].Vel[k] += delta_v_imparted_rp * All.cf_atime * dir[k]; CellP[j].VelPred[k] += delta_v_imparted_rp * All.cf_atime * dir[k];} /* apply the kick */
+                                    dir = dp; norm = dir.norm_sq();
+                                    if(norm>0) {norm=sqrt(norm); dir /= norm;} else {dir = {0,0,1}; norm=1;}
+                                    {auto dv_kick = delta_v_imparted_rp * All.cf_atime * dir; P[j].Vel += dv_kick; CellP[j].VelPred += dv_kick; P[j].dp += dv_kick * P[j].Mass;} /* apply the kick */
 #endif
                                 } /* closes if(get_random_number(P[i].ID + 2) < prob) */
                             } /* if( (P[j].Mass>0) && (CellP[j].Density>0) ) */
@@ -175,8 +175,8 @@ void radiation_pressure_winds_consolidated(void)
                 } // // within loop
             } // star age, mass check:: (star_age < 0.1) && (P[i].Mass > 0) && (P[i].DensityAroundParticle > 0)
         } // particle type check::  if((P[i].Type == 4)....
-    } // main particle loop for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
-    myfree(Ngblist);
+    } // main particle loop for (int i : ActiveParticleList)
+    
 
     double totMPI_n_wind=0,totMPI_mom_wind=0,totMPI_avg_v=0,totMPI_avg_taufac=0,totMPI_prob_kick=0;
     MPI_Reduce(&total_n_wind, &totMPI_n_wind, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -220,14 +220,14 @@ void HII_heating_singledomain(void)    /* this version of the HII routine only c
     if(All.HIIRegion_fLum_Coupled<=0) {return;}
     if(All.Time<=0) {return;}
     PRINT_STATUS("Local HII-Region photo-heating/ionization calculation");
-    MyDouble *pos; MyFloat h_i, dt, rho; int startnode, numngb, j, n, i, NITER_HIIFB, MAX_N_ITERATIONS_HIIFB, jnearest,already_ionized,do_ionize,dummy;
+    Vec3<double> pos={}; MyFloat h_i, dt, rho; int startnode, numngb, j, n, i, NITER_HIIFB, MAX_N_ITERATIONS_HIIFB, jnearest,already_ionized,do_ionize,dummy;
     double total_N_ionizing_part=0,total_Ndot_ionizing=0,total_m_ionized=0,total_N_ionized=0,avg_RHII=0,mionizable=0,mionized=0,mion_actual=0;
     double RHII,RHIIMAX,R_search,rnearest,stellum,prob,rho_j,prandom,m_available,m_effective,RHII_initial,RHIImultiplier;
     double uion; uion = HIIRegion_Temp / (0.59 * (5./3.-1.) * U_TO_TEMP_UNITS); /* assume fully-ionized gas with gamma=5/3; this is a global variable below */
-    Ngblist = (int *) mymalloc("Ngblist",NumPart * sizeof(int));
+    Ngblist.resize(NumPart);
     MAX_N_ITERATIONS_HIIFB = 5; NITER_HIIFB = 0;
 
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
 #ifdef SINK_HII_HEATING
         if((P[i].Type == 5)||(((P[i].Type == 4)||((All.ComovingIntegrationOn==0)&&((P[i].Type == 2)||(P[i].Type==3))))))
@@ -236,7 +236,7 @@ void HII_heating_singledomain(void)    /* this version of the HII routine only c
 #endif
         {
             if(P[i].Mass <= 0 || !isfinite(P[i].Mass)) {continue;};
-            dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(i);
+            dt = get_particle_feedback_timestep_in_physical(i);
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
             if(P[i].Type == 5) {dt = P[i].dt_since_last_gas_search;}
 #endif
@@ -289,13 +289,12 @@ void HII_heating_singledomain(void)    /* this version of the HII routine only c
 #endif
                             if(P[j].Type == 0 && P[j].Mass > 0)
                             {
-                                double dx=pos[0]-P[j].Pos[0], dy=pos[1]-P[j].Pos[1], dz=pos[2]-P[j].Pos[2];
-                                NEAREST_XYZ(dx,dy,dz,1); /*  now find the closest image in the given box size */
-                                double r2 = dx * dx + dy * dy + dz * dz;
+                                Vec3<double> dr = pos - P[j].Pos; nearest_xyz(dr,1); /*  now find the closest image in the given box size */
+                                double r2 = dr.norm_sq();
                                 if(r2 > RHII_2) {continue;}
                                 double r=sqrt(r2), u=0;
                                 /* check whether the particle is already ionized */
-                                already_ionized = 0; rho_j = Get_Gas_density_for_energy_i(j);
+                                already_ionized = 0; rho_j = CellP[j].density_for_energy();
                                 if(CellP[j].InternalEnergy<CellP[j].InternalEnergyPred) {u=CellP[j].InternalEnergy;} else {u=CellP[j].InternalEnergyPred;}
                                 if(CellP[j].DelayTimeHII > 0) {already_ionized=1;}
 #if !defined(CHIMES_HII_REGIONS)
@@ -349,7 +348,7 @@ void HII_heating_singledomain(void)    /* this version of the HII routine only c
                             already_ionized = do_the_local_ionization(j,dt,i);
                             total_N_ionized += 1;
                             mion_actual += P[j].Mass;
-                            double dx=pos[0]-P[j].Pos[0],dy=pos[1]-P[j].Pos[1],dz=pos[2]-P[j].Pos[2],r2; NEAREST_XYZ(dx,dy,dz,1); r2=dx*dx+dy*dy+dz*dz;
+                            Vec3<double> dr = pos - P[j].Pos; nearest_xyz(dr,1); double r2 = dr.norm_sq();
                             avg_RHII += P[j].Mass*sqrt(r2)*All.cf_atime*UNIT_LENGTH_IN_KPC;
                         }
                         mionized += prob*m_effective;
@@ -383,8 +382,8 @@ void HII_heating_singledomain(void)    /* this version of the HII routine only c
                 if(mion_actual>0) {total_m_ionized += mion_actual;}
             } // if(prandom < 2.0*mionizable/P[j].Mass)
         } // if((P[i].Type == 4)||(P[i].Type == 2)||(P[i].Type == 3))
-    } // for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
-    myfree(Ngblist);
+    } // for (int i : ActiveParticleList)
+    
 
     double totMPI_N_ionizing_part=0,totMPI_Ndot_ionizing=0,totMPI_m_ionized=0,totMPI_avg_RHII=0,totMPI_N_ionized=0;
     MPI_Reduce(&total_N_ionizing_part, &totMPI_N_ionizing_part, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -416,8 +415,8 @@ int do_the_local_ionization(int target, double dt, int source)
     // reset all of the HII-region chimes quantities to null
     for(k=0;k<CHIMES_LOCAL_UV_NBINS;k++) {CellP[target].Chimes_fluxPhotIon_HII[k]=0; CellP[target].Chimes_G0_HII[k]=0;}
     // set the quantities desired for this age bin specifically: need a softened radius, for use here //
-    double dp[3],r2=0,stellar_mass=P[source].Mass*UNIT_MASS_IN_SOLAR; for(k=0;k<3;k++) {dp[k]=P[source].Pos[k]-P[target].Pos[k];}
-    NEAREST_XYZ(dp[0],dp[1],dp[2],1); for(k=0;k<3;k++) {dp[k]*=All.cf_atime*UNIT_LENGTH_IN_CGS; r2+=dp[k]*dp[k];} // separation in cgs
+    double stellar_mass=P[source].Mass*UNIT_MASS_IN_SOLAR; Vec3<double> dp = P[source].Pos - P[target].Pos;
+    nearest_xyz(dp); dp *= All.cf_atime*UNIT_LENGTH_IN_CGS; double r2 = dp.norm_sq(); // separation in cgs
     double eps_cgs=KERNEL_FAC_FROM_FORCESOFT_TO_PLUMMER*ForceSoftening_KernelRadius(source)*All.cf_atime*UNIT_LENGTH_IN_CGS; // plummer equivalent softening
     r2+=eps_cgs*eps_cgs; // gravitational Softening (cgs units)
     CellP[target].Chimes_fluxPhotIon_HII[age_bin] = (1.0 - All.Chimes_f_esc_ion) * chimes_ion_luminosity(stellar_age_myr, stellar_mass) / r2; // cgs flux of H-ionising photons per second seen by the star particle
@@ -447,7 +446,7 @@ int do_the_local_ionization(int target, double dt, int source)
     double flux_compactHII = DMAX(0.85*pow(n1000,1./3.) , 1) * 2.6e5*n1000; // set to typical value in HII region or minimum needed to maintain f_neutral < 1e-5-ish, whichever is larger
     CellP[target].Rad_Flux_UV += flux_compactHII; CellP[target].Rad_Flux_EUV += flux_compactHII;
 #endif
-    CellP[target].Ne = 1.0 + 2.0*yhelium(target); /* set the cell to fully ionized */
+    CellP[target].Ne = 1.0 + 2.0*yhelium(target, P); /* set the cell to fully ionized */
 
 #endif
 

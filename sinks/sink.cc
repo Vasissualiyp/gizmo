@@ -10,6 +10,10 @@
 #include "../core/proto.h"
 #include "../mesh/kernel.h"
 
+#if defined(SINK_MDOT_RESERVOIR_CAP) && !defined(SINK_MDOT_RESERVOIR_CAP_NRESOLVED)
+#define SINK_MDOT_RESERVOIR_CAP_NRESOLVED 100  /* cells of mass above which a sink counts as resolved */
+#endif
+
 
 /*! \file sink.c
  *  \brief routines for gas accretion onto sink particles, and sink particle mergers
@@ -112,8 +116,8 @@ int sink_check_boundedness(int j, double vrel, double vesc, double dr_code, doub
 
     /* if pair is a gas particle make sure to account for its pressure and internal energy */
     double cs=0; if(P[j].Type==0) {
-        double vA = Get_Gas_Alfven_speed_i(j);
-        if(fabs(GAMMA(j)-1) < 0.1) {cs = sqrt(vA*vA + 3.*CellP[j].Pressure/CellP[j].Density);} // assume you're running gamma ~ 1 to hack an isothermal EOS, so we assume gamma=5/3 for boundedness calculation
+        double vA = CellP[j].Alfven_speed();
+        if(fabs(CellP[j].gamma_eos_value()-1) < 0.1) {cs = sqrt(vA*vA + 3.*CellP[j].Pressure/CellP[j].Density);} // assume you're running gamma ~ 1 to hack an isothermal EOS, so we assume gamma=5/3 for boundedness calculation
         else {cs = sqrt(vA*vA + 2.*CellP[j].InternalEnergy);} // effective speed [since what we really want is internal energy] to add to relative velocity to compare with escape speed for boundedness check
     } // use the fast MHD wavespeed to account for magnetic+thermal energy (but not e.g. cosmic ray), in allowing accretion //
 
@@ -124,8 +128,13 @@ int sink_check_boundedness(int j, double vrel, double vesc, double dr_code, doub
 #endif
     if(gas_density > 0)
     {
-        if((Get_Particle_Size(j) > sink_radius*1.396263) && (P[j].Type == 0)) {return 0;} // particle volume should be less than sink volume, enforcing a minimum spatial resolution around the sink
-#if defined(COOLING)  // check if we're probably sitting at the bottom of a quasi-hydrostatic Larson core
+        if((P[j].Get_Particle_Size() > sink_radius*1.396263) && (P[j].Type == 0)) {return 0;} // particle volume should be less than sink volume, enforcing a minimum spatial resolution around the sink
+#if (defined(COOLING) && !defined(COOL_LOWTEMP_THIN_ONLY)) || defined(RT_INFRARED) || defined(EOS_GMC_BAROTROPIC)  // check if we're probably sitting at the bottom of a quasi-hydrostatic Larson core
+        /* this guard must match the sink-formation side in sfr_eff.cc, which caps the effective support speed above the same
+            n_H=1e13 threshold so first-core thermal energy cannot veto formation. Both ask whether the run resolves the
+            opacity limit, and a barotropic EOS answers yes just as COOLING does. Gating on COOLING alone compiled this out
+            for barotropic runs, leaving a newly-formed sink with v_esc set by its own single-cell mass while the surrounding
+            first-core gas carries c_s of several km/s: nothing was accretable, so the sink could never grow out of it. */
         double nHcgs = HYDROGEN_MASSFRAC * (gas_density * All.cf_a3inv * UNIT_DENSITY_IN_NHCGS);
         if(nHcgs > 1e13 && (cs > 0.1 * vrel || P[j].Type != 0)) {double m_eff = 4. * M_PI * dr_code * dr_code * dr_code * gas_density; vesc = DMAX(sqrt(2*All.G * m_eff / dr_code), vesc);} // assume an isothermal sphere interior, for Shu-type solution, and re-estimate vesc using self-gravity of the gas
 #endif
@@ -189,16 +198,18 @@ double sink_fb_angleweight_localcoupling(int j, double cos_theta, double r, doub
 
 /* function below is used for long-range sink particle radiation fields -- used only in the forcetree routines (where they
     rely this for things like the long-range radiation pressure and compton heating) */
-double sink_fb_angleweight(double sink_lum_input, MyFloat sink_angle[3], double dx, double dy, double dz)
+double sink_fb_angleweight(double sink_lum_input, Vec3<double>& sink_angle, double dx, double dy, double dz)
 {
 #ifdef SINGLE_STAR_SINK_DYNAMICS
     return sink_lum_input;
 #endif
     if(sink_lum_input <= 0) return 0;
-    double r2 = dx*dx+dy*dy+dz*dz; if(r2 <= 0) return 0;
+    Vec3<double> d{dx, dy, dz};
+    double r2 = d.norm_sq(); if(r2 <= 0) return 0;
     if(r2*UNIT_LENGTH_IN_PC*UNIT_LENGTH_IN_PC*All.cf_atime*All.cf_atime < 1) return 0; /* no force at < 1pc */
 #if defined(SINK_FB_COLLIMATED)
-    double cos_theta = fabs((dx*sink_angle[0] + dy*sink_angle[1] + dz*sink_angle[2])/sqrt(r2*(sink_angle[0]*sink_angle[0]+sink_angle[1]*sink_angle[1]+sink_angle[2]*sink_angle[2]))); if(!isfinite(cos_theta)) {cos_theta=1;}
+    Vec3<double> sa{(double)sink_angle[0], (double)sink_angle[1], (double)sink_angle[2]};
+    double cos_theta = fabs(dot(d, sa)/sqrt(r2*sa.norm_sq())); if(!isfinite(cos_theta)) {cos_theta=1;}
     double wt_normalized = 0.0847655*exp(4.5*cos_theta*cos_theta); // ~exp(-x^2/2*hR^2), normalized appropriately to give the correct total flux, for hR~0.3
     return sink_lum_input * wt_normalized; // ~exp(-x^2/2*hR^2), normalized appropriately to give the correct total flux, for hR~0.3
 #endif
@@ -214,7 +225,7 @@ double sink_fb_angleweight(double sink_lum_input, MyFloat sink_angle[3], double 
 void set_sink_mdot(int i, int n, double dt)
 {
     double mdot=0; int k; k=0;
-    double soundspeed2; soundspeed2 = convert_internalenergy_soundspeed2(n,SinkTempInfo[i].Sink_SurroudingGasInternalEnergy);
+    double soundspeed2; soundspeed2 = CellP[n].soundspeed2_from_u(SinkTempInfo[i].Sink_SurroudingGasInternalEnergy);
 #ifdef SINK_GRAVACCRETION
     double m_tmp_for_accrate, mdisk_for_accrate, sink_mass, fac;
     double rmax_for_accrate,fgas_for_accrate,f_disk_for_accrate, f0_for_accrate;
@@ -248,13 +259,8 @@ void set_sink_mdot(int i, int n, double dt)
         f_disk_for_accrate = mdisk_for_accrate / m_tmp_for_accrate;
 #else
         /* DAA: Jalt_in_Kernel is now the TOTAL angular momentum (need to subtract Jgas here) */
-        m_tmp_for_accrate = SinkTempInfo[i].Malt_in_Kernel; double j_tmp_for_accrate=0;
-        for(k=0;k<3;k++)
-        {
-            j_tmp_for_accrate += (SinkTempInfo[i].Jalt_in_Kernel[k] - SinkTempInfo[i].Jgas_in_Kernel[k]) *
-                              (SinkTempInfo[i].Jalt_in_Kernel[k] - SinkTempInfo[i].Jgas_in_Kernel[k]);
-        }
-        j_tmp_for_accrate=sqrt(j_tmp_for_accrate); /* jx,y,z, is independent of 'a_scale' b/c ~ m*r*v, vphys=v/a, rphys=r*a */
+        m_tmp_for_accrate = SinkTempInfo[i].Malt_in_Kernel;
+        double j_tmp_for_accrate = (SinkTempInfo[i].Jalt_in_Kernel - SinkTempInfo[i].Jgas_in_Kernel).norm(); /* jx,y,z, is independent of 'a_scale' b/c ~ m*r*v, vphys=v/a, rphys=r*a */
         fgas_for_accrate = SinkTempInfo[i].Mgas_in_Kernel / m_tmp_for_accrate;
 
         fac = m_tmp_for_accrate * rmax_for_accrate * sqrt(All.G*(m_tmp_for_accrate+sink_mass)/rmax_for_accrate); /* All.G is G in code (physical) units */
@@ -297,7 +303,7 @@ void set_sink_mdot(int i, int n, double dt)
             double Vc2_rmax = All.G * menc_all / rmax_for_accrate; // this is in physical units now
             mdot = 4.*M_PI * All.G*All.G * P[n].Sink_Mass*menc_all * (P[n].DensityAroundParticle*All.cf_a3inv) / pow(soundspeed2 + Vc2_rmax, 1.5);
 #if (SINK_GRAVACCRETION == 6) || (SINK_GRAVACCRETION == 7)
-            double bhvel2=0; for(k=0;k<3;k++) {bhvel2 += SinkTempInfo[i].Sink_SurroundingGasVel[k]*SinkTempInfo[i].Sink_SurroundingGasVel[k];}
+            double bhvel2 = SinkTempInfo[i].Sink_SurroundingGasVel.norm_sq();
             double veldisp2_eff = bhvel2/3. + soundspeed2, masscorrfac = pow( menc_all/(1.e-10*menc_all + P[n].Sink_Mass) , 0.25 );
             mdot = masscorrfac * 4.*M_PI * All.G*All.G * P[n].Sink_Mass*menc_all * (P[n].DensityAroundParticle*All.cf_a3inv) / pow(1.e-5*soundspeed2 + Vc2_rmax, 1.5);
             mdot /= 1 + sqrt(veldisp2_eff/Vc2_rmax) * DMIN( veldisp2_eff/Vc2_rmax , masscorrfac );
@@ -307,12 +313,12 @@ void set_sink_mdot(int i, int n, double dt)
 #endif
 #endif
 #if (SINK_GRAVACCRETION == 5) // use default torques estimator, but then allow gas to accrete as Bondi-Hoyle when its circularization radius is inside the BH radius of influence
-            double j_tmp_for_accrate=0,jcirc_crit=0; for(k=0;k<3;k++) {j_tmp_for_accrate+=SinkTempInfo[i].Jgas_in_Kernel[k]*SinkTempInfo[i].Jgas_in_Kernel[k];}
+            double j_tmp_for_accrate=SinkTempInfo[i].Jgas_in_Kernel.norm_sq(),jcirc_crit=0;
             j_tmp_for_accrate=sqrt(j_tmp_for_accrate); jcirc_crit = SinkTempInfo[i].Mgas_in_Kernel * rmax_for_accrate*rmax_for_accrate*omega_dyn;
             jcirc_crit *= pow(sink_mass/m_tmp_for_accrate,2./3.);
             if(j_tmp_for_accrate < jcirc_crit) /* circularization within BH-dominated region, Bondi accretion valid */
             {
-                double bhvel2=0; for(k=0;k<3;k++) {bhvel2 += SinkTempInfo[i].Sink_SurroundingGasVel[k]*SinkTempInfo[i].Sink_SurroundingGasVel[k];}
+                double bhvel2 = SinkTempInfo[i].Sink_SurroundingGasVel.norm_sq();
                 double rho = P[n].DensityAroundParticle*All.cf_a3inv; /* we want all quantities in physical units */
                 double vcs_fac = pow(soundspeed2+bhvel2, 1.5);
                 mdot = 4.*M_PI * All.G*All.G * P[n].Sink_Mass*P[n].Sink_Mass * rho / vcs_fac;
@@ -322,7 +328,7 @@ void set_sink_mdot(int i, int n, double dt)
             double hubber_mdot_from_vr_estimator=MIN_REAL_NUMBER, hubber_mdot_disk_estimator=MIN_REAL_NUMBER; /* our computed 'hubber_mdot_vr_estimator' is their estimate of the radial inflow time from a Bondi flow: but care is needed, for any non-Bondi flow this can give unphysical or negative answers, so we need to limit it and be very cautious using it */
             if(SinkTempInfo[i].hubber_mdot_vr_estimator > 0) { hubber_mdot_from_vr_estimator = SinkTempInfo[i].hubber_mdot_vr_estimator; }
             if(SinkTempInfo[i].hubber_mdot_disk_estimator > 0) { hubber_mdot_disk_estimator = 0.01 * SinkTempInfo[i].Mgas_in_Kernel / (sqrt(All.G * P[n].Mass) * SinkTempInfo[i].hubber_mdot_disk_estimator);}
-            double j_eff=0,m_eff=SinkTempInfo[i].Malt_in_Kernel; for(k=0;k<3;k++) {j_eff+=SinkTempInfo[i].Jalt_in_Kernel[k]*SinkTempInfo[i].Jalt_in_Kernel[k];}
+            double j_eff=SinkTempInfo[i].Jalt_in_Kernel.norm_sq(),m_eff=SinkTempInfo[i].Malt_in_Kernel;
             double facc_which_hubber_mdot = DMIN(1, 1.75*sqrt(j_eff)/(m_eff*sqrt(All.G*(m_eff+P[n].Mass)*rmax_for_accrate))); /* disk fraction estimator */
             mdot = DMAX( SinkTempInfo[i].hubber_mdot_bondi_limiter , pow(hubber_mdot_from_vr_estimator,1-facc_which_hubber_mdot)*pow(hubber_mdot_disk_estimator,facc_which_hubber_mdot));
 #endif
@@ -341,11 +347,11 @@ void set_sink_mdot(int i, int n, double dt)
 
 #if (SINK_GRAVACCRETION >= 9) && (SINK_GRAVACCRETION <= 11) /* heres where we calculate the Bondi accretion rate, if that's going to be used */
     double bhvel2 = 0, rho = P[n].DensityAroundParticle * All.cf_a3inv; /* we want all quantities in physical units */
-    for(k=0;k<3;k++) {bhvel2 += SinkTempInfo[i].Sink_SurroundingGasVel[k]*SinkTempInfo[i].Sink_SurroundingGasVel[k];}
+    bhvel2 = SinkTempInfo[i].Sink_SurroundingGasVel.norm_sq();
 #if (SINK_GRAVACCRETION == 10)
     bhvel2 = 0;
 #endif
-    double fac = pow(soundspeed2+bhvel2, 1.5);
+    fac = pow(soundspeed2+bhvel2, 1.5);
     if(fac > 0) {
         double AccretionFactor = All.SinkAccretionFactor;
 #if (SINK_GRAVACCRETION == 11) /* variable-alpha model (Booth&Schaye 2009): now All.SinkAccretionFactor is the slope of the density dependence */
@@ -390,7 +396,7 @@ void set_sink_mdot(int i, int n, double dt)
         t_acc_disk = sqrt(reff*reff*reff * Gm_i); // dynamical time at radius "reff", essentially fastest-possible accretion time
 #if defined(SINK_FOLLOW_ACCRETED_ANGMOM) && defined(SINK_MDOT_FROM_ALPHAMODEL)
         reff = SinkParticle_GravityKernelRadius; Gm_i = 1./(All.G*P[n].Mass); // these need to be reset in case they are re-defined above
-        double j=0; for(k=0;k<3;k++) {j+=P[n].Sink_Specific_AngMom[k]*P[n].Sink_Specific_AngMom[k];}  // calculate magnitude of specific ang mom
+        double j = P[n].Sink_Specific_AngMom.norm_sq();  // calculate magnitude of specific ang mom
         j = sqrt(j) * (1. + 1./SINK_ALPHADISK_ACCRETION); // correction assuming a ratio of accretion disk to sink mass ~SINK_ALPHADISK_ACCRETION [max allowed], with the material in the sink having given its angular momentum to the sink [which is what should happen]
         t_acc_disk = 2.*M_PI*j*j*j*Gm_i*Gm_i / fabs(SINK_MDOT_FROM_ALPHAMODEL); // orbital time at circularization radius of the alpha-disk: SINK_MDOT_FROM_ALPHAMODEL is approximately equivalent to the 'alpha' parameter, setting how rapidly accretion occurs (=0.01 -> 100 orbits)
         if(SINK_MDOT_FROM_ALPHAMODEL>0) {t_acc_disk = 100. * t_acc_disk * (1 / (Gm_i * DMIN(reff, j*j*Gm_i))) / soundspeed2;} // Shakura-Sunyaev prescription with alpha=0.01, using minimum of sink and circularization radius
@@ -399,7 +405,7 @@ void set_sink_mdot(int i, int n, double dt)
         t_acc_disk = DMIN(t_acc_disk , 50. / UNIT_TIME_IN_YR); /* custom hack for now for 'fast' disk accretion - will be replaced by physical model later */
 #endif
 #if defined(TIDAL_TIMESTEP_CRITERION) /* limit the accretion timescale to not be more than some multiple of the maximum disk dynamical time allowed by tidal truncation */
-        double tidal_tensor_mag2 = 0.; {int k,j; for(k=0;k<3;k++) {for(j=0;j<3;j++) {tidal_tensor_mag2 += P[n].tidal_tensorps[k][j]*P[n].tidal_tensorps[k][j];}}} /* get the frobenius norm */
+        double tidal_tensor_mag2 = P[n].tidal_tensorps.frobenius_norm_sq();
         if(tidal_tensor_mag2 > 0) {
             double t_dyn_extgrav = sqrt(1. / (All.cf_a3inv * sqrt(tidal_tensor_mag2 / 6.))); /* recovers tdyn=1/Omega=sqrt[r^3/GM] for a Keplerian potential */
             t_acc_disk = DMIN(t_acc_disk, 100. * t_dyn_extgrav); /* coefficient here is the arbitrary number of dynamical times to limit accretion timescale to */
@@ -463,6 +469,26 @@ void set_sink_mdot(int i, int n, double dt)
 #endif
         if(dt > 0) {t_acc_disk = DMAX(t_acc_disk , 3.*dt);} /* make sure accretion timescale is at least a few timesteps to avoid over-shoot, etc */
         mdot = P[n].Sink_Mass_Reservoir / t_acc_disk;
+#ifdef SINK_MDOT_RESERVOIR_CAP
+        /* Marginally-resolved guard: while the sink holds fewer than _NRESOLVED cells' worth of
+           mass, drain at most M_total/CAP of the reservoir per t_acc, so a formation gulp drains
+           near the design rate rather than in one step; above the threshold stock M_res/t_acc
+           applies. The resolution gate matters: ungated, the cap keeps throttling resolved sinks
+           whose capture outpaces M_total/(CAP*t_acc), and the reservoir grows without bound.
+           The drain is floored at one mean gas cell (throttling below that only strands
+           sub-resolution mass) and never exceeds the reservoir itself. MeanGasParticleMass is
+           0/0 in a gasless run, in which case the cap is skipped. */
+        {
+            double dm_cell = All.MeanGasParticleMass;
+            if(dm_cell > 0 && dm_cell < MAX_REAL_NUMBER &&
+               P[n].Mass < ((double) SINK_MDOT_RESERVOIR_CAP_NRESOLVED) * dm_cell)
+            {
+                double m_avail = DMIN(P[n].Sink_Mass_Reservoir,
+                                      DMAX(dm_cell, P[n].Mass / ((double) SINK_MDOT_RESERVOIR_CAP)));
+                mdot = m_avail / t_acc_disk;
+            }
+        }
+#endif
     }
 #endif //ifdef SINK_ALPHADISK_ACCRETION
 
@@ -520,7 +546,8 @@ void set_sink_mdot(int i, int n, double dt)
 
 #if defined(SINK_RETURN_ANGMOM_TO_GAS) /* pre-calculate some quantities for 'angular momentum feedback' here, these have to be based on the mdot estimator above */
     double jmag=0,lmag=0,mdot_eff=mdot,return_timescale,angmom_toreturn; SinkTempInfo[i].angmom_norm_topass_in_swallowloop=0;
-    for(k=0;k<3;k++) {jmag+=SinkTempInfo[i].angmom_prepass_sum_for_passback[k]*SinkTempInfo[i].angmom_prepass_sum_for_passback[k]; lmag+=P[n].Sink_Specific_AngMom[k]*P[n].Sink_Specific_AngMom[k];}
+    jmag = SinkTempInfo[i].angmom_prepass_sum_for_passback.norm_sq();
+    lmag = P[n].Sink_Specific_AngMom.norm_sq();
     lmag = P[n].Mass * sqrt(lmag); // this stores the magnitude of the _total_ angular momentum (mass * length * vel) internal to the sink
     return_timescale = P[n].Mass / mdot_eff; // rate of angular momentum return is (total angular momentum) / (return timescale) - here set to (total mass / mdot). Set this for your desired prescription.
     angmom_toreturn = lmag * DMIN(0.5, dt/return_timescale); // the actual angular momentum we will return this timestep (with a mild limiter so we don't dump it all at once)
@@ -547,7 +574,7 @@ void set_sink_new_mass(int i, int n, double dt)
 #ifdef SINK_ALPHADISK_ACCRETION
     dm_acc_for_j = SinkTempInfo[i].mdot_reservoir * dt; m_tot_for_j = P[n].Sink_Mass + P[n].Sink_Mass_Reservoir;
 #endif
-    for(k=0;k<3;k++) {P[n].Sink_Specific_AngMom[k] = (m_tot_for_j*P[n].Sink_Specific_AngMom[k] + dm_acc_for_j*SinkTempInfo[i].Jgas_in_Kernel[k]/(MIN_REAL_NUMBER + SinkTempInfo[i].Mgas_in_Kernel)) / (m_tot_for_j + dm_acc_for_j);}
+    P[n].Sink_Specific_AngMom = (P[n].Sink_Specific_AngMom*m_tot_for_j + SinkTempInfo[i].Jgas_in_Kernel*(dm_acc_for_j/(MIN_REAL_NUMBER + SinkTempInfo[i].Mgas_in_Kernel))) / (m_tot_for_j + dm_acc_for_j);
 #endif
 
 /*  for SINK_WIND_SPAWN
@@ -565,7 +592,7 @@ void set_sink_new_mass(int i, int n, double dt)
     double dm_reservoir = SinkTempInfo[i].mdot_reservoir * dt - dMSINK_continuous_accretion;
     if(dm_reservoir < -P[n].Sink_Mass_Reservoir) {dm_reservoir=-P[n].Sink_Mass_Reservoir; P[n].Sink_Mass_Reservoir=0;} else {P[n].Sink_Mass_Reservoir += dm_reservoir;}
     if(P[n].Sink_Mass_Reservoir<0) {P[n].Sink_Mass_Reservoir=0;}
-    if(P[n].Mass<0) {P[n].Mass=0;}
+    if(P[n].Mass<0) {P[n].Mass=0;} if(P[n].Type==0) {CellP[n].Mass = P[n].Mass;}
     dMSINK_continuous_accretion += dm_reservoir;
 #else // #ifdef SINK_ALPHADISK_ACCRETION
 #if defined(SINK_WIND_SPAWN)
@@ -579,12 +606,11 @@ void set_sink_new_mass(int i, int n, double dt)
 #endif
 #ifdef JET_DIRECTION_FROM_KERNEL_AND_SINK
     double mtot = SinkTempInfo[i].Mgas_in_Kernel + P[n].Mass;
-    for(k=0; k<3; k++) { SinkTempInfo[i].Sink_SurroundingGasCOM[k] /= mtot;} // this now stores the COM of the sink-gas system, relative to the sink position
-    for(k=0; k<3; k++) {
-        // We need the angular momentum in the COM frame of the sink-gas system, so must apply the correction -r x p. This is negligible when MBH >> Mgas but important when Mgas > MBH, e.g. low-mass stars at modest mass resolution
-        SinkTempInfo[i].Jgas_in_Kernel[k] -= (SinkTempInfo[i].Mgas_in_Kernel/mtot) * SinkTempInfo[i].Mgas_in_Kernel * (SinkTempInfo[i].Sink_SurroundingGasCOM[(k+1)%3]*SinkTempInfo[i].Sink_SurroundingGasVel[(k+2)%3] - SinkTempInfo[i].Sink_SurroundingGasCOM[(k+2)%3]*SinkTempInfo[i].Sink_SurroundingGasVel[(k+1)%3]);
-        P[n].Jgas_in_Kernel[k] = SinkTempInfo[i].Jgas_in_Kernel[k] + P[n].Mass * P[n].Sink_Specific_AngMom[k]; // this stores the _total_ angular momentum (sink + gas) in the COM frame of the sink-gas system, including internal to the sink
-    }
+    SinkTempInfo[i].Sink_SurroundingGasCOM /= mtot; // this now stores the COM of the sink-gas system, relative to the sink position
+    // We need the angular momentum in the COM frame of the sink-gas system, so must apply the correction -r x p. This is negligible when MBH >> Mgas but important when Mgas > MBH, e.g. low-mass stars at modest mass resolution
+    double Mgas_over_mtot_sq = (SinkTempInfo[i].Mgas_in_Kernel/mtot) * SinkTempInfo[i].Mgas_in_Kernel;
+    SinkTempInfo[i].Jgas_in_Kernel -= cross(SinkTempInfo[i].Sink_SurroundingGasCOM, SinkTempInfo[i].Sink_SurroundingGasVel) * Mgas_over_mtot_sq;
+    P[n].Jgas_in_Kernel = SinkTempInfo[i].Jgas_in_Kernel + P[n].Sink_Specific_AngMom * P[n].Mass; // this stores the _total_ angular momentum (sink + gas) in the COM frame of the sink-gas system, including internal to the sink
     P[n].Mgas_in_Kernel=SinkTempInfo[i].Mgas_in_Kernel;
 #endif
 #ifdef SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION
@@ -615,7 +641,7 @@ void set_sink_drag(int i, int n, double dt)
 #ifdef SINK_ALPHADISK_ACCRETION
         sink_mass += P[n].Sink_Mass_Reservoir;
 #endif
-        double bhvel2_df=0; for(k=0;k<3;k++) {bhvel2_df += SinkTempInfo[i].DF_mean_vel[k]*SinkTempInfo[i].DF_mean_vel[k];}
+        double bhvel2_df = SinkTempInfo[i].DF_mean_vel.norm_sq();
         double fac, fac_friction;
         /* First term is approximation of the error function */
         fac = 8 * (M_PI - 3) / (3 * M_PI * (4. - M_PI));
@@ -645,7 +671,7 @@ void set_sink_drag(int i, int n, double dt)
             afac_vel = DMIN(dv_magnitude*UNIT_TIME_IN_MYR , DMAX( DMIN(DMAX(-2.*P[n].Sink_PotentialMinimumOfNeighbors/(P[n].KernelRadius*All.cf_atime*All.cf_atime), 0), 10.*dv_magnitude/dt), afac_vel)); // free-fall-acceleration [checked-to-zero], limited to multiple of actual vel difference in timestep
             fac_vel = afac_vel * dt / dv_magnitude; // rate at which de-celeration/damping occurs
             if(fac_vel > 1.e-4) {fac_vel = 1.-exp(-fac_vel);}
-            for(k = 0; k < 3; k++) {P[n].Vel[k] += SinkTempInfo[i].DF_mean_vel[k]*All.cf_atime * fac_vel;}
+            {auto dv_df = SinkTempInfo[i].DF_mean_vel * (All.cf_atime * fac_vel); P[n].dp += dv_df * P[n].Mass; P[n].Vel += dv_df;}
         }
     }
 #endif // repositioning algorithm active
@@ -659,10 +685,10 @@ void set_sink_long_range_rp(int i, int n) /* pre-set quantities needed for long-
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS) && !defined(SINK_FOLLOW_ACCRETED_ANGMOM)
     /* use the gradrho vector as a surrogate to hold the orientation of the angular momentum if we aren't evolving it explicitly
      (this is done because the long-range radiation routines for the BH require the angular momentum vector for non-isotropic emission) */
-    P[n].GradRho[0]=P[n].GradRho[1]=0; P[n].GradRho[2]=1;
+    P[n].GradRho = {0, 0, 1};
     if(SinkTempInfo[i].Mgas_in_Kernel > 0) {
-        int k; double fac=0; for(k=0;k<3;k++) {fac += SinkTempInfo[i].Jgas_in_Kernel[k]*SinkTempInfo[i].Jgas_in_Kernel[k];}
-        if(fac>0) {for(k=0;k<3;k++) {P[n].GradRho[k] = SinkTempInfo[i].Jgas_in_Kernel[k]/sqrt(fac);}}}
+        double fac = SinkTempInfo[i].Jgas_in_Kernel.norm_sq();
+        if(fac>0) {P[n].GradRho = SinkTempInfo[i].Jgas_in_Kernel * (1./sqrt(fac));}}}
         /* now, the P[n].GradRho[k] field for the BH holds the orientation of the UNIT angular momentum vector
          NOTE it is important that HARD-WIRED into the code, this sink calculation comes after the density calculation
          but before the forcetree update and walk; otherwise, this won't be used correctly there */
@@ -698,16 +724,16 @@ void sink_final_operations(void)
 #endif
 
 #ifdef SINK_REPOSITION_ON_POTMIN
-    for(n = FirstActiveParticle; n >= 0; n = NextActiveParticle[n])
+    for (int n : ActiveParticleList)
         if(sink_isactive(n))
             if(P[n].Sink_PotentialMinimumOfNeighbors < 0.5 * SINK_MINPOTVALUE_INIT)
             {
                 double fac_sink_shift=0;
-                dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(n);
+                dt = get_particle_feedback_timestep_in_physical(n);
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
                 dt = P[n].dt_since_last_gas_search;
 #endif
-                double dr_min=0; for(k=0;k<3;k++) {dr_min+=(P[n].Sink_PotentialMinimumOfNeighborsPos[k]-P[n].Pos[k])*(P[n].Sink_PotentialMinimumOfNeighborsPos[k]-P[n].Pos[k]);}
+                double dr_min = (P[n].Sink_PotentialMinimumOfNeighborsPos - P[n].Pos).norm_sq();
                 if(dr_min > 0 && dt > 0)
                 {
                     dr_min=sqrt(dr_min)*All.cf_atime; // offset to be covered
@@ -717,7 +743,7 @@ void sink_final_operations(void)
                     fac_sink_shift = dv_shift * dt / dr_min; // dimensionless shift factor
                     if(fac_sink_shift > 1.e-4) {fac_sink_shift = 1.-exp(-fac_sink_shift);} // make sure we can't overshoot by using this smooth interpolation function
                 }
-                for(k = 0; k < 3; k++) {P[n].Pos[k] += (P[n].Sink_PotentialMinimumOfNeighborsPos[k]-P[n].Pos[k]) * fac_sink_shift;}
+                P[n].Pos += (P[n].Sink_PotentialMinimumOfNeighborsPos - P[n].Pos) * fac_sink_shift;
             }
 #endif
 
@@ -738,31 +764,34 @@ void sink_final_operations(void)
         if(update_sink_moments)
         {
 #ifdef HERMITE_INTEGRATION
-            P[n].AccretedThisTimestep = 1;
+            /* Accretion moves Pos and Vel discontinuously below (SINK_FOLLOW_ACCRETED_MOMENTUM /
+               _COM). OldPos/OldVel are the step-start base that do_hermite_prediction() and
+               do_hermite_correction() integrate from, and they are written at the START of the
+               step (do_the_kick, mode 0) -- before sink_accretion() runs. Capture the pre-
+               accretion state so the base can be shifted by the same delta below. */
+            Vec3<double> hermite_pre_vel = P[n].Vel, hermite_pre_pos = P[n].Pos;
 #endif
             double m_new; m_new = P[n].Mass + SinkTempInfo[i].accreted_Mass;
 #if (SINK_FOLLOW_ACCRETED_ANGMOM == 1) /* in this case we are only counting this if its coming from BH particles */
             m_new = P[n].Mass + SinkTempInfo[i].accreted_Sink_Mass + SinkTempInfo[i].accreted_Sink_Mass_reservoir;
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_MOMENTUM) && !defined(SINK_REPOSITION_ON_POTMIN)
-            for(k=0;k<3;k++) {
-                P[n].dp[k] += P[n].Vel[k]*(m_new - P[n].Mass) + SinkTempInfo[i].accreted_momentum[k];
-                P[n].Vel[k] = (P[n].Vel[k]*m_new+ SinkTempInfo[i].accreted_momentum[k]) / m_new;
-            }
+            P[n].dp += P[n].Vel*(m_new - P[n].Mass) + SinkTempInfo[i].accreted_momentum;
+            P[n].Vel = (P[n].Vel*m_new + SinkTempInfo[i].accreted_momentum) / m_new;
+#else
+            P[n].dp += P[n].Vel*(m_new - P[n].Mass); /* track momentum change from mass gain even without SINK_FOLLOW_ACCRETED_MOMENTUM */
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_COM) && !defined(SINK_REPOSITION_ON_POTMIN)
-            for(k=0;k<3;k++) {P[n].Pos[k] = (P[n].Pos[k]*m_new + SinkTempInfo[i].accreted_centerofmass[k]) / m_new;}
+            P[n].Pos = (P[n].Pos*m_new + SinkTempInfo[i].accreted_centerofmass) / m_new;
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_ANGMOM)
-            for(k=0;k<3;k++) {P[n].Sink_Specific_AngMom[k] = (P[n].Sink_Specific_AngMom[k]*P[n].Mass + SinkTempInfo[i].accreted_J[k]) / m_new;}
-            P[n].Sink_Specific_AngMom[0] -= (SinkTempInfo[i].accreted_centerofmass[1]*SinkTempInfo[i].accreted_momentum[2] - SinkTempInfo[i].accreted_centerofmass[2]*SinkTempInfo[i].accreted_momentum[1]) / (m_new*m_new);
-            P[n].Sink_Specific_AngMom[1] -= (SinkTempInfo[i].accreted_centerofmass[2]*SinkTempInfo[i].accreted_momentum[0] - SinkTempInfo[i].accreted_centerofmass[0]*SinkTempInfo[i].accreted_momentum[2]) / (m_new*m_new);
-            P[n].Sink_Specific_AngMom[2] -= (SinkTempInfo[i].accreted_centerofmass[0]*SinkTempInfo[i].accreted_momentum[1] - SinkTempInfo[i].accreted_centerofmass[1]*SinkTempInfo[i].accreted_momentum[0]) / (m_new*m_new);
+            P[n].Sink_Specific_AngMom = (P[n].Sink_Specific_AngMom*P[n].Mass + SinkTempInfo[i].accreted_J) / m_new;
+            P[n].Sink_Specific_AngMom -= cross(SinkTempInfo[i].accreted_centerofmass, SinkTempInfo[i].accreted_momentum) / (m_new*m_new);
 #endif
 #if defined(SINK_RETURN_BFLUX)
-            for(k=0;k<3;k++) {P[n].B[k] += SinkTempInfo[i].accreted_B[k];}
+            P[n].B += SinkTempInfo[i].accreted_B;
 #endif
-            P[n].Mass += SinkTempInfo[i].accreted_Mass;
+            P[n].Mass += SinkTempInfo[i].accreted_Mass; if(P[n].Type==0) {CellP[n].Mass = P[n].Mass;}
 #if defined(SINK_SWALLOWGAS) && !defined(SINK_GRAVCAPTURE_GAS)
             P[n].Sink_AccretionDeficit += SinkTempInfo[i].Sink_AccretionDeficit;
 #endif
@@ -776,17 +805,21 @@ void sink_final_operations(void)
 #ifdef RT_REINJECT_ACCRETED_PHOTONS
 	    P[n].Sink_accreted_photon_energy += SinkTempInfo[i].accreted_photon_energy;
 #endif
-        } // if(masses > 0) check
 #ifdef HERMITE_INTEGRATION
-        else { P[n].AccretedThisTimestep = 0; }
+            /* Keep the carry state on the post-accretion trajectory. Without this the prediction
+               later in the same step recomputes Pos/Vel from the stale base and silently discards
+               the accretion kick (test/shu1977 shows it as COM drift). */
+            P[n].OldVel += P[n].Vel - hermite_pre_vel;
+            P[n].OldPos += P[n].Pos - hermite_pre_pos;
 #endif
+        } // if(masses > 0) check
 #ifdef SINK_GRAVCAPTURE_FIXEDSINKRADIUS
         if(All.ComovingIntegrationOn) {P[n].SinkRadius = DMIN(P[n].SinkRadius, SinkParticle_GravityKernelRadius);} // update sink radius if simulation has it dynamically evolving.
 #endif
 
         /* Correct for the mass loss due to radiation and BAL winds */
         /* always substract the radiation energy from P[n].Sink_Mass && P[n].Mass */
-        dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(n);
+        dt = get_particle_feedback_timestep_in_physical(n);
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
         dt = P[n].dt_since_last_gas_search;
 #endif
@@ -796,13 +829,13 @@ void sink_final_operations(void)
 #ifdef SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION
         if(All.SinkRadiativeEfficiency > 0 && All.SinkRadiativeEfficiency < 1 && P[n].ProtoStellarStage != 7) {radiation_loss = 0;} // negligible radiation loss term unless the object is actually a compact relic
 #endif
-        P[n].Mass -= radiation_loss; P[n].Sink_Mass -= radiation_loss;
+        P[n].dp -= P[n].Vel * radiation_loss; P[n].Mass -= radiation_loss; P[n].Sink_Mass -= radiation_loss; if(P[n].Type==0) {CellP[n].Mass = P[n].Mass;}
 
 
 #if defined(SINGLE_STAR_TIMESTEPPING)
         /* save local effective signal velocity of gas for sink particle CFL-like timestep criterion */
-        P[n].Sink_SurroundingGasVel = 0; for(k=0; k<3; k++) {P[n].Sink_SurroundingGasVel += SinkTempInfo[i].Sink_SurroundingGasVel[k]*SinkTempInfo[i].Sink_SurroundingGasVel[k];}
-        P[n].Sink_SurroundingGasVel += convert_internalenergy_soundspeed2(n,SinkTempInfo[i].Sink_SurroudingGasInternalEnergy);
+        P[n].Sink_SurroundingGasVel = SinkTempInfo[i].Sink_SurroundingGasVel.norm_sq();
+        P[n].Sink_SurroundingGasVel += CellP[n].soundspeed2_from_u(SinkTempInfo[i].Sink_SurroudingGasInternalEnergy);
         P[n].Sink_SurroundingGasVel = sqrt(P[n].Sink_SurroundingGasVel);
 #endif
 
@@ -813,7 +846,7 @@ void sink_final_operations(void)
         dm_wind = DMAX(P[n].Sink_Mdot_ROI - P[n].Sink_Mdot, 0.) * dt; /* wind mass loss rate from the alpha disk */
 #endif
 #ifdef SINGLE_STAR_FB_JETS
-        if((P[n].Sink_Mass * UNIT_MASS_IN_SOLAR < 0.01) || P[n].Mass < 3.5*P[n].Sink_Formation_Mass) {dm_wind = 0;} // no jets launched yet if <0.01 msun or if we haven't accreted enough to get a reliable jet direction
+        dm_wind = single_star_jet_mdot(n) * dt; // same rate the wind_mode momentum comparison uses, so the two cannot disagree
 #endif
         if(dm_wind > P[n].Mass) {dm_wind = P[n].Mass;}
 #if defined(SINK_ALPHADISK_ACCRETION)
@@ -824,13 +857,21 @@ void sink_final_operations(void)
         if(dm_wind > P[n].Sink_Mass) {dm_wind = P[n].Sink_Mass;}
         P[n].Sink_Mass -= dm_wind;
 #endif
+#ifdef SINGLE_STAR_FB_JETS
+        /* accretion-tied mass always banks here, whether or not jets currently hold the discrete-spawn
+           channel; if not it waits, since jets have no continuous-injection fallback. Zeroing dm_wind
+           stops the add at the bottom double-counting it into the wind side. */
+        P[n].unspawned_jet_mass += dm_wind; dm_wind = 0;
+#endif
 #if defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)
 #if defined(SINGLE_STAR_FB_WINDS)
        if(P[n].ProtoStellarStage == 5) {
-           if(P[n].wind_mode == 1) {
-                dm_wind = single_star_wind_mdot(n,0) * dt;
-                P[n].Sink_Mass -= dm_wind;
-            }
+           if(P[n].wind_mode == 1) { // winds hold the discrete-spawn channel: bank the physical MS wind mass loss here
+                double dm_wind_star = single_star_wind_mdot(n,0) * dt;
+                P[n].Sink_Mass -= dm_wind_star;
+                P[n].unspawned_wind_mass += dm_wind_star;
+                dm_wind = 0; // already banked above; stop the add at the bottom counting it again
+            } // else jets hold it: the continuous mechanical_fb injection does the wind mass loss and debits Sink_Mass itself, so doing it here too would debit twice
         } // wind loss rate previously calculated in stellar_evolution at the end of the previous timestep: remove mass lost via winds
 #endif
 #if defined(SINGLE_STAR_FB_SNE)
@@ -851,14 +892,19 @@ void sink_final_operations(void)
                 P[n].Sink_Mass = DMAX(0, m_relic); // zero out mass if nothing is left-over
             }
             if(P[n].Sink_Mass <= m_relic) {
-                TreeReconstructFlag = 1; //rebuild the tree after the SN finished
+                TreeMomentsStaleFlag = 1; /* sink mass changed: refresh moments, tree structure maintained by MAINTAIN_TREE_IN_REARRANGE */
                 Max_Unspawned_MassUnits_fromSink = DMAX(2, Max_Unspawned_MassUnits_fromSink); // a high enough number to ensure that we do spawn winds
             }
+#ifdef SINGLE_STAR_FB_JETS
+            P[n].unspawned_wind_mass += P[n].unspawned_jet_mass; P[n].unspawned_jet_mass = 0; // stage 6 switches the active reservoir to the wind side, so hand over anything still waiting rather than strand it
+#endif
         }
 #endif
 #endif
         P[n].unspawned_wind_mass += dm_wind;
-        double n_unspawned = P[n].unspawned_wind_mass / ((SINK_WIND_SPAWN)*target_mass_for_wind_spawning(n)); // number of spawned gas cells that can be made from the mass in the reservoir
+        /* same pair of calls the eligibility test in spawn_sink_wind_feedback() makes, so the two cannot
+           disagree; pairing one reservoir with the other channel's cell mass overstates this by the mass ratio */
+        double n_unspawned = *active_unspawned_mass_ptr(n) / ((SINK_WIND_SPAWN)*target_mass_for_wind_spawning(n)); // number of spawned gas cells that can be made from the mass in the reservoir
         if(n_unspawned> Max_Unspawned_MassUnits_fromSink) {Max_Unspawned_MassUnits_fromSink = n_unspawned;} // track the maximum integer number of elements this sink could spawn
 #endif
 

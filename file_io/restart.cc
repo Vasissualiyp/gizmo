@@ -15,6 +15,12 @@
 #include "../core/proto.h"
 #include "../domain/domain.h"
 
+/* Restartfile layout sentinel (see restart()). The magic distinguishes a sentinel from the leading
+   bytes of an All struct written by a pre-sentinel binary. */
+#define RESTARTFILE_MAGIC 0x52535446u
+#define RESTARTFILE_LAYOUT_VERSION 1u
+struct restart_layout_header {unsigned int magic, layout_version; unsigned long long size_all, size_p, size_cell;};
+
 static FILE *fd;
 
 #ifdef CHIMES 
@@ -151,6 +157,36 @@ void restart(int modus)
 
 	  save_PartAllocFactor = All.PartAllocFactor;
 
+	  /* Layout sentinel. What follows is a raw byte image of All, P, CellP and a hand-picked list of
+	     globals, so any change to those structs or to that list makes older restartfiles unreadable --
+	     and without this header they misread silently (every later field shifted) or crash somewhere far
+	     downstream. Written first; on read a present-but-different header is a clean, explained abort,
+	     and a file without one (pre-sentinel) is read as before. Struct sizes are checked automatically;
+	     bump RESTARTFILE_LAYOUT_VERSION whenever a byten() field is added or removed below without a
+	     struct size changing. */
+	  {
+	      struct restart_layout_header hdr = {RESTARTFILE_MAGIC, RESTARTFILE_LAYOUT_VERSION,
+	          (unsigned long long) sizeof(struct global_data_all_processes), (unsigned long long) sizeof(struct particle_data), (unsigned long long) sizeof(struct gas_cell_data)};
+	      struct restart_layout_header want = hdr;
+	      byten(&hdr, sizeof(hdr), modus);
+	      if(modus && hdr.magic != want.magic)
+		{
+		  /* No header: written before the sentinel existed. Its layout cannot be verified, so read it exactly as
+		     before -- resuming a run on a newer commit with an unchanged layout is routine and must keep working.
+		     Rewind the bytes just consumed; they are the head of All. */
+		  fseek(fd, -(long) sizeof(hdr), SEEK_CUR);
+		  if(ThisTask == 0) {printf("Restart file '%s' carries no layout header (pre-sentinel binary): layout not verifiable, reading it as before.\n", buf); fflush(stdout);}
+		}
+	      else if(modus && (hdr.layout_version != want.layout_version || hdr.size_all != want.size_all || hdr.size_p != want.size_p || hdr.size_cell != want.size_cell))
+		{
+		  printf("Restart file '%s' was written with a different data layout (file/binary: layout version %u/%u, sizeof All %llu/%llu, P %llu/%llu, CellP %llu/%llu). "
+			 "Restartfiles are byte images and do not survive changes to these structures: resume with the binary that wrote them, or restart from a snapshot.\n",
+			 buf, hdr.layout_version, want.layout_version, hdr.size_all, want.size_all, hdr.size_p, want.size_p, hdr.size_cell, want.size_cell);
+		  fflush(stdout);
+		  endrun(7879);
+		}
+	  }
+
 	  /* common data  */
 	  byten(&All, sizeof(struct global_data_all_processes), modus);
 
@@ -174,8 +210,8 @@ void restart(int modus)
 			   All.PartAllocFactor, save_PartAllocFactor);
 
 		  All.PartAllocFactor = save_PartAllocFactor;
-		  All.MaxPart = (int) (All.PartAllocFactor * (All.TotNumPart / NTask));
-		  All.MaxPartGas = (int) (All.PartAllocFactor * (All.TotN_gas / NTask));
+		  All.MaxPart = (int) (All.PartAllocFactor * balanced_particles_per_rank(All.TotNumPart, NTask));
+		  All.MaxPartGas = (int) (All.PartAllocFactor * balanced_particles_per_rank(All.TotN_gas, NTask));
 #ifdef ALLOW_IMBALANCED_GASPARTICLELOAD
           All.MaxPartGas = All.MaxPart; // PFH: increasing All.MaxPartGas according to this line can allow better load-balancing in some cases. however it leads to more memory problems
 #endif
@@ -253,7 +289,7 @@ void restart(int modus)
                 {ChimesGasVars[partIndex].abundances[abunIndex] = gasAbundancesBuf[(partIndex * ChimesGlobalVars.totalNumberOfSpecies) + abunIndex];}
 
 #ifdef CHIMES_TURB_DIFF_IONS 
-		      chimes_update_turbulent_abundances(partIndex, 1); 
+		      chimes_update_turbulent_abundances(partIndex, 1, P, CellP); 
 #endif 
 		    }
 		}
@@ -274,7 +310,21 @@ void restart(int modus)
 	  byten(StAkb, StNModes*3*sizeof(double),modus);
 	  byten(StMode, StNModes*3*sizeof(double),modus);
 	  byten(&StTPrev, sizeof(StTPrev),modus);
+#ifdef TURB_DRIVING_TARGET_SIGMA
+	  byten(&All.TurbDriving_SmoothedVRMS, sizeof(All.TurbDriving_SmoothedVRMS), modus);
+	  byten(&All.TurbDriving_DrivingNormFactor, sizeof(All.TurbDriving_DrivingNormFactor), modus);
 #endif
+#endif
+
+	  /* Cross-step tree-rebuild-request state. These are plain globals (not inside All), so
+	     without serializing them a raise pending at dump time vanished on resume: the
+	     resume-time decomposition below is conditional on MULTIPLEDOMAINS having changed, so
+	     nothing repaired the loss and the resumed run kept walking a condemned/stale tree.
+	     NB THIS EXTENDS THE RESTARTFILE FORMAT: files written before this change cannot be
+	     resumed by this build (and vice versa). */
+	  byten(&TreeReconstructFlag, sizeof(TreeReconstructFlag), modus);
+	  byten(&TreeMomentsStaleFlag, sizeof(TreeMomentsStaleFlag), modus);
+	  byten(&DomainReconstructFlag, sizeof(DomainReconstructFlag), modus);
 
 	  /* write flags for active timebins */
 	  byten(TimeBinActive, TIMEBINS * sizeof(int), modus);
@@ -337,6 +387,18 @@ void restart(int modus)
 	      byten(DomainCenter, 3 * sizeof(double), modus);
 	      byten(&DomainLen, sizeof(double), modus);
 	      byten(&DomainFac, sizeof(double), modus);
+
+	      if(modus)		/* read */
+		{
+		  /* Extnodes[].Flag is serialized but GlobFlag, the counter it is compared against, is not.
+		     A resume restarts the counter at 0 while nodes keep old markers, so a node could read as
+		     already-visited and be skipped by force_update_tree(). Flag is only a within-pass marker, so
+		     clearing every Flag is sufficient. Do not seed GlobFlag from max(Flag) instead: entries the
+		     build never wrote are uninitialized and can push the counter toward INT_MAX. */
+		  int i;
+		  for(i = 0; i < Numnodestree; i++) {Extnodes_base[i].Flag = 0;}
+		  GlobFlag = 0;
+		}
 	    }
 
 	  fclose(fd);

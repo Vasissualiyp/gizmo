@@ -177,6 +177,10 @@ void init_turb(void)
     int j; for(j=0;j<100;j++) {double tmp; tmp=st_turbdrive_get_gaussian_random_variable();} // cycle past initial seed
     st_turbdrive_init_ouseq(); // initialize variable for phases
     st_turbdrive_calc_phases(); // initialize phases
+#ifdef TURB_DRIVING_TARGET_SIGMA
+    All.TurbDriving_SmoothedVRMS = All.TurbDriving_Global_AccelerationPowerVariable;
+    All.TurbDriving_DrivingNormFactor = 1.0;
+#endif
     set_turb_ampl(); // set initial amplitudes and calculate initial quantities needed for dissipation measures
     StTPrev = All.Ti_Current; // mark current time as last update of turb driving fields
 }
@@ -192,8 +196,40 @@ void st_turbdrive_init_ouseq(void)
 /* return the rms acceleration we expect, using either the 'dissipation rate' or 'turbulent velocity' conventions for our variables */
 double st_return_rms_acceleration(void)
 {
-    return All.TurbDriving_Global_AccelerationPowerVariable / st_return_mode_correlation_time(); // new convention, hoping this is more clear re: meaning of variable
+#ifdef TURB_DRIVING_TARGET_SIGMA
+    return All.TurbDriving_Global_AccelerationPowerVariable * All.TurbDriving_DrivingNormFactor / st_return_mode_correlation_time();
+#else
+    return All.TurbDriving_Global_AccelerationPowerVariable / st_return_mode_correlation_time();
+#endif
 }
+
+
+#ifdef TURB_DRIVING_TARGET_SIGMA
+/* compute mass-weighted RMS velocity of Type 0 gas cells; if TURB_DRIVING_TARGET_SIGMA > 0, restrict
+   to cells within that radius (code units) of the box center.  Returns the target VRMS if no mass found. */
+static double st_compute_vrms(void)
+{
+    double vsum2 = 0, msum = 0;
+    const double aperture = (double)(TURB_DRIVING_TARGET_SIGMA);
+    const double box_cx = 0.5*boxSize_X, box_cy = 0.5*boxSize_Y, box_cz = 0.5*boxSize_Z;
+    int i;
+    for(i = 0; i < NumPart; i++)
+    {
+        if(P[i].Type != 0 || P[i].Mass <= 0) continue;
+        if(aperture > 0) {
+            double dx = P[i].Pos[0] - box_cx, dy = P[i].Pos[1] - box_cy, dz = P[i].Pos[2] - box_cz;
+            if(dx*dx + dy*dy + dz*dz > aperture*aperture) continue;
+        }
+        vsum2 += P[i].Mass * P[i].Vel.norm_sq();
+        msum  += P[i].Mass;
+    }
+    double glob_vsum2, glob_msum;
+    MPI_Allreduce(&vsum2, &glob_vsum2, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&msum,  &glob_msum,  1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    if(glob_msum <= 0) return All.TurbDriving_Global_AccelerationPowerVariable;
+    return sqrt(glob_vsum2 / glob_msum);
+}
+#endif
 
 
 /* return the driving scale needed for scaling some other quantities below, corresponding to our global variable convention */
@@ -277,7 +313,7 @@ void st_turbdrive_calc_phases(void)
 /* Check whether the phases of the turbulent driving force must be recomputed this timestep */
 int new_turbforce_needed_this_timestep(void)
 {
-    double delta = (All.Ti_Current - StTPrev) * UNIT_INTEGERTIME_IN_PHYSICAL(-1), Dt_Update=st_return_dt_between_updates();
+    double delta = (All.Ti_Current - StTPrev) * unit_integertime_in_physical(-1), Dt_Update=st_return_dt_between_updates();
     if(delta >= Dt_Update){return 1;} else {return 0;}
 }
 
@@ -286,7 +322,7 @@ void set_turb_ampl(void)
 {
     if(new_turbforce_needed_this_timestep())
     {
-        double delta = (All.Ti_Current - StTPrev) * UNIT_INTEGERTIME_IN_PHYSICAL(-1);
+        double delta = (All.Ti_Current - StTPrev) * unit_integertime_in_physical(-1);
         if(delta > 0)
         {
             int i; double e_diss_sum=0, e_drive_sum=0, glob_diss_sum=0, glob_drive_sum=0;
@@ -317,6 +353,23 @@ void set_turb_ampl(void)
         st_update_ouseq();
         PRINT_STATUS(" ..calculating coefficients and phases following desired projection");
         st_turbdrive_calc_phases();
+#ifdef TURB_DRIVING_TARGET_SIGMA
+        {
+            double v_measured = st_compute_vrms();
+            double t_corr = st_return_mode_correlation_time();
+            double dt_upd = st_return_dt_between_updates();
+            double alpha = exp(-dt_upd / (2.0 * t_corr));
+            All.TurbDriving_SmoothedVRMS = All.TurbDriving_SmoothedVRMS * alpha + v_measured * (1.0 - alpha);
+            if(All.TurbDriving_SmoothedVRMS > 0)
+                All.TurbDriving_DrivingNormFactor = fmin(100.0, All.TurbDriving_Global_AccelerationPowerVariable / All.TurbDriving_SmoothedVRMS);
+            if(ThisTask == 0) {
+                printf("TURB_DRIVING_TARGET_SIGMA: t=%g v_rms=%g v_rms_smoothed=%g v_target=%g driving_norm=%g\n",
+                    All.Time, v_measured, All.TurbDriving_SmoothedVRMS,
+                    All.TurbDriving_Global_AccelerationPowerVariable, All.TurbDriving_DrivingNormFactor);
+                fflush(stdout);
+            }
+        }
+#endif
         StTPrev = StTPrev + st_return_dt_between_updates() / All.Timebase_interval;
         PRINT_STATUS(" ..updated turbulent stirring field at time %f", StTPrev * All.Timebase_interval);
     }
@@ -327,8 +380,8 @@ void set_turb_ampl(void)
 void add_turb_accel()
 {
     set_turb_ampl();
-    int i, j, m; double acc[3], fac_sol = 2.*solenoidal_frac_total_weight_renormalization();
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    int i, m; double acc[3], fac_sol = 2.*solenoidal_frac_total_weight_renormalization();
+    for (int i : ActiveParticleList)
     {
         if(P[i].Type == 0)
         {
@@ -356,9 +409,9 @@ void add_turb_accel()
 #if (NUMDIMS > 2)
                 acc[2] = fz;
 #endif
-                for(j=0; j<3; j++) {CellP[i].TurbAccel[j] = acc[j];}
+                CellP[i].TurbAccel = {acc[0], acc[1], acc[2]};
             } else {
-                CellP[i].TurbAccel[0] = CellP[i].TurbAccel[1] = CellP[i].TurbAccel[2]=0;
+                CellP[i].TurbAccel = {};
             }
         }
     }
@@ -370,16 +423,16 @@ void add_turb_accel()
 void do_turb_driving_step_first_half(void)
 {
     CPU_Step[CPU_MISC] += measure_time();
-    int i, j; integertime ti_step, tstart, tend; double dvel[3], dt_gravkick;
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    int i; integertime ti_step, tstart, tend; double dt_gravkick;
+    for (int i : ActiveParticleList)
     {
-        ti_step = GET_PARTICLE_INTEGERTIME(i); tstart = P[i].Ti_begstep; tend = P[i].Ti_begstep + ti_step / 2;	/* beginning / midpoint of step */
+        ti_step = P[i].integertime_step(); tstart = P[i].Ti_begstep; tend = P[i].Ti_begstep + ti_step / 2;	/* beginning / midpoint of step */
         dt_gravkick = get_gravkick_factor(tstart, tend, -1, 0);
         if(P[i].Type == 0)
         {
-            double vtmp[3], ekin0 = 0.5 * P[i].Mass * (P[i].Vel[0] * P[i].Vel[0] + P[i].Vel[1] * P[i].Vel[1] + P[i].Vel[2] * P[i].Vel[2]);
-            for(j=0;j<3;j++) {dvel[j] = CellP[i].TurbAccel[j] * dt_gravkick; vtmp[j] = P[i].Vel[j] + dvel[j];}
-            double ekin1 = 0.5 * P[i].Mass * (vtmp[0]*vtmp[0]+vtmp[1]*vtmp[1]+vtmp[2]*vtmp[2]);
+            double ekin0 = 0.5 * P[i].Mass * P[i].Vel.norm_sq();
+            Vec3<double> dvel = CellP[i].TurbAccel * dt_gravkick; Vec3<double> vtmp = P[i].Vel + dvel;
+            double ekin1 = 0.5 * P[i].Mass * vtmp.norm_sq();
             CellP[i].EgyDrive += ekin1 - ekin0;
         }
     }
@@ -391,16 +444,16 @@ void do_turb_driving_step_first_half(void)
 void do_turb_driving_step_second_half(void)
 {
     CPU_Step[CPU_MISC] += measure_time();
-    int i, j; integertime ti_step, tstart, tend; double dvel[3], dt_gravkick;
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    int i; integertime ti_step, tstart, tend; double dt_gravkick;
+    for (int i : ActiveParticleList)
     {
-        ti_step = GET_PARTICLE_INTEGERTIME(i); tstart = P[i].Ti_begstep + ti_step / 2; tend = P[i].Ti_begstep + ti_step;	/* midpoint/end of step */
+        ti_step = P[i].integertime_step(); tstart = P[i].Ti_begstep + ti_step / 2; tend = P[i].Ti_begstep + ti_step;	/* midpoint/end of step */
         dt_gravkick = get_gravkick_factor(tstart, tend, -1, 0);
         if(P[i].Type == 0)
         {
-            double vtmp[3], ekin0 = 0.5 * P[i].Mass * (P[i].Vel[0] * P[i].Vel[0] + P[i].Vel[1] * P[i].Vel[1] + P[i].Vel[2] * P[i].Vel[2]);
-            for(j=0;j<3;j++) {dvel[j] = CellP[i].TurbAccel[j] * dt_gravkick; vtmp[j] = P[i].Vel[j] + dvel[j];}
-            double ekin1 = 0.5 * P[i].Mass * (vtmp[0]*vtmp[0]+vtmp[1]*vtmp[1]+vtmp[2]*vtmp[2]);
+            double ekin0 = 0.5 * P[i].Mass * P[i].Vel.norm_sq();
+            Vec3<double> dvel = CellP[i].TurbAccel * dt_gravkick; Vec3<double> vtmp = P[i].Vel + dvel;
+            double ekin1 = 0.5 * P[i].Mass * vtmp.norm_sq();
             CellP[i].EgyDrive += ekin1 - ekin0;
         }
     }
@@ -419,7 +472,7 @@ void log_turb_temp(void)
         {
             dudt_drive += P[i].Mass * CellP[i].DuDt_drive;
             dudt_diss += P[i].Mass * CellP[i].DuDt_diss;
-            ekin += 0.5 * P[i].Mass * (P[i].Vel[0] * P[i].Vel[0] + P[i].Vel[1] * P[i].Vel[1] + P[i].Vel[2] * P[i].Vel[2]);
+            ekin += 0.5 * P[i].Mass * P[i].Vel.norm_sq();
             ethermal += P[i].Mass * CellP[i].InternalEnergy;
             mass += P[i].Mass;
         }

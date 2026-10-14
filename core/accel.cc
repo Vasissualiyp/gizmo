@@ -45,8 +45,11 @@ void compute_grav_accelerations(void)
 
   gravity_tree();		/* computes gravity accel. */
 
-  /* For the first timestep, we redo it to allow usage of relative opening criterion for consistent accuracy */
-  if(All.TypeOfOpeningCriterion == 1 && All.Ti_Current == 0) {gravity_tree();}
+  /* For the first timestep, we redo it to allow usage of relative opening criterion for consistent accuracy.
+     Raise the rebuild flag so the second pass runs on a freshly built tree rather than reusing the first
+     pass's: the BH->relative switch changes which node data the opening test consumes (cf. gizmo-cpp
+     5b490b93). One extra build at t=0 only. */
+  if(All.TypeOfOpeningCriterion == 1 && All.Ti_Current == 0) {TreeReconstructFlag = 1; gravity_tree();}
 
   PRINT_STATUS(" ..gravity force computation done");
 }
@@ -93,6 +96,21 @@ void compute_hydro_densities_and_forces(void)
         MCBAL_LOG("pre_grad");
         hydro_gradient_calc(); /* calculates the gradients of hydrodynamical quantities  */
         MCBAL_LOG("post_grad");
+#ifdef MHD_MODIFIED_GRADIENT
+        {   /* determine whether the active gas fraction is large enough to justify the global MG solve */
+            long long ngas_active_local = 0;
+            for(int tbin = 0; tbin < TIMEBINS; tbin++) {if(TimeBinActive[tbin]) {ngas_active_local += TimeBinCountGas[tbin];}}
+            long long ngas_active_global; MPI_Allreduce(&ngas_active_local, &ngas_active_global, 1, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD);
+            double active_gas_fraction = (All.TotN_gas > 0) ? ((double)ngas_active_global / (double)All.TotN_gas) : 1.0;
+            if(active_gas_fraction >= All.ActiveFractionForMGSweep) {
+                All.Flag_SkipMGSolve = 0;
+                mg_gradient_correction_calc(); /* MG method: global sparse-matrix solve for exact div(B)=0 correction coefficients (Tu et al. 2026) */
+            } else {
+                All.Flag_SkipMGSolve = 1;
+                if(ThisTask == 0) {PRINT_STATUS("Skipping MG global solve (active gas fraction %g < %g), using CG fallback for active cells", active_gas_fraction, All.ActiveFractionForMGSweep);}
+            }
+        }
+#endif
 #if defined(COOLING) && defined(GALSF_FB_FIRE_RT_LONGRANGE)
         selfshield_local_incident_uv_flux(); /* needs to be called after gravity tree (where raw flux is calculated) and the local gradient calculation (GradRho) to properly self-shield the particles that had this calculated */
 #endif

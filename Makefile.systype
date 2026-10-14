@@ -6,6 +6,7 @@
 #
 #############
 
+#SYSTYPE="github-ubuntu"
 #SYSTYPE="Frontera"
 #SYSTYPE="Raven-OpenMPI"
 SYSTYPE="Orion-OpenMPI"

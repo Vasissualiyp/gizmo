@@ -17,6 +17,7 @@ int domain_compare_toplist(const void *a, const void *b);
 double domain_particle_costfactor(int i);
 int domain_countToGo(size_t nlimit);
 void domain_Decomposition(int UseAllTimeBins, int SaveKeys, int do_particle_mergesplit_key);
+void domain_Decomposition_light(int UseAllTimeBins);
 int domain_decompose(void);
 int domain_determineTopTree(void);
 void domain_findExtent(void);
@@ -26,6 +27,10 @@ void domain_findSplit_balanced(int cpustart, int ncpu, int first, int last);
 void domain_free(void);
 void domain_shiftSplit(void);
 void domain_sumCost(void);
+void domain_update_adaptive_weights(void);
+#if (DOMAIN_TIMEBINS == 1)
+void domain_init_timebin_costs(void);
+#endif
 int domain_topsplit(int node, peanokey startkey);
 int domain_topsplit_local(int node, peanokey startkey, int mode);
 int domain_topsplit_special(void);

@@ -2,7 +2,7 @@
 #ifdef DM_SIDM
 {
     /* check if target+neighbor are an SIDM candidate, and against self-interaction */
-    double Pj_dtime = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(j);
+    double Pj_dtime = get_particle_timestep_in_physical(j);
     if( ((1 << local.Type) & (DM_SIDM)) && ((1 << P[j].Type) & (DM_SIDM)) && (local.ID != P[j].ID) && (local.dtime <= Pj_dtime))
     {
         if((local.dtime==Pj_dtime) && (local.ID > P[j].ID)) continue; // ensures interaction will only be calculated once for each pair //
@@ -23,11 +23,14 @@
                 NeedToWakeupParticles_local = 1;
             }}
 #endif
-            double kick[3]; calculate_interact_kick(kernel.dv, kick, m_si);
+            Vec3<double> kick; calculate_interact_kick(kernel.dv, kick, m_si);
             int k; for(k=0;k<3;k++) {
+                double dv_sidm = (local.Mass/m_si)*kick[k];
                 out.sidm_kick[k] -= (P[j].Mass/m_si)*kick[k];
                 #pragma omp atomic
-                P[j].Vel[k] += (local.Mass/m_si)*kick[k]; // this variable is modified here so need to do this carefully here to ensure we don't multiply-write at the same time
+                P[j].Vel[k] += dv_sidm; // this variable is modified here so need to do this carefully here to ensure we don't multiply-write at the same time
+                #pragma omp atomic
+                P[j].dp[k] += dv_sidm * P[j].Mass;
             }
             out.si_count++;
             #pragma omp atomic

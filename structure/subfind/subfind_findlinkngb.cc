@@ -23,7 +23,7 @@
  */
 static struct linkngbdata_in
 {
-  MyDouble Pos[3];
+  Vec3<MyDouble> Pos;
   MyFloat DM_KernelRadius;
   int NodeList[NODELISTLENGTH];
 }
@@ -50,7 +50,7 @@ void subfind_find_linkngb(void)
   if(ThisTask == 0) {printf("Start find_linkngb (%d particles on task=%d)\n", NumPartGroup, ThisTask);}
 
   /* allocate buffers to arrange communication */
-  Ngblist = (int *) mymalloc("Ngblist", NumPartGroup * sizeof(int));
+  Ngblist.resize(NumPartGroup);
   Dist2list = (double *) mymalloc("Dist2list", NumPartGroup * sizeof(double));
 
   All.BunchSize = (long) ((All.BufferSize * 1024 * 1024) / (sizeof(struct data_index) + sizeof(struct data_nodelist) +
@@ -121,9 +121,7 @@ void subfind_find_linkngb(void)
 	    {
 	      place = DataIndexTable[j].Index;
 
-	      LinkngbDataIn[j].Pos[0] = P[place].Pos[0];
-	      LinkngbDataIn[j].Pos[1] = P[place].Pos[1];
-	      LinkngbDataIn[j].Pos[2] = P[place].Pos[2];
+	      LinkngbDataIn[j].Pos = P[place].Pos;
 	      LinkngbDataIn[j].DM_KernelRadius = P[place].DM_KernelRadius;
 
 	      memcpy(LinkngbDataIn[j].NodeList,
@@ -291,7 +289,7 @@ void subfind_find_linkngb(void)
   myfree(DataIndexTable);
 
   myfree(Dist2list);
-  myfree(Ngblist);
+  
 }
 
 
@@ -311,12 +309,12 @@ int subfind_linkngb_evaluate(int target, int mode, int *nexport, int *nsend_loca
 
   if(mode == 0)
     {
-      pos = P[target].Pos;
+      pos = P[target].Pos.data_ptr();
       h = P[target].DM_KernelRadius;
     }
   else
     {
-      pos = LinkngbDataGet[target].Pos;
+      pos = LinkngbDataGet[target].Pos.data_ptr();
       h = LinkngbDataGet[target].DM_KernelRadius;
     }
 

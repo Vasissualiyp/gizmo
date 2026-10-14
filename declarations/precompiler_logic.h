@@ -6,6 +6,9 @@
 /* also many logical options to force 'parent' or 'top-level' flags to be enabled for the appropriate methods, if we have enabled something using those methods */
 
 /* macro definition we will use throughout below, make sure this is defined up-top here */
+#ifdef NOGRAVITY
+#define SELFGRAVITY_OFF
+#endif
 #define DO_PREPROCESSOR_EXPAND_(VAL)  VAL ## 1
 #define EXPAND_PREPROCESSOR_(VAL)     DO_PREPROCESSOR_EXPAND_(VAL) /* checks for a NON-ZERO value of this parameter */
 #define CHECK_IF_PREPROCESSOR_HAS_NUMERICAL_VALUE_(VAL) !(EXPAND_PREPROCESSOR_(VAL) == 1) /* returns True if a non-zero int value of VAL is set */
@@ -38,7 +41,7 @@
 #define PREVENT_PARTICLE_MERGE_SPLIT  /* particle merging/splitting doesn't make sense with frozen grids */
 #endif
 
-#ifdef PARTICLE_MERGE_SPLIT_EVERY_TIMESTEP
+#if defined(PARTICLE_MERGE_SPLIT_EVERY_TIMESTEP) && !defined(DISABLE_MAINTAIN_TREE_IN_REARRANGE)
 #define MAINTAIN_TREE_IN_REARRANGE
 #endif
 
@@ -46,7 +49,7 @@
 #define HYDRO_SPH               /* top-level flag for SPH: must be enabled if any SPH method is used */
 #endif
 #ifdef HYDRO_SPH
-#if !defined(SPH_DISABLE_CD10_ARTVISC) && !(defined(EOS_TILLOTSON) || defined(EOS_ELASTIC)) // fancy viscosity switches assume positive pressures //
+#if !defined(SPH_DISABLE_CD10_ARTVISC) && !(defined(EOS_TILLOTSON) || defined(EOS_ELASTIC) || defined(EOS_ANEOS)) // fancy viscosity switches assume positive pressures //
 #define SPHAV_CD10_VISCOSITY_SWITCH        /* Enables Cullen & Dehnen 2010 'inviscid sph' (viscosity suppression outside shocks) */
 #endif
 #ifndef SPH_DISABLE_PM_CONDUCTIVITY
@@ -73,7 +76,7 @@
 #endif
 #endif
 
-#if (defined(EOS_TILLOTSON) || defined(EOS_ELASTIC) || defined(EOS_HELMHOLTZ) || defined(COSMIC_RAY_FLUID) || defined(RT_RADPRESSURE_IN_HYDRO) || defined(EOS_TRUELOVE_PRESSURE) || defined(TRUELOVE_CRITERION_PRESSURE) || defined(EOS_GMC_BAROTROPIC) || defined(COSMIC_RAY_SUBGRID_LEBRON)) && !defined(EOS_GENERAL)
+#if (defined(EOS_TILLOTSON) || defined(EOS_ELASTIC) || defined(EOS_HELMHOLTZ) || defined(EOS_ANEOS) || defined(COSMIC_RAY_FLUID) || defined(RT_RADPRESSURE_IN_HYDRO) || defined(EOS_TRUELOVE_PRESSURE) || defined(TRUELOVE_CRITERION_PRESSURE) || defined(EOS_GMC_BAROTROPIC) || defined(COSMIC_RAY_SUBGRID_LEBRON)) && !defined(EOS_GENERAL)
 #define EOS_GENERAL
 #endif
 
@@ -142,19 +145,29 @@
 #if !defined(MULTIPLEDOMAINS)
 #define MULTIPLEDOMAINS 32                  /*! slightly closer to our usual default, but users should feel free to adjust */
 #endif
+#if !defined(DOMAIN_LIGHTWEIGHT_REPARTITION)
+#define DOMAIN_LIGHTWEIGHT_REPARTITION      /*! enable lightweight domain repartition that reuses the top tree between full decompositions */
+#endif
+#define OPENMP_TREE_UPDATE
 
 #define GALSF_FB_MECHANICAL                 /*! top-level switch for mechanical feedback modules */
 #define GALSF_FB_FIRE_STELLAREVOLUTION (FIRE_PHYSICS_DEFAULTS) /*! turns on default FIRE processes+lookup tables including gas return, SNe, R-process, etc. this carries a number matching the defaults set you choose */
+#if !(defined(RT_OTVET) || defined(RT_FLUXLIMITEDDIFFUSION) || defined(RT_M1) || defined(RT_LOCALRAYGRID))
+/* Sub-grid FIRE RT modules: only enabled when no explicit RT solver is active. When a real RT
+   method is on, photoionization / local radiation pressure / long-range starlight propagation
+   are handled by the explicit solver -- enabling both produces duplicate symbols and
+   double-counted physics. */
 #define GALSF_FB_FIRE_RT_HIIHEATING         /*! gas within HII regions around young stars is photo-heated to 10^4 K - local stromgren approximation */
 #define GALSF_FB_FIRE_RT_LOCALRP            /*! turn on local radiation pressure coupling to gas - account for local multiple-scattering and isotropic local absorption */
 #define GALSF_FB_FIRE_RT_LONGRANGE          /*! continuous acceleration from starlight (uses luminosity tree) to propagate FIRE RT */
+#endif
 #define GALSF_FB_FIRE_AGE_TRACERS 16        /*! tracks a set of passive scalars corresponding to stellar ages for chemical evolution model postprocessing */
 
 #if !(defined(ADAPTIVE_GRAVSOFT_FORGAS) || defined(ADAPTIVE_GRAVSOFT_FORALL))
 #define ADAPTIVE_GRAVSOFT_FORGAS            /*! default choice is adaptive force softening for gas, but not stars [since ambiguously defined] */
 #endif
 
-#if (FIRE_PHYSICS_DEFAULTS == 2)
+#if (FIRE_PHYSICS_DEFAULTS <= 2)
 #define GALSF_USE_SNE_ONELOOP_SCHEME // set to use the 'base' FIRE-2 SNe coupling. if commented out, will user newer version that more accurately manages the injected energy with neighbors moving to inject a specific target
 #define GALSF_SFR_CRITERION (0+256) // 0=density threshold, 1=virial criterion (strict), 2=convergent flow, 4=local extremum, 8=no sink in kernel, 16=not falling into sink, 32=hill (tidal) criterion, 64=Jeans criterion, 128=converging flow along all principle axes, 256=self-shielding/molecular, 512=multi-free-fall (smooth dependence on virial), 1024='catch' for un-resolvable densities
 #define GALSF_SFR_VIRIAL_SCALING (-1) // old threshold modification with exception when densities 100x above threshold density
@@ -164,7 +177,9 @@
 #define COOL_MOLECFRAC_NONEQM
 #define OUTPUT_MOLECULAR_FRACTION
 #define OUTPUT_COOLRATE
-#define RT_USE_GRAVTREE_SAVE_RAD_FLUX
+#if !(defined(RT_OTVET) || defined(RT_FLUXLIMITEDDIFFUSION) || defined(RT_M1) || defined(RT_LOCALRAYGRID))
+#define RT_USE_GRAVTREE_SAVE_RAD_FLUX  /* LEBRON-style gravtree flux save; mutex with explicit RT solvers (same reasoning as the GALSF_FB_FIRE_RT_* / SINK_*_HEATING blocks) */
+#endif
 #define OUTPUT_POTENTIAL
 #define GALSF_SFR_CRITERION (0+1+2+64) // 0=density threshold, 1=virial criterion (strict), 2=convergent flow, 4=local extremum, 8=no sink in kernel, 16=not falling into sink, 32=hill (tidal) criterion, 64=Jeans criterion, 128=converging flow along all principle axes, 256=self-shielding/molecular, 512=multi-free-fall (smooth dependence on virial), 1024='catch' for un-resolvable densities
 #define ADAPTIVE_GRAVSOFT_MAX_SOFT_HARD_LIMIT (0.1/UNIT_LENGTH_IN_KPC)
@@ -232,12 +247,20 @@
 #if !defined(SINK_ALPHADISK_ACCRETION)
 #define SINK_ALPHADISK_ACCRETION (1.e10) /* smooth out accretion + allow super-eddington capture with alpha-disk model */
 #endif
+#if !(defined(RT_OTVET) || defined(RT_FLUXLIMITEDDIFFUSION) || defined(RT_M1) || defined(RT_LOCALRAYGRID))
+/* AGN-source counterparts of the FIRE sub-grid stellar RT modules. They share the
+   LEBRON/gravity-tree numerical infrastructure (RT_USE_GRAVTREE,
+   valid_gas_particle_for_rt accumulators, etc.) and are therefore mutually exclusive
+   with explicit RT solvers, exactly as their stellar GALSF_FB_FIRE_RT_* counterparts. */
 #define SINK_PHOTONMOMENTUM           /* allow AGN radiation pressure */
 #define SINK_COMPTON_HEATING          /* allow Compton heating from AGN spectrum */
 #define SINK_HII_HEATING              /* allow photo-ionization heating from AGN spectrum */
+#endif
 #define SINK_FB_COLLIMATED            /* BHFB directed along collimated axis following BH ang. mom */
 #define SINK_WIND_SPAWN (2)           /* spawn module: N=min num spawned/step */
+#if !defined(DISABLE_MAINTAIN_TREE_IN_REARRANGE)
 #define MAINTAIN_TREE_IN_REARRANGE    /* avoid constant domain decompositions in bottom timebin each time a spawn occurs */
+#endif
 #if defined(COSMIC_RAY_FLUID) || defined(COSMIC_RAY_SUBGRID_LEBRON)
 #define SINK_COSMIC_RAYS              /* allow CR injection from AGN */
 #endif
@@ -259,6 +282,14 @@
 
 #endif // FIRE_PHYSICS_DEFAULTS clauses
 
+
+/* SINK_COMPTON_HEATING reads the same angle-weighted sink luminosity tree data as
+ * SINK_PHOTONMOMENTUM, so it needs that infrastructure compiled in; the momentum kick itself can
+ * still be disabled at runtime (PhotonMomentum_Coupled_Fraction). Kept outside the
+ * FIRE_PHYSICS_DEFAULTS block so it applies to any Config that sets SINK_COMPTON_HEATING. */
+#if defined(SINK_COMPTON_HEATING) && !defined(SINK_PHOTONMOMENTUM)
+#define SINK_PHOTONMOMENTUM
+#endif
 
 
 #ifdef GALSF_SFR_CRITERION // flag for pure cross-compatibility [identical functionality, just ease-of-use for galaxy simulators here]
@@ -359,7 +390,7 @@
 #define IO_SINKS_ONLY_SNAPSHOT_FREQUENCY 0 /* Determines the number of snapshots with reduced data (stars only) per full snapshots (gas+stars), e.g., setting it to 2 means 2/3 of the snapshots will be reduced, 1/3 will have full data. Setting it to 0 disables it.  */
 #endif
 #define SINGLE_STAR_SINK_DYNAMICS
-#if !defined(PMGRID) && !defined(FIRE_SUPERLAGRANGIAN_JEANS_REFINEMENT) && !defined(USE_TIMESTEP_DILATION_FOR_ZOOMS)
+#if !defined(PMGRID) && !defined(FIRE_SUPERLAGRANGIAN_JEANS_REFINEMENT) && !defined(USE_TIMESTEP_DILATION_FOR_ZOOMS) && !defined(DISABLE_HERMITE_INTEGRATION)
 #define HERMITE_INTEGRATION 32 // bitflag for which particles to do 4th-order Hermite integration
 #endif
 #define ADAPTIVE_GRAVSOFT_FORGAS
@@ -373,11 +404,17 @@
 #ifndef ADAPTIVE_TREEFORCE_UPDATE
 #define ADAPTIVE_TREEFORCE_UPDATE (0.0625) // optimization
 #endif
+#ifndef SINK_MDOT_RESERVOIR_CAP
+#define SINK_MDOT_RESERVOIR_CAP 30 /* throttle the reservoir drain of marginally-resolved sinks; see set_sink_mdot in sinks/sink.cc */
+#endif
 #if !defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM) && !defined(FIRE_SUPERLAGRANGIAN_JEANS_REFINEMENT)
+#ifndef IO_SUPPRESS_TIMEBIN_STDOUT
 #define IO_SUPPRESS_TIMEBIN_STDOUT 16 // only prints outputs to log file if the highest active timebin index is within n of the highest timebin (dt_bin=2^(-N)*dt_bin,max)
+#endif
 #endif
 #define OUTPUT_SINK_ACCRETION_HIST // save accretion histories
 #define OUTPUT_SINK_FORMATION_PROPS // save at-formation properties of sink particles
+#define INPUT_READ_SINKPROPS
 #if ( defined(STARFORGE_GMC_TURBINIT) || defined(STARFORGE_FILAMENT_TURBINIT) ) // these flags should be given numerical values equal to the desired virial parameter
 #define TURB_DRIVING
 #define GRAVITY_ANALYTIC
@@ -399,22 +436,7 @@
 #define TURB_DIFF_METALS_LOWORDER
 #endif
 #ifdef SINGLE_STAR_FB_RAD
-#define RT_M1
-#define RT_COMOVING
-#ifndef OUTPUT_RT_RAD_FLUX
-#define OUTPUT_RT_RAD_FLUX
-#if !defined(SINGLE_STAR_AND_SSP_HYBRID_MODEL)
-#define IO_SUPPRESS_OUTPUT_EDDINGTON_TENSOR
-#endif
-#endif
-#ifndef RT_SOURCES
-#define RT_SOURCES 32
-#endif
-#ifndef RT_SPEEDOFLIGHT_REDUCTION
-#define RT_SPEEDOFLIGHT_REDUCTION (3.0e-4)
-#endif
-#define RT_REPROCESS_INJECTED_PHOTONS
-#define RT_SINK_ANGLEWEIGHT_PHOTON_INJECTION
+#define SINGLE_STAR_RT_DEFAULTS
 #define RT_OPTICAL_NIR
 #define RT_NUV
 #define RT_PHOTOELECTRIC
@@ -425,17 +447,13 @@
 #if !defined(RT_ISRF_BACKGROUND) && !defined(SINGLE_STAR_AND_SSP_HYBRID_MODEL)
 #define RT_ISRF_BACKGROUND
 #endif
-#if defined(RT_INFRARED)
-#define RT_REINJECT_ACCRETED_PHOTONS // need to reinject any photons that are removed from the simulation by the accretion algorithm; particularly important at small RSOL and high optical depths
 #endif
-#endif
-#if (defined(COOLING) && !defined(COOL_LOWTEMP_THIN_ONLY) && !defined(RT_INFRARED) && !defined(NOGRAVITY))
+#if (defined(COOLING) && !defined(COOL_LOWTEMP_THIN_ONLY) && !defined(RT_INFRARED))
 #define RT_USE_TREECOL_FOR_NH 6 /* This gives a better approximation for column density than the usual scale-length estimator, but is overkill for typical 1e-3msun-resolving simulations that only marginally resolve the opacity limit. Enable for high (<1e-5msun) resolution sims */
 #endif
 #ifdef COOLING
 #define SIMPLE_STEADYSTATE_CHEMISTRY
 #define COOL_MOLECFRAC_NONEQM
-#define EOS_PRECOMPUTE
 #define EOS_SUBSTELLAR_ISM
 #define OUTPUT_MOLECULAR_FRACTION
 #if defined(MAGNETIC) && !defined(CONDUCTION) && !defined(VISCOSITY) // if we have cooling and magnetic fields, enable conduction + viscosity
@@ -452,14 +470,38 @@
 #if defined(SINGLE_STAR_FB_WINDS) && defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION) || defined(COOLING)
 #define GALSF_FB_FIRE_STELLAREVOLUTION 3 // enable multi-loop feedback from such sources [this is specific to the DG-MG implementations here, not for public use right now!]. for now set to =2, which should force the code version to match previous iterations, as compared to the newer implementations.
 #endif
-#if defined(RT_ISRF_BACKGROUND)
-#if CHECK_IF_PREPROCESSOR_HAS_NUMERICAL_VALUE_(RT_ISRF_BACKGROUND)
-#if (RT_ISRF_BACKGROUND <= 0)
-#undef RT_ISRF_BACKGROUND /* use the negative or zero value above as a key to specifically -undefine- this variable, otherwise it will cause problems below by calling 0 to reset quantities it should not */
-#endif
-#endif
-#endif
 #endif // closes SINGLE_STAR_STARFORGE_DEFAULTS settings
+
+/* RT_ISRF_BACKGROUND=0 (or any value <= 0) in Config.sh switches the interstellar background off, including where an
+   umbrella above would turn it on (those only define it if it is not defined yet). Defined without a value it stays on.
+   The value test is written so that an empty definition is not read as 0: CHECK_IF_PREPROCESSOR_HAS_NUMERICAL_VALUE_
+   cannot tell 0 from empty. */
+#if defined(RT_ISRF_BACKGROUND)
+#if !((1 - RT_ISRF_BACKGROUND - 1 == 2) && (RT_ISRF_BACKGROUND + 0 == 0)) /* given a value */
+#if (RT_ISRF_BACKGROUND + 0 <= 0)
+#undef RT_ISRF_BACKGROUND
+#endif
+#endif
+#endif
+
+#ifdef SINGLE_STAR_RT_DEFAULTS
+#define RT_M1
+#define RT_COMOVING
+#define OUTPUT_RT_RAD_FLUX
+#ifndef IO_SUPPRESS_OUTPUT_EDDINGTON_TENSOR
+#define IO_SUPPRESS_OUTPUT_EDDINGTON_TENSOR
+#endif
+#ifndef RT_SOURCES
+#define RT_SOURCES 32
+#endif
+#ifndef RT_SPEEDOFLIGHT_REDUCTION
+#define RT_SPEEDOFLIGHT_REDUCTION (3.0e-4)
+#endif
+#define RT_REPROCESS_INJECTED_PHOTONS
+#define RT_SINK_ANGLEWEIGHT_PHOTON_INJECTION
+#define RT_REINJECT_ACCRETED_PHOTONS
+#define RT_INJECT_PHOTONS_DISCRETELY
+#endif // closes SINGLE_STAR_RT_DEFAULTS settings
 
 
 #ifdef SINGLE_STAR_SINK_DYNAMICS
@@ -507,9 +549,32 @@
 
 #if defined(SINGLE_STAR_FB_JETS) || ((defined(SINGLE_STAR_FB_WINDS) || defined(SINGLE_STAR_FB_SNE)) && defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION))
 #define SINK_WIND_SPAWN (2) // leverage the BHFB model already developed within the FIRE-BHs framework. gives accurate launching of arbitrarily-structured jets.
-#if !defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM)
+#if !defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM) && !defined(DISABLE_MAINTAIN_TREE_IN_REARRANGE)
 #define MAINTAIN_TREE_IN_REARRANGE // don't rebuild the domains/tree every time a particle is spawned - salvage the existing one by redirecting pointers as needed
 #endif
+#endif
+
+/* TREE_INTEGRITY_AUDITS must be set explicitly in Config.sh; nothing implies it. It enables fatal
+   deep tree audits (exactly-once walk, Father/threading cross-check, moment re-derivation) at
+   build/refresh/mutation points. It is deliberately not tied to DEVELOPER_MODE, which many test
+   configs set only to expose accuracy parameters. Without it only the always-on checks run
+   (force_validate_tree_links and the treebuild bookkeeping reduce). */
+
+#if defined(SINK_PARTICLES) && !defined(MAINTAIN_TREE_IN_REARRANGE) && (defined(HERMITE_INTEGRATION) || !defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM))
+/* Every sink pass that swallows ends with a cleanup rearrange (run.cc) that eliminates the victims,
+   spawning or not. Without maintenance that rearrange only condemns the tree, and the consumers
+   that follow in the same step walk it without rebuilding: the Hermite passes (which skip the
+   rebuild by design, the HermiteOnlyFlag gate in gravtree.cc), RT source injection from the sink,
+   and the feedback neighbour loops. The threading still points at the vacated slots, so each of
+   those walks sees a duplicated particle per swallow, and Hermite also refreshes moments on, and
+   takes sink forces from, that tree. The parent-only carry is not enough for a tree that keeps
+   being walked, so every sink run gets the full per-swap maintenance. Nuclear zoom keeps its
+   upstream exclusion above unless Hermite is on; the condemned walks it then makes are reported
+   by force_tree_check_walkable. (cf. gizmo-cpp a06e0073) */
+#ifdef DISABLE_MAINTAIN_TREE_IN_REARRANGE
+#warning "DISABLE_MAINTAIN_TREE_IN_REARRANGE overridden: SINK_PARTICLES requires tree maintenance (this config cannot serve as the no-MAINTAIN A/B arm)"
+#endif
+#define MAINTAIN_TREE_IN_REARRANGE
 #endif
 
 #if defined(SINGLE_STAR_FB_LOCAL_RP) // use standard angle-weighted local coupling to impart photon momentum from stars
@@ -565,8 +630,16 @@
 #endif
 #ifdef HERMITE_INTEGRATION
 #define COMPUTE_JERK_IN_GRAVTREE /* needs to be computed in order to do the Hermite integration */
+#ifndef HERMITE_CORRECTOR_ITERATIONS
+#define HERMITE_CORRECTOR_ITERATIONS 1 /* P(EC)^n: n>1 re-evaluates gravity at the corrected state and re-applies the corrector (Kokubo, Yoshinaga & Makino 1998) */
+#endif
 #ifndef TIDAL_TIMESTEP_CRITERION
 #define TIDAL_TIMESTEP_CRITERION // use tidal tensor timestep criterion -- otherwise won't effectively leverage the Hermite integrator timesteps
+#endif
+#if defined(HERMITE_SYMMETRIC_TIMESTEP) && !defined(FORCE_EQUAL_TIMESTEPS)
+/* inert without HERMITE_INTEGRATION or on equal steps. The code tests this name rather than relying on
+   an #undef, which the re-inclusion of GIZMO_config.h (via eos.h) after this file would undo */
+#define HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
 #endif
 #endif
 
@@ -601,11 +674,37 @@
 #endif
 
 
+#ifdef SINGLE_STAR_DIRECT_GRAVITY /* exact O(N_star^2) star-star gravity, replacing the tree for those pairs */
+#if !defined(SINK_CALC_DISTANCES)
+#define SINK_CALC_DISTANCES /* the tree's node-level sink_mass is what tells the walk which nodes to drop for star targets */
+#endif
+#if defined(SINGLE_STAR_FIND_BINARIES)
+/* SINGLE_STAR_FIND_BINARIES identifies a binary companion during the tree walk, from the very
+   star-star node interactions this flag removes, and the direct sum does not reconstruct it.
+   Silently losing binary detection would change the integration, so refuse the combination. */
+#error "SINGLE_STAR_DIRECT_GRAVITY does not yet supply the companion search that SINGLE_STAR_FIND_BINARIES (and hence SINGLE_STAR_TIMESTEPPING > 0) needs; use one or the other."
+#endif
+#endif
+
+
 #ifdef MHD_CONSTRAINED_GRADIENT
 /* make sure mid-point gradient calculation for cleaning terms is enabled */
 #ifndef MHD_CONSTRAINED_GRADIENT_MIDPOINT
 #define MHD_CONSTRAINED_GRADIENT_MIDPOINT
 #endif
+#endif
+
+#ifdef MHD_MODIFIED_GRADIENT
+#ifndef MAGNETIC
+#define MAGNETIC
+#endif
+/* MG builds on top of the CG infrastructure (FaceCrossX, FaceDotB, Face_Area),
+   but replaces the iterative correction with a global sparse-matrix solve.
+   If user set CG explicitly alongside MG, warn them. Otherwise, auto-enable CG=1. */
+#ifdef MHD_CONSTRAINED_GRADIENT
+#undef MHD_CONSTRAINED_GRADIENT
+#endif
+#define MHD_CONSTRAINED_GRADIENT 1
 #endif
 
 
@@ -621,7 +720,6 @@
 #define SPECIAL_POINT_TYPE_FOR_NODE_DISTANCES (5) /* default to type = 5 for this module */
 #endif
 
-
 #if defined(GRAVITY_ANALYTIC)
 #if CHECK_IF_PREPROCESSOR_HAS_NUMERICAL_VALUE_(GRAVITY_ANALYTIC)
 #if (GRAVITY_ANALYTIC > 0)
@@ -631,6 +729,17 @@
 #endif
 #endif
 #endif
+#endif
+
+
+/* drift and kick the sink node moments between tree rebuilds, as the main moments already are. Requires
+   sink_vel to exist to drift with, hence the condition below -- which has to be tested here, after every
+   site that can turn SINK_CALC_DISTANCES on. SINGLE_STAR_DIRECT_GRAVITY is in the list because it
+   subtracts the sink monopole from mixed nodes and so needs sink_pos on the same clock as u.d.s; it can
+   be set without SINGLE_STAR_TIMESTEPPING, and where it is, the sink_vel declaration and the moment sums
+   that fill it widen to match this macro. */
+#if defined(SINK_CALC_DISTANCES) && (defined(SINGLE_STAR_TIMESTEPPING) || defined(SINGLE_STAR_FIND_BINARIES) || defined(SPECIAL_POINT_MOTION) || defined(SINGLE_STAR_DIRECT_GRAVITY))
+#define SINK_NODE_MOTION_TRACKED
 #endif
 
 
@@ -644,19 +753,12 @@
 #if defined(EOS_SUBSTELLAR_ISM) || defined(COOL_MOLECFRAC_NONEQM)
 #define EOS_GAMMA_VARIABLE
 #endif
-#ifdef EOS_PRECOMPUTE  // cache EOS quantities - default to storing temperature and adiabatic index
-#define EOS_CARRIES_TEMPERATURE
-#define EOS_CARRIES_GAMMA
-#endif
 
 
 #if defined(EOS_GAMMA_VARIABLE)
-#define GAMMA(i) (gamma_eos(i)) /*! use an actual function! */
 #ifndef EOS_GENERAL
 #define EOS_GENERAL /*! needs to be on for this to work */
 #endif
-#else
-#define GAMMA(i) (EOS_GAMMA) /*! default to this being a universal constant */
 #endif
 #define GAMMA_DEFAULT (EOS_GAMMA)
 
@@ -687,11 +789,6 @@
 
 
 #define CRFLUID_REDUCED_C_CODE(k) (return_CRbin_M1speed(k)) // allow for bin-to-bin variations in RSOL
-#if defined(CRFLUID_ALT_RSOL_FORM)
-#define CosmicRayFluid_RSOL_Corrfac(k) (((CRFLUID_REDUCED_C_CODE(k))/(C_LIGHT_CODE))) // this needs to be defined after the code SOL for obvious reasons
-#else
-#define CosmicRayFluid_RSOL_Corrfac(k) (1.0) // this is always unity, macro is trivial
-#endif
 
 
 #ifndef FOF_PRIMARY_LINK_TYPES
@@ -1100,6 +1197,9 @@
 
 
 #if defined(GALSF_ISMDUSTCHEM_MODEL) /* define some global and other useful variables for dust chemistry modules which also utilize the metals info above */
+#ifndef GALSF_ISMDUSTCHEM_SILICATE_COMPOSITION
+#define GALSF_ISMDUSTCHEM_SILICATE_COMPOSITION (1) /* default: olivine-pyroxene mix; the module reads this as a plain integer, so it must always be defined when GALSF_ISMDUSTCHEM_MODEL is active */
+#endif
 #if defined(COOLING)
 #define GALSF_ISMDUSTCHEM_HIGHTEMPDUSTCOOLING // optional, can turn off
 #endif
@@ -1109,41 +1209,28 @@
 
 #define NUM_ISMDUSTCHEM_ELEMENTS (1+NUM_LIVE_SPECIES_FOR_COOLTABLES) // number of metal species evolved for dust
 #define NUM_ISMDUSTCHEM_SOURCES (4) // Sources of dust creation/growth 0=gas-dust accretion, 1=SNe Ia, 2=SNe II, 3=AGB outflows
-#if (GALSF_ISMDUSTCHEM_MODEL & 2)
-#if (GALSF_ISMDUSTCHEM_MODEL & 4) && (GALSF_ISMDUSTCHEM_MODEL & 8)
-#define NUM_ISMDUSTCHEM_SPECIES 6 /* 0=silicates, 1=carbonaceous, 2=SiC, 3=free-flying iron, 4=O reservoir, 5=iron inclusions in silicates */
-#elif (GALSF_ISMDUSTCHEM_MODEL & 4) || (GALSF_ISMDUSTCHEM_MODEL & 8)
-#define NUM_ISMDUSTCHEM_SPECIES 5 /* 0=silicates, 1=carbonaceous, 2=SiC, 3=free-flying iron, 4=O reservoir or iron inclusions in silicates */
-#elif ((GALSF_ISMDUSTCHEM_MODEL & 16) || (GALSF_ISMDUSTCHEM_MODEL & 32)) && defined(GALSF_ISMDUSTCHEM_GRAINSIZEEVO)
-#ifndef OUTPUT_MACH_NUMBER
-#define OUTPUT_MACH_NUMBER
+#define NUM_ISMDUSTCHEM_SPECIES (2*(GALSF_ISMDUSTCHEM_MODEL & 1) + (GALSF_ISMDUSTCHEM_MODEL & 2)/2 + (GALSF_ISMDUSTCHEM_MODEL & 4)/4 + (GALSF_ISMDUSTCHEM_MODEL & 8)/8) /* number of dust species tracked, depends on the model */
+#define NUM_ISMDUSTCHEM_SPECIES_IDS (5) /* number of possible species IDs (0=silicate,1=carbon,2=free iron,3=O reservoir,4=iron inclusions); the sparse SpeciesFieldIndexTable is indexed by these fixed IDs, not the packed tracked-species count */
+#if !(GALSF_ISMDUSTCHEM_MODEL & 1)
+#error "GALSF_ISMDUSTCHEM_MODEL requires bit 1 (silicates+carbon are the base species always tracked); e.g. use (1), (1+2), ..."
 #endif
-#if (GALSF_ISMDUSTCHEM_MODEL & 16)
-#define NUM_ISMDUSTCHEM_SPECIES 3 /* 0=silicates, 1=carbonaceous, 3=metallic iron */
-#elif (GALSF_ISMDUSTCHEM_MODEL & 32)
-#define NUM_ISMDUSTCHEM_SPECIES 2 /* 0=silicates, 1=carbonaceous */
+#if (GALSF_ISMDUSTCHEM_MODEL & 8) && !(GALSF_ISMDUSTCHEM_MODEL & 2)
+#error "GALSF_ISMDUSTCHEM_MODEL bit 8 (iron inclusions in silicates) requires bit 2 (metallic iron)"
+#endif
+#define GALSF_ISMDUSTCHEM_VAR_ELEM_IN_SILICATES 4 /* O, Mg, Si, and Fe needed to make silicates */
+#undef NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION
+#ifdef GALSF_ISMDUSTCHEM_GRAINSIZEEVO
+#ifndef OUTPUT_MACH_NUMBER // mach number is used for subresolved clumping in grain size evo model
+#define OUTPUT_MACH_NUMBER
 #endif
 #define NUM_ISMDUSTCHEM_SIZE_BINS (GALSF_ISMDUSTCHEM_GRAINSIZEEVO)
 #define UNIT_GRAIN_NUMBER      (All.UnitGrainNumber)
 #define UNIT_GRAIN_LENGTH      (All.UnitGrainLength_in_cm)
-#else 
-#define NUM_ISMDUSTCHEM_SPECIES 4 /* 0=silicates, 1=carbonaceous, 2=SiC, 3=free-flying iron */
-#endif
-#else
-#define NUM_ISMDUSTCHEM_SPECIES 0 /* no explicit dust species evolved */
-#endif
-#if (GALSF_ISMDUSTCHEM_MODEL & 4) || (GALSF_ISMDUSTCHEM_MODEL & 16) // explicit iron nanoparticle model active
-#define GALSF_ISMDUSTCHEM_VAR_ELEM_IN_SILICATES 3 /* Assume only O, Mg, and Si in silicate structure while Fe is already present via iron inclusions */
-#else
-#define GALSF_ISMDUSTCHEM_VAR_ELEM_IN_SILICATES 4 /* O, Mg, Si, and Fe needed to make silicates */
-#endif
-#undef NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION
-#if ((GALSF_ISMDUSTCHEM_MODEL & 16) || (GALSF_ISMDUSTCHEM_MODEL & 32)) && defined(GALSF_ISMDUSTCHEM_GRAINSIZEEVO)
 #define NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION (NUM_ISMDUSTCHEM_ELEMENTS+NUM_ISMDUSTCHEM_SOURCES+NUM_ISMDUSTCHEM_SPECIES+(2*NUM_ISMDUSTCHEM_SPECIES*NUM_ISMDUSTCHEM_SIZE_BINS))
 #else
 #define NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION (NUM_ISMDUSTCHEM_ELEMENTS+NUM_ISMDUSTCHEM_SOURCES+NUM_ISMDUSTCHEM_SPECIES)
 #endif
-#endif
+#endif // end of GALSF_ISMDUSTCHEM_MODEL block
 
 /* end of metals block */
 
@@ -1534,3 +1621,27 @@
 #if defined(TREE_RAY_IR) && !defined(TREE_RAY)
 #error "TREE_RAY_IR requires TREE_RAY"
 #endif
+#if defined(SINK_WIND_SPAWN) && !defined(WAKEUP_REVERSE_KICK_ON_DEMOTION) && !defined(WAKEUP_TRUNCATE_STEP_ON_DEMOTION)
+#define WAKEUP_TRUNCATE_STEP_ON_DEMOTION // the WAKEUP kick reversal injects energy and only fires with spawned cells present, so truncate the step instead whenever we are spawning. must come after every SINK_WIND_SPAWN derivation above. WAKEUP_REVERSE_KICK_ON_DEMOTION opts back out
+#endif
+
+#if defined(SINK_WIND_SPAWN) && !defined(MERGE_SPLIT_DISCARD_ENERGY) && !defined(MERGE_SPLIT_CONSERVE_ENERGY)
+#define MERGE_SPLIT_CONSERVE_ENERGY // merging sets the velocity momentum-conservingly, so the pair's COM-frame kinetic energy leaves the budget; discarding it costs ~23% of the injected wind energy in the adiabatic wind_singlestar test, so return it as heat whenever we are spawning. pairs with the truncation above: the two errors have opposite sign and were cancelling, which is why the discard went unnoticed. MERGE_SPLIT_DISCARD_ENERGY opts back out
+#endif
+
+/* The two above fix the ENERGY BOOKKEEPING of a merge; the two below govern WHICH pairs may merge at
+   all, which is what preserves the structure a sustained outflow builds. Keyed on the jet/wind modules
+   rather than on SINK_WIND_SPAWN, because the concern is a long-lived contact discontinuity between
+   outflow and ambient gas: SINGLE_STAR_FB_SNE also spawns cells but is a single impulsive event with
+   no such interface to maintain. With the bookkeeping fixed but these off, the adiabatic
+   wind_singlestar bubble still misses Weaver's coefficient by 2.4% and the radiative one by 5.7%,
+   losing ~11 points of retained energy and expanding closer to momentum- than energy-driven. */
+#if (defined(SINGLE_STAR_FB_JETS) || defined(SINGLE_STAR_FB_WINDS)) && !defined(SINK_SPAWN_MERGE_ANY_NEIGHBOR) && !defined(SINK_SPAWN_NO_MERGE) && !defined(SINK_SPAWN_MERGE_WHEN_AMBIENT)
+#define SINK_SPAWN_MERGE_WHEN_AMBIENT // retire a spawned cell only once its own state has equilibrated with its kernel, kinematically and thermally, rather than as soon as it is subsonic wrt whichever neighbour is picked as target. A contact discontinuity is in pressure equilibrium with no velocity jump, so outflow material sitting at the contact passes every kinematic test while remaining a distinct phase. SINK_SPAWN_MERGE_ANY_NEIGHBOR opts back out; SINK_SPAWN_NO_MERGE supersedes it
+#endif
+
+#if (defined(SINGLE_STAR_FB_JETS) || defined(SINGLE_STAR_FB_WINDS)) && !defined(MERGE_SPLIT_ALLOW_KINETIC_DISSIPATION) && !defined(MERGE_SPLIT_LIMIT_KINETIC_DISSIPATION)
+#define MERGE_SPLIT_LIMIT_KINETIC_DISSIPATION // the shock-side counterpart: never merge a pair whose merge would thermalize the majority of the energy involved, which cooling then radiates away, making the merge an artificial unresolved shock. MERGE_SPLIT_ALLOW_KINETIC_DISSIPATION opts back out
+#endif
+
+

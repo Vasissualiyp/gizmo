@@ -101,7 +101,7 @@ void resolvedism_determine_SNe(void)
     int n_wind_local = 0, n_wind_total = 0;
 
     /* Reset SNe flags for active particles (allows re-entry after wind dump or previous -1 marking) */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+    for(int i : ActiveParticleList) {
         if(P[i].Type == 4) P[i].SNe_ThisTimeStep = 0;
     }
 
@@ -113,7 +113,7 @@ void resolvedism_determine_SNe(void)
      * P[i].WindMassAccum is overwritten to dM_pending each step (no longer a step-by-step accumulator).
      * P[i].WindMomentumAccum is set to dM_pending * v_wind at the current age. */
 #ifdef GALSF_RESOLVEDISM_WINDS
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for(int i : ActiveParticleList)
     {
         if(P[i].Type != 4 || P[i].Mass <= 0 || P[i].SNe_ThisTimeStep != 0) continue;
         double Mstar, logM, logZ;
@@ -184,7 +184,7 @@ void resolvedism_determine_SNe(void)
 
     /* first pass: count local death events so we can allocate buffers */
     int n_death_count = 0;
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for(int i : ActiveParticleList)
     {
         if(P[i].Type != 4 || P[i].Mass <= 0 || P[i].SNe_ThisTimeStep != 0) continue;
         double star_age_yr = evaluate_stellar_age_Gyr(i) * 1.0e9;
@@ -226,7 +226,7 @@ void resolvedism_determine_SNe(void)
     int n_logged = 0;
 
     /* second pass: flag death events and handle direct collapses */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for(int i : ActiveParticleList)
     {
         if(P[i].Type != 4 || P[i].Mass <= 0 || P[i].SNe_ThisTimeStep != 0) continue;
         double star_age_yr = evaluate_stellar_age_Gyr(i) * 1.0e9;
@@ -491,7 +491,7 @@ void resolvedism_determine_SNe(void)
 #ifdef GALSF_RESOLVEDISM_TYPE_IA
     {
         int n_ia_local = 0, n_ia_total = 0;
-        for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+        for(int i : ActiveParticleList)
         {
             if(P[i].Type != 4 || P[i].Mass <= 0) continue;
             if(P[i].SNe_ThisTimeStep != 0) continue; /* already flagged for something else */
@@ -545,7 +545,7 @@ void resolvedism_determine_SNe(void)
             ia_id = (long long *)mymalloc("ia_id", n_ia_local * sizeof(long long));
             ia_age = (double *)mymalloc("ia_age", n_ia_local * sizeof(double));
             int n_ia_logged = 0;
-            for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+            for(int i : ActiveParticleList) {
                 if(P[i].Type == 4 && P[i].SNe_ThisTimeStep == 4) {
                     ia_x[n_ia_logged] = P[i].Pos[0];
                     ia_y[n_ia_logged] = P[i].Pos[1];
@@ -636,7 +636,7 @@ int FB_WindBatchOnly = 0;   /* 1 = momentum walk admits ONLY flag-3 (wind) stars
 static void resolvedism_fb_apply_recoil(void)
 {
     int ii, k;
-    for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {
+    for(int ii : ActiveParticleList) {
         if(P[ii].Type != 4) continue;
         if(P[ii].Mass > 0) {for(k = 0; k < 3; k++) {P[ii].Vel[k] -= P[ii].FB_RecoilAccum[k] * All.cf_atime / P[ii].Mass;}}
         for(k = 0; k < 3; k++) {P[ii].FB_RecoilAccum[k] = 0;}
@@ -649,7 +649,7 @@ static void resolvedism_fb_serialized_pass(void (*calc_fn)(int), int flagA, int 
     /* collect local candidates (flagged donors eligible for this pass) */
     int ncand = 0, ccap = 256;
     int *cand = (int *)mymalloc("fbser_cand", ccap * sizeof(int));
-    for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {
+    for(int ii : ActiveParticleList) {
         if(P[ii].Type != 4) continue;
         if(P[ii].SNe_ThisTimeStep != flagA && P[ii].SNe_ThisTimeStep != flagB) continue;
         if(P[ii].KernelRadius <= 0 || P[ii].NumNgb <= 0) continue;
@@ -657,7 +657,7 @@ static void resolvedism_fb_serialized_pass(void (*calc_fn)(int), int flagA, int 
         cand[ncand++] = ii;
     }
 #ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
-    { int nflag=0, ntot=0; for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {
+    { int nflag=0, ntot=0; for(int ii : ActiveParticleList) {
         if(P[ii].Type != 4) continue; ntot++;
         if(P[ii].SNe_ThisTimeStep == flagA || P[ii].SNe_ThisTimeStep == flagB) { nflag++;
             printf("FBSER_CAND task=%d ID=%llu flag=%g KernelR=%g NumNgb=%g -> cand=%d\n", ThisTask,
@@ -686,7 +686,7 @@ static void resolvedism_fb_serialized_pass(void (*calc_fn)(int), int flagA, int 
          * with bubble retry (kernel growth) if no gas weight was found */
         int try_num, ok_local, ok_glob;
         for(try_num = 0; try_num < 4; try_num++) {
-            for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {
+            for(int ii : ActiveParticleList) {
                 if(P[ii].Type == 4) {P[ii].FB_Area_weighted_sum = 0;
 #ifdef GALSF_RESOLVEDISM_SN_SPAWN
                     P[ii].FB_KernelGasMass = 0;
@@ -787,7 +787,7 @@ void resolvedism_inject_fb_energy(void)
     int ii;
 #ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
     { int q; for(q=0;q<NumPart;q++) { if(P[q].Type==4 && P[q].SNe_ThisTimeStep != 0 && P[q].SNe_ThisTimeStep != -1) {
-        int act=0, aa; for(aa=FirstActiveParticle; aa>=0; aa=NextActiveParticle[aa]) {if(aa==q){act=1;break;}}
+        int act=0; for(int aa : ActiveParticleList) {if(aa==q){act=1;break;}}
         printf("FBTL_INJ task=%d ID=%llu flag=%g active=%d t=%g\n", ThisTask,
                (unsigned long long)P[q].ID, (double)P[q].SNe_ThisTimeStep, act, All.Time); fflush(stdout); } } }
 #endif
@@ -801,12 +801,12 @@ void resolvedism_inject_fb_energy(void)
      * events sharing neighbors no longer break Σwk = 1 (see
      * resolvedism_fb_serialized_pass above). */
     #ifdef GALSF_RESOLVEDISM_FB_HEALPIX
-    #define FB_ZERO_AWS() do { for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) { if(P[ii].Type == 4) {P[ii].FB_Area_weighted_sum = 0; int hp_; for(hp_=0;hp_<12;hp_++) {P[ii].FB_HpxCount[hp_] = 0;}} } } while(0)
+    #define FB_ZERO_AWS() do { for(int ii : ActiveParticleList) { if(P[ii].Type == 4) {P[ii].FB_Area_weighted_sum = 0; int hp_; for(hp_=0;hp_<12;hp_++) {P[ii].FB_HpxCount[hp_] = 0;}} } } while(0)
 #else
-    #define FB_ZERO_AWS() do { for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) { if(P[ii].Type == 4) P[ii].FB_Area_weighted_sum = 0; } } while(0)
+    #define FB_ZERO_AWS() do { for(int ii : ActiveParticleList) { if(P[ii].Type == 4) P[ii].FB_Area_weighted_sum = 0; } } while(0)
 #endif
 
-    for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {if(P[ii].Type == 4) {P[ii].FB_Deposited = 0;}}
+    for(int ii : ActiveParticleList) {if(P[ii].Type == 4) {P[ii].FB_Deposited = 0;}}
 
     /* ---- Pass 0: wind + AGB (momentum + mass + metals).  Fires first so final
      *      winds happen before the star explodes as SN. Serialized per event. ---- */
@@ -819,7 +819,7 @@ void resolvedism_inject_fb_energy(void)
     FB_WindBatchOnly = 1;
     FB_ZERO_AWS();
     resolvedism_fb_momentum_calc(-1);
-    for(ii = FirstActiveParticle; ii >= 0; ii = NextActiveParticle[ii]) {
+    for(int ii : ActiveParticleList) {
 #ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
         if(P[ii].Type == 4 && P[ii].SNe_ThisTimeStep == 3 && All.Time < All.TestFBNoGasUntilTime) {P[ii].FB_Area_weighted_sum = 0;} /* test: no gas in reach */
 #endif
@@ -848,7 +848,7 @@ void resolvedism_inject_fb_energy(void)
 
     /* Wind event logging buffers */
     int n_wind_logged = 0, n_wind_alloc = 1; /* sized to this step's wind events (was a fixed 64 that dropped rows) */
-    for(int iw = FirstActiveParticle; iw >= 0; iw = NextActiveParticle[iw]) {if(P[iw].Type == 4 && P[iw].SNe_ThisTimeStep == 3) n_wind_alloc++;}
+    for(int iw : ActiveParticleList) {if(P[iw].Type == 4 && P[iw].SNe_ThisTimeStep == 3) n_wind_alloc++;}
     double *wind_log_x = (double *)mymalloc("wind_log_x", n_wind_alloc * sizeof(double));
     double *wind_log_y = (double *)mymalloc("wind_log_y", n_wind_alloc * sizeof(double));
     double *wind_log_z = (double *)mymalloc("wind_log_z", n_wind_alloc * sizeof(double));
@@ -864,7 +864,7 @@ void resolvedism_inject_fb_energy(void)
 #ifdef STELLA_SELFCHECK
     int n_selfcheck_book = 0;
 #endif
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for(int i : ActiveParticleList)
     {
         if(P[i].Type == 4 && P[i].SNe_ThisTimeStep >= 1 && P[i].SNe_ThisTimeStep <= 4) {
             int has_payload = 1; /* silent collapse with no ejecta has nothing to deposit */
@@ -1182,8 +1182,14 @@ void resolvedism_inject_fb_energy(void)
         P[i].M_at_SN_trigger = -1; /* reset bookkeeping snapshot */
         P[i].SNe_ThisTimeStep = -1;
     }
+    if(n_events[0]+n_events[1]+n_events[2]+n_events[3]+n_events[4]+n_events[5] > 0) {TreeMomentsStaleFlag = 1;} /* star/gas masses changed */
 #ifdef STELLA_SELFCHECK
     STELLA_CHECK_RAN("fb_booked_deposited", n_selfcheck_book);
+    { int n_ms = 0, n_bad = 0; /* CellP.Mass authoritative for gas: every Stella gas-mass write must mirror it */
+      for(int ig = 0; ig < N_gas; ig++) { if(P[ig].Type != 0) continue; n_ms++;
+          int ok_ = fabs((double)P[ig].Mass - (double)CellP[ig].Mass) <= 1.0e-10 * fabs((double)P[ig].Mass);
+          if(!ok_ && ++n_bad <= 20) STELLA_CHECK("mass_sync", 0, "ID=%llu P.Mass=%.10e CellP.Mass=%.10e", (unsigned long long)P[ig].ID, (double)P[ig].Mass, (double)CellP[ig].Mass); }
+      STELLA_CHECK_RAN("mass_sync", n_ms); }
 #endif
 
     /* ---- Write wind events to WINDinfo.txt ---- */
@@ -1250,7 +1256,7 @@ void resolvedism_inject_fb_energy(void)
     resolvedism_fb_apply_recoil();
     /* channel-3 ledger, ONCE per local star (LEDGER FIX 2026-07-28: the old
      * accumulation inside particle2in counted once per export entry too). */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+    for(int i : ActiveParticleList) {
         if(P[i].Type != 4 || P[i].Mass <= 0) continue;
         double dp_code_led = resolvedism_radp_starside_dp_code(i);
         if(dp_code_led > 0) {RadPressure_dp_thisStep += dp_code_led * (UNIT_MASS_IN_CGS * All.UnitVelocity_in_cm_per_s);}
@@ -1264,7 +1270,7 @@ void resolvedism_inject_fb_energy(void)
 #endif
 
     /* Count radiation pressure events */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+    for(int i : ActiveParticleList) {
         if(P[i].Type != 4 || P[i].Mass <= 0) continue;
         double Mstar_rp = 0;
 #ifdef GALSF_RESOLVEDISM_SAMPLE_IMF
@@ -1329,7 +1335,7 @@ void resolvedism_inject_fb_energy(void)
     if(All.HighestActiveTimeBin == All.HighestOccupiedTimeBin)
     {
         int local_census[5] = {0,0,0,0,0}; /* bins: M<1, 1-8, 8-20, 20-40, >40 */
-        for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+        for(int i : ActiveParticleList) {
             if(P[i].Type != 4 || P[i].Mass <= 0) continue;
             double ms = 0;
 #ifdef GALSF_RESOLVEDISM_SAMPLE_IMF

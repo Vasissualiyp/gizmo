@@ -27,13 +27,16 @@ void compute_potential(void)
     int i;
 #ifndef SELFGRAVITY_OFF
     int j, k, ret, recvTask, ndone, ndone_flag, dummy, ngrp, place, nexport, nimport;
-    double fac, r2; MPI_Status status;
+    double fac; MPI_Status status;
     if(All.ComovingIntegrationOn) {set_softenings();}
     
     PRINT_STATUS("Start computation of potential for all particles...");
     CPU_Step[CPU_MISC] += measure_time();
     
-    if(TreeReconstructFlag)
+    int TreeReconstructFlag_global; /* reduced read: rank-uniform by convention today, but the build
+        below is collective, so a future rank-local raiser must not be able to desynchronize it */
+    MPI_Allreduce(&TreeReconstructFlag, &TreeReconstructFlag_global, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if(TreeReconstructFlag_global)
     {
         PRINT_STATUS("Tree construction");
         CPU_Step[CPU_MISC] += measure_time();
@@ -41,8 +44,23 @@ void compute_potential(void)
         MPI_Barrier(MPI_COMM_WORLD); CPU_Step[CPU_DRIFT] += measure_time();
         force_treebuild(NumPart, NULL);
         MPI_Barrier(MPI_COMM_WORLD); CPU_Step[CPU_TREEBUILD] += measure_time();
-        TreeReconstructFlag = 0;
+        TreeReconstructFlag = 0; /* satisfied: this build replaced the condemned tree. Safe to clear
+           since the split -- a pending domain decomposition lives in DomainReconstructFlag, which
+           only the step-start ladder consumes. (Pre-split, clearing here cancelled that intent.) */
+        TreeMomentsStaleFlag = 0;
         PRINT_STATUS(" ..Tree construction done");
+    }
+    else
+    {
+        int TreeMomentsStaleFlag_global;
+        MPI_Allreduce(&TreeMomentsStaleFlag, &TreeMomentsStaleFlag_global, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+        if(TreeMomentsStaleFlag_global)
+        {
+            CPU_Step[CPU_MISC] += measure_time();
+            force_refresh_node_moments();
+            CPU_Step[CPU_TREEBUILD] += measure_time();
+            TreeMomentsStaleFlag = 0;
+        }
     }
 
     /* allocate buffers to arrange communication */
@@ -78,7 +96,7 @@ void compute_potential(void)
         {
             place = DataIndexTable[j].Index;
             
-            for(k = 0; k < 3; k++) {GravDataIn[j].Pos[k] = P[place].Pos[k];}
+            GravDataIn[j].Pos = P[place].Pos;
             GravDataIn[j].Type = P[place].Type;
             GravDataIn[j].Soft = ForceSoftening_KernelRadius(place);
             GravDataIn[j].OldAcc = P[place].OldAcc;
@@ -190,7 +208,7 @@ void compute_potential(void)
 #ifndef BOX_PERIODIC
         fac = -0.5 * All.OmegaMatter * All.Hubble_H0_CodeUnits * All.Hubble_H0_CodeUnits; /* special factor needed if running cosmological simulation in non-periodic box [special use cases] */
         for(i = 0; i < NumPart; i++) {
-            for(k = 0, r2 = 0; k < 3; k++) {r2 += P[i].Pos[k] * P[i].Pos[k];}
+            double r2 = P[i].Pos.norm_sq();
             P[i].Potential += fac * r2;
         }
 #endif
@@ -201,7 +219,7 @@ void compute_potential(void)
         if(fac != 0)
         {
             for(i = 0; i < NumPart; i++) {
-                for(k = 0, r2 = 0; k < 3; k++) {r2 += P[i].Pos[k] * P[i].Pos[k];}
+                double r2 = P[i].Pos.norm_sq();
                 P[i].Potential += fac * r2;
             }
         }

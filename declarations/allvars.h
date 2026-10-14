@@ -58,10 +58,16 @@
 #include "../system/tags.h"
 
 #include <assert.h>
+#include <algorithm>
+#include <type_traits>
+#include <vector>
 
 #include "macros.h"
 
 #include "typedefs.h"
+#include "../math_types/vec3.h"
+#include "../math_types/mat3.h"
+#include "../math_types/symmetric_tensor2.h"
 
 #ifdef CHIMES
 #include "../cooling/chimes/chimes_proto.h"
@@ -105,18 +111,41 @@ extern MyDouble Shearing_Box_Vel_Offset;
 extern MyDouble Shearing_Box_Pos_Offset;
 #endif
 
+#ifdef RANDOMIZE_GRAVTREE
+/* the periodic path shifts all coordinates by a random vector mod box, which is only valid
+ * where every periodic dimension is a pure translation symmetry */
+#if defined(BOX_SHEARING)
+#error "RANDOMIZE_GRAVTREE is incompatible with BOX_SHEARING: an x-translation couples into the shear velocity offset (see do_box_wrapping) and corrupts velocities."
+#endif
+#if defined(BOX_PERIODIC) && (defined(BOX_REFLECT_X) || defined(BOX_REFLECT_Y) || defined(BOX_REFLECT_Z) || defined(BOX_OUTFLOW_X) || defined(BOX_OUTFLOW_Y) || defined(BOX_OUTFLOW_Z))
+#error "RANDOMIZE_GRAVTREE + BOX_PERIODIC is incompatible with reflecting/outflow boundaries: those dimensions are not translation-invariant."
+#endif
+/* Which randomization method applies is decided by whether GRAVITY is periodic, NOT by whether
+ * the box is. Under GRAVITY_NOT_PERIODIC the tree uses bare |dx| (see the GRAVITY_NGB_* macros
+ * in forcetree.cc), so translating coordinates mod box is NOT a symmetry: wrapping a particle
+ * across the boundary moves it a full box away gravitationally, which would corrupt the forces.
+ * Those runs (STARFORGE-style setups, and anything BOX_SHEARING implies) must therefore use the
+ * non-periodic method -- moving and enlarging the root node -- even though the box is periodic.
+ * The cost is the root-node doubling and the bit of Peano resolution it spends. */
+#if defined(BOX_PERIODIC) && !defined(GRAVITY_NOT_PERIODIC)
+#define RANDOMIZE_GRAVTREE_PERIODIC /* use the coordinate-translation method */
+#endif
+#endif
+
 #if defined(BOX_REFLECT_X) || defined(BOX_REFLECT_Y) || defined(BOX_REFLECT_Z) || defined(BOX_OUTFLOW_X) || defined(BOX_OUTFLOW_Y) || defined(BOX_OUTFLOW_Z)
 extern short int special_boundary_condition_xyz_def_reflect[3];
 extern short int special_boundary_condition_xyz_def_outflow[3];
 #endif
 
+template<typename T> inline void nearest_xyz(Vec3<T>& v, int sign=1) { NEAREST_XYZ(v[0], v[1], v[2], sign); }
+
 
 #ifdef CHIMES
 extern struct gasVariables *ChimesGasVars;
 extern struct globalVariables ChimesGlobalVars;
-extern char ChimesDataPath[256];
-extern char ChimesEqAbundanceTable[196];
-extern char ChimesPhotoIonTable[196];
+extern char ChimesDataPath[DEFAULT_PATH_BUFFERSIZE_TOUSE];
+extern char ChimesEqAbundanceTable[DEFAULT_PATH_BUFFERSIZE_TOUSE];
+extern char ChimesPhotoIonTable[DEFAULT_PATH_BUFFERSIZE_TOUSE];
 extern double chimes_rad_field_norm_factor;
 extern double shielding_length_factor;
 extern double cr_rate;
@@ -150,18 +179,15 @@ extern struct Chimes_depletion_data_structure *ChimesDepletionData;
 #endif // CHIMES_METAL_DEPLETION
 
 
-extern int FirstActiveParticle;
-extern int *NextActiveParticle;
-extern int *ActiveParticleList;
-extern int ActiveParticleNumber;
+extern std::vector<int> ActiveParticleList;
 extern unsigned char *ProcessedFlag;
 extern int TimeBinCount[TIMEBINS];
 extern int TimeBinCountGas[TIMEBINS];
 extern int TimeBinActive[TIMEBINS];
 extern int FirstInTimeBin[TIMEBINS];
 extern int LastInTimeBin[TIMEBINS];
-extern int *NextInTimeBin;
-extern int *PrevInTimeBin;
+extern std::vector<int> NextInTimeBin;
+extern std::vector<int> PrevInTimeBin;
 #ifdef GALSF
 extern double TimeBinSfr[TIMEBINS];
 #endif
@@ -205,7 +231,29 @@ extern size_t HighMark_run,  HighMark_domain, HighMark_gravtree, HighMark_pmperi
 #ifdef TURB_DRIVING
 extern size_t HighMark_turbpower;
 #endif
-extern int TreeReconstructFlag;
+extern int TreeReconstructFlag; /*!< the standing tree is CONDEMNED: its storage/topology must be
+    replaced by a rearrange+treebuild before the next walk. Consumed at the step-start ladder
+    (core/run.cc) or mid-step by gravity_tree()/compute_potential(); both decomposition paths
+    self-raise it to defer the actual build to the next tree consumer. Distinct from
+    DomainReconstructFlag (ownership/balance decomposition owed -- strictly more expensive) and from
+    TreeMomentsStaleFlag below (moments re-derivation on intact topology -- strictly cheaper).
+    Serialized in restartfiles. */
+extern int TreeMomentsStaleFlag; /*!< flag to refresh tree node moments without a full tree rebuild, e.g. after star formation or sink mass changes */
+extern int DomainReconstructFlag; /*!< a full domain decomposition (particle ownership/balance) is owed.
+    Consumed ONLY by the step-start ladder in run.cc; cleared by the decomposition itself, which
+    self-raises TreeReconstructFlag for the tree half. Physics events that merely condemn the tree
+    raise TreeReconstructFlag instead and cost a rebuild, not a decomposition. Serialized in
+    restartfiles. */
+extern int NtotSwallowedThisStep; /*!< global (Allreduce'd) count of particles swallowed in this step's sink pass; gates the cleanup rearrange in run.cc. Rank-uniform by construction. */
+extern int TreeWalkValidatePending; /*!< set (rank-local) when a maintained rearrange changed the walk threading; the next tree consumer runs force_validate_tree_links() and clears it. Cleared by force_treebuild (fresh tree). */
+enum TreeOpsIndex {TREEOPS_BUILD=0, TREEOPS_REFRESH, TREEOPS_DECOMP, TREEOPS_DECOMP_LIGHT, TREEOPS_DEFER, TREEOPS_ESCALATE, TREEOPS_REARRANGE, TREEOPS_CONDEMNED_WALK, TREEOPS_N};
+extern long long ForceAddElementToTree_CallsSinceBuild; /*!< rank-local insertions accepted by the standing tree since its build; the ladder SUM-reduces this and condemns the tree past a fixed fraction of TotNumPart (insertions attach at existing nodes, so tree quality degrades with their count) */
+extern long long TreeOpsCount[TREEOPS_N]; /*!< running counts of whole-tree builds, moment refreshes, full/light decompositions, deferred-rebuild ladder steps, rearranges, and walks started on a condemned tree (a protocol violation: should stay 0). All are collective events, so every rank agrees; reported in cpu.txt. Diagnostic only: not serialized, resets on resume. */
+extern double TreeMaintTime_SwapPointers; /*!< rank-local cumulative seconds in swap_treewalk_pointers (the per-swap O(tree) pointer surgery MAINTAIN_TREE_IN_REARRANGE pays); MAX across ranks in cpu.txt */
+extern double TreeMaintTime_Rearrange; /*!< rank-local cumulative seconds in rearrange_particle_sequence; MAX across ranks in cpu.txt */
+extern long long TreeMaintCount_SwapPointers; /*!< rank-local count of swap_treewalk_pointers calls */
+extern int TreeAuditMomentsPending; /*!< set when a rearrange edited the list; the next moments refresh gets a FULL audit regardless of the sampling stride (TREE_INTEGRITY_AUDITS builds) */
+extern int TreeDiscardImminent; /*!< held by the decomposition paths across their merge/split+rearrange prelude: the standing tree dies before the next walk, so split daughters are deliberately not inserted and the rearrange-time audit must not treat them as orphans */
 extern int GlobFlag;
 extern char DumpFlag;
 #ifdef WAKEUP
@@ -228,7 +276,7 @@ extern int Stars_converted;	/*!< current number of star particles in gas particl
 #endif
 
 extern double TimeOfLastTreeConstruction;	/*!< holds what it says */
-extern int *Ngblist;		/*!< Buffer to hold indices of neighbours retrieved by the neighbour search routines */
+extern std::vector<int> Ngblist;		/*!< Buffer to hold indices of neighbours retrieved by the neighbour search routines */
 extern double *R2ngblist;
 extern double DomainCorner[3], DomainCenter[3], DomainLen, DomainFac;
 extern int *DomainStartList, *DomainEndList;
@@ -560,7 +608,7 @@ extern struct global_data_all_processes
 
   /* some force counters  */
   long long TotNumOfForces;	/*!< counts total number of force computations  */
-  long long NumForcesSinceLastDomainDecomp;	/*!< count particle updates since last domain decomposition */
+  long long NumForcesSinceLastDomainDecomp;	/*!< force updates since the last whole-tree BUILD (reset there -- historically at the decomposition, but the cadence it drives now requests a rebuild, so age-since-build is the meaningful quantity; name kept for restartfile layout). Past TreeDomainUpdateFrequency*TotNumPart the ladder condemns the tree. */
 
   /* various cosmological factors that are only a function of the current scale factor, and in Newtonian runs are set to 1 */
   double cf_atime, cf_a2inv, cf_a3inv, cf_hubble_a, cf_hubble_a2;
@@ -607,6 +655,9 @@ extern struct global_data_all_processes
     TimeBetStatistics,		/*!< simulation time interval between computations of energy statistics */
     TimeLastStatistics;		/*!< simulation time when the energy statistics was computed the last time */
   integertime NumCurrentTiStep;		/*!< counts the number of system steps taken up to this point */
+#ifdef RANDOMIZE_GRAVTREE_PERIODIC
+  double RandomShift[3];		/*!< current random frame translation: coordinates are stored shifted by this (mod box) and un-shifted on output */
+#endif
 
   /* Current time of the simulation, global step, and end of simulation */
   double Time,			/*!< current time of the simulation */
@@ -656,6 +707,13 @@ extern struct global_data_all_processes
 
   /* frequency of tree reconstruction/domain decomposition */
   double TreeDomainUpdateFrequency;	/*!< controls frequency of domain decompositions  */
+  double DomainFacWork;     /*!< adaptive load-balance weights: moving averages over the decomposition */
+  double DomainFacWorkGas;  /*!<   history, kept in All so they survive a restart (resetting them shifts */
+  double DomainFacLoad;     /*!<   the next domain split) */
+#ifdef MHD_MODIFIED_GRADIENT
+  double ActiveFractionForMGSweep;  /*!< minimum active gas fraction to trigger the global MG div(B) solve; on smaller timesteps the local CG correction is used instead */
+  int Flag_SkipMGSolve;             /*!< per-timestep flag: 1 = skip MG global solve this step (use CG fallback), 0 = run MG */
+#endif
 
   /* gravitational and hydrodynamical softening lengths (given in terms of an `equivalent' Plummer softening length) five groups of particles are supported 0=gas,1=halo,2=disk,3=bulge,4=stars */
     double MinGasKernelRadiusFractional; /*!< minimim allowed gas kernel length relative to force softening (what you actually set) */
@@ -703,11 +761,19 @@ extern struct global_data_all_processes
     double TimeNextTurbSpectrum;
     int FileNumberTurbSpectrum;
 #endif
+#ifdef TURB_DRIVING_TARGET_SIGMA
+    double TurbDriving_SmoothedVRMS;     /* exponentially smoothed measured RMS velocity, time constant = 2*t_corr */
+    double TurbDriving_DrivingNormFactor; /* multiplicative factor on driving amplitude from proportional control loop */
+#endif
 #endif
     
 #ifdef RADTRANSFER
     integertime Radiation_Ti_begstep;
     integertime Radiation_Ti_endstep;
+#endif
+#ifdef TRANSPORT_SUBCYCLE
+    int Transport_Subcycle_N;               /*!< number of transport subcycles this step */
+    double Transport_Subcycle_dt_fraction;   /*!< = 1.0/Transport_Subcycle_N, fraction of full dt per sub-step */
 #endif
 #ifdef RT_EVOLVE_INTENSITIES
     double Rad_Intensity_Direction[N_RT_INTENSITY_BINS][3];
@@ -902,7 +968,7 @@ extern struct global_data_all_processes
 #if (GALSF_ISMDUSTCHEM_MODEL & 2)
     double ISMDustChem_SpeciesBulkDens[4]; /* condensed bulk density for silicates, carbonaceous, SiC, and metallic iron */
     int ISMDustChem_TrackedSpeciesIDTable[NUM_ISMDUSTCHEM_SPECIES]; /* contains unique ID numbers for each tracked dust species which correspond to their location in ISMDustChem_SpeciesFieldIndexTable. Returns -1 for untracked species  */
-    int ISMDustChem_SpeciesFieldIndexTable[6]; /* index in dust species field for given dust species. Length should be equal to the number of unique indices listed below. */
+    int ISMDustChem_SpeciesFieldIndexTable[NUM_ISMDUSTCHEM_SPECIES_IDS]; /* index in dust species field for given dust species. Sparse table indexed by fixed species ID (0..NUM_ISMDUSTCHEM_SPECIES_IDS-1), returns the packed field slot or -1 if untracked. */
     int ISMDustChem_Sil_Index;
     int ISMDustChem_Carb_Index;
     int ISMDustChem_SiC_Index;
@@ -926,6 +992,10 @@ extern struct global_data_all_processes
     double ISMDustChem_GrainBinSize; /* bin width of logarithmically spaced grain sizes */
     double ISMDustChem_GrainBinEdges[NUM_ISMDUSTCHEM_SIZE_BINS+1]; /* edges of each grain size bin */
     double ISMDustChem_GrainBinCenters[NUM_ISMDUSTCHEM_SIZE_BINS]; /* centers of each grain size bin in log space */
+    double ISMDustChem_C_NiNj[NUM_ISMDUSTCHEM_SIZE_BINS][NUM_ISMDUSTCHEM_SIZE_BINS]; /* pre-computed coefficients for coagulation/shattering polynomial */
+    double ISMDustChem_C_Njsi[NUM_ISMDUSTCHEM_SIZE_BINS][NUM_ISMDUSTCHEM_SIZE_BINS];
+    double ISMDustChem_C_Nisj[NUM_ISMDUSTCHEM_SIZE_BINS][NUM_ISMDUSTCHEM_SIZE_BINS];
+    double ISMDustChem_C_sisj[NUM_ISMDUSTCHEM_SIZE_BINS][NUM_ISMDUSTCHEM_SIZE_BINS];
 #endif
 #endif
 
@@ -1029,9 +1099,17 @@ extern struct global_data_all_processes
 #ifdef EOS_TABULATED
     char EosTable[100];
 #endif
+
+#ifdef EOS_ANEOS
+#ifndef ANEOS_MAX_MATERIALS
+#define ANEOS_MAX_MATERIALS 7
+#endif
+    int  AneosNumMaterials;                       /* number of ANEOS material tables to load */
+    char AneosTableFiles[ANEOS_MAX_MATERIALS][256]; /* file paths for each material's SESAME table */
+#endif
     
 #ifdef SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM
-    double SpecialParticle_Position_ForRefinement[SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM][3];
+    Vec3<double> SpecialParticle_Position_ForRefinement[SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM];
     double Mass_Accreted_By_SpecialParticle[SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM];
     double Mass_of_SpecialParticle[SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM];
 #endif
@@ -1077,6 +1155,8 @@ All;
 #include "particle_data.h"
 #include "cell_data.h"
 
+static_assert(std::is_trivially_copyable<particle_data>::value, "particle_data must be trivially copyable for MPI");
+static_assert(std::is_trivially_copyable<gas_cell_data>::value, "gas_cell_data must be trivially copyable for MPI");
 
 
 
@@ -1125,11 +1205,11 @@ extern struct data_nodelist
 extern struct gravdata_in
 {
     int Type;
-    MyFloat Pos[3];
+    Vec3<MyFloat> Pos;
     MyFloat Soft;
     MyFloat Mass;
 #if defined(SINGLE_STAR_TIMESTEPPING) || defined(COMPUTE_JERK_IN_GRAVTREE) || defined(SINK_DYNFRICTION_FROMTREE)
-    MyFloat Vel[3];
+    Vec3<MyFloat> Vel;
 #endif
 #if defined(SINK_DYNFRICTION_FROMTREE)
     MyFloat Sink_Mass;
@@ -1139,13 +1219,13 @@ extern struct gravdata_in
 #endif
 #ifdef SINGLE_STAR_FIND_BINARIES
     MyFloat Min_Sink_OrbitalTime;   /*!<orbital time for binary */
-    MyDouble comp_dx[3];        /*!< position of binary companion */
-    MyDouble comp_dv[3];        /*!< velocity of binary companion */
+    Vec3<MyDouble> comp_dx;        /*!< position of binary companion */
+    Vec3<MyDouble> comp_dv;        /*!< velocity of binary companion */
     MyDouble comp_Mass;         /*!< mass of binary companion */
     int is_in_a_binary;
 #endif
 #ifdef ADAPTIVE_GRAVSOFT_FROM_TIDAL_CRITERION
-    MyFloat tidal_tensorps_prevstep[3][3];
+    SymmetricTensor2<MyFloat> tidal_tensorps_prevstep;
 #endif
 #if (SINGLE_STAR_TIMESTEPPING > 0)
     int SuperTimestepFlag;  /*!< 2 if allowed to super-timestep, 1 if a candidate for super-timestepping, 0 otherwise */
@@ -1162,7 +1242,7 @@ extern struct gravdata_in
 
 extern struct gravdata_out
 {
-    MyDouble Acc[3];
+    Vec3<MyDouble> Acc;
 #ifdef RT_USE_TREECOL_FOR_NH
     MyDouble ColumnDensityBins[RT_USE_TREECOL_FOR_NH];
 #endif
@@ -1173,7 +1253,7 @@ extern struct gravdata_out
     MyDouble SubGrid_CosmicRayEnergyDensity;
 #endif
 #ifdef RT_OTVET
-    MyDouble ET[N_RT_FREQ_BINS][6];
+    SymmetricTensor2<MyDouble> ET[N_RT_FREQ_BINS];
 #endif
 #ifdef GALSF_FB_FIRE_RT_LONGRANGE
     MyDouble Rad_Flux_UV;
@@ -1183,7 +1263,7 @@ extern struct gravdata_out
     MyDouble Rad_E_gamma[N_RT_FREQ_BINS];
 #endif
 #if defined(RT_USE_GRAVTREE_SAVE_RAD_FLUX)
-    MyDouble Rad_Flux[N_RT_FREQ_BINS][3];
+    Vec3<MyDouble> Rad_Flux[N_RT_FREQ_BINS];
 #endif
 #ifdef CHIMES_STELLAR_FLUXES
     double Chimes_G0[CHIMES_LOCAL_UV_NBINS];
@@ -1241,28 +1321,28 @@ extern struct gravdata_out
     MyDouble Potential;
 #endif
 #ifdef COMPUTE_TIDAL_TENSOR_IN_GRAVTREE
-    MyDouble tidal_tensorps[3][3];
+    SymmetricTensor2<MyFloat> tidal_tensorps;
 #ifdef ADAPTIVE_GRAVSOFT_FROM_TIDAL_CRITERION
-    MyDouble tidal_zeta;
+    MyFloat tidal_zeta;
 #endif
 #endif
 #ifdef COMPUTE_JERK_IN_GRAVTREE
-    MyDouble GravJerk[3];
+    Vec3<MyDouble> GravJerk;
 #endif
 #ifdef SINK_CALC_DISTANCES
     MyFloat Min_Distance_to_Sink;
-    MyFloat Min_xyz_to_Sink[3];
+    Vec3<MyFloat> Min_xyz_to_Sink;
 #ifdef SPECIAL_POINT_MOTION
-    MyFloat vel_of_nearest_special[3];
-    MyFloat acc_of_nearest_special[3];
+    Vec3<MyFloat> vel_of_nearest_special;
+    Vec3<MyFloat> acc_of_nearest_special;
 #ifdef SPECIAL_POINT_WEIGHTED_MOTION
     MyFloat weight_sum_for_special_point_smoothing;
 #endif
 #endif
 #ifdef SINGLE_STAR_FIND_BINARIES
     MyFloat Min_Sink_OrbitalTime; //orbital time for binary
-    MyDouble comp_dx[3]; //position of binary companion
-    MyDouble comp_dv[3]; //velocity of binary companion
+    Vec3<MyDouble> comp_dx; //position of binary companion
+    Vec3<MyDouble> comp_dv; //velocity of binary companion
     MyDouble comp_Mass; //mass of binary companion
     int is_in_a_binary; // 1 if star is in a binary, 0 otherwise
 #endif
@@ -1270,7 +1350,7 @@ extern struct gravdata_out
     MyFloat Min_Sink_Freefall_time;    // minimum value of sqrt(R^3 / G(M_SINK + M_particle)) as calculated from the tree-walk
     MyFloat Min_Sink_Approach_Time; // smallest approach time t_a = |v_radial|/r
 #if (SINGLE_STAR_TIMESTEPPING > 0)
-    MyDouble COM_tidal_tensorps[3][3]; //tidal tensor evaluated at the center of mass without contribution from the companion
+    SymmetricTensor2<MyFloat> COM_tidal_tensorps; //tidal tensor evaluated at the center of mass without contribution from the companion
     MyDouble COM_GravAccel[3]; //gravitational acceleration evaluated at the center of mass without contribution from the companion
     int COM_calc_flag; //flag that tells whether this was only a rerun to get the acceleration ad the tidal tenor at the center of mass of a binary
     int SuperTimestepFlag; // 2 if allowed to super-timestep, 1 if a candidate for super-timestepping, 0 otherwise
@@ -1307,7 +1387,7 @@ extern struct info_block
 /* this structure needs to be defined here, because routines for feedback event rates, etc, are shared among files */
 extern struct addFB_evaluate_data_in_
 {
-    MyDouble Pos[3], Vel[3], Msne, unit_mom_SNe;
+    Vec3<MyDouble> Pos, Vel; MyDouble Msne, unit_mom_SNe;
     MyFloat KernelRadius, V_i, SNe_v_ejecta;
 #ifdef GALSF_FB_MECHANICAL
     MyFloat Area_weighted_sum[AREA_WEIGHTED_SUM_ELEMENTS];
@@ -1417,10 +1497,13 @@ enum iofields
   IO_POT,
   IO_ACCEL,
   IO_HYDROACCEL,
+  IO_HERMITE_POS,
+  IO_HERMITE_VEL,
   IO_HII,
   IO_HeI,
   IO_HeII,
   IO_UNSPMASS,
+  IO_UNSPJETMASS,
   IO_CRATE,
   IO_HRATE,
   IO_NHRATE,
@@ -1457,6 +1540,7 @@ enum iofields
   IO_EOS_STRESS_TENSOR,
   IO_CBE_MOMENTS,
   IO_EOSCOMP,
+  IO_EOSPHASE,
   IO_PARTVEL,
   IO_RADGAMMA,
   IO_RAD_TEMP,
@@ -1594,7 +1678,7 @@ enum siofields
 /* Tree Node structure (note, the ALIGN(32) directive will effectively pad the structure size to a multiple of 32 bytes) */
 extern ALIGN(32) struct NODE
 {
-  MyFloat center[3];		/*!< geometrical center of node */
+  Vec3<MyFloat> center;		/*!< geometrical center of node */
   MyFloat len;			/*!< sidelength of treenode */
 
   union
@@ -1602,7 +1686,7 @@ extern ALIGN(32) struct NODE
     int suns[8];		/*!< temporary pointers to daughter nodes */
     struct
     {
-      MyFloat s[3];		/*!< center of mass of node */
+      Vec3<MyFloat> s;		/*!< center of mass of node */
       MyFloat mass;		/*!< mass of node */
       unsigned int bitflags;	/*!< flags certain node properties */
       int sibling;		/*!< this gives the next node in the walk in case the current node can be used */
@@ -1656,9 +1740,12 @@ extern ALIGN(32) struct NODE
 #endif
 #endif
 
+#ifdef RT_SEPARATELY_TRACK_LUMPOS
+    Vec3<MyFloat> rt_source_lum_s; /*!< luminosity-weighted position of RT sources in the node */
+#endif
 #ifdef SINK_PHOTONMOMENTUM
     MyFloat sink_lum;		    /*!< luminosity of BHs in the node */
-    MyFloat sink_lum_grad[3];	/*!< gradient vector for gas around sink (for angular dependence) */
+    Vec3<MyFloat> sink_lum_grad;	/*!< gradient vector for gas around sink (for angular dependence) */
 #endif
     
 #ifdef COSMIC_RAY_SUBGRID_LEBRON
@@ -1667,14 +1754,14 @@ extern ALIGN(32) struct NODE
 
 #ifdef SINK_CALC_DISTANCES
   MyFloat sink_mass;      /*!< holds the sink mass in the node.  Used for calculating tree based dist to closest sink */
-  MyFloat sink_pos[3];    /*!< holds the mass-weighted position of the the actual sink particles within the node */
-#if defined(SINGLE_STAR_TIMESTEPPING) || defined(SPECIAL_POINT_MOTION)
-    MyFloat sink_vel[3];    /*!< holds the mass-weighted avg. velocity of sink particles in the node */
+  Vec3<MyFloat> sink_pos;    /*!< holds the mass-weighted position of the the actual sink particles within the node */
+#ifdef SINK_NODE_MOTION_TRACKED
+    Vec3<MyFloat> sink_vel;    /*!< holds the mass-weighted avg. velocity of sink particles in the node */
 #endif
 #if defined(SPECIAL_POINT_MOTION)
-    MyFloat sink_acc[3]; /*!< holds the mass-weighted avg. acceleration of sink particles in the node */
+    Vec3<MyFloat> sink_acc; /*!< holds the mass-weighted avg. acceleration of sink particles in the node */
 #endif
-#if defined(SINGLE_STAR_TIMESTEPPING) || defined(SINGLE_STAR_FIND_BINARIES) || defined(SPECIAL_POINT_MOTION)
+#ifdef SINK_NODE_MOTION_TRACKED
   int N_SINK;             /*!< holds the number of sink particles in the node. Used for refinement/search criteria */
 #endif
 #if defined(SINGLE_STAR_TIMESTEPPING) && defined(SINGLE_STAR_FB_TIMESTEPLIMIT)
@@ -1684,10 +1771,10 @@ extern ALIGN(32) struct NODE
 
 
 #ifdef ADAPTIVE_GRAVSOFT_FROM_TIDAL_CRITERION
-    MyFloat tidal_tensorps_prevstep[3][3];
+    SymmetricTensor2<MyFloat> tidal_tensorps_prevstep;
 #endif
 #ifdef DM_SCALARFIELD_SCREENING
-  MyFloat s_dm[3];
+  Vec3<MyFloat> s_dm;
   MyFloat mass_dm;
 #endif
 }
@@ -1695,18 +1782,37 @@ extern ALIGN(32) struct NODE
  *Nodes;			/*!< this is a pointer used to access the nodes which is shifted such that Nodes[All.MaxPart] gives the first allocated node */
 
 
+#ifdef SINGLE_STAR_DIRECT_GRAVITY
+/* every star in the simulation, replicated on every task, for the exact star-star sum in
+   gravity/star_direct_gravity.cc. Rebuilt each time gravity is evaluated; sized O(N_star). */
+extern struct star_direct_data
+{
+    Vec3<MyDouble> Pos;
+    Vec3<MyFloat> Vel;
+    MyFloat Mass;
+    MyFloat Soft;
+    MyIDType ID;
+}
+ *StarDirect;
+extern int N_StarDirect;
+#endif
+
+
 extern struct extNODE
 {
-  MyDouble dp[3];
+  Vec3<MyDouble> dp;
 #ifdef RT_SEPARATELY_TRACK_LUMPOS
-    MyDouble rt_source_lum_dp[3];
-    MyFloat rt_source_lum_vs[3];
+    Vec3<MyDouble> rt_source_lum_dp;
+    Vec3<MyFloat> rt_source_lum_vs;
 #endif
 #ifdef DM_SCALARFIELD_SCREENING
-  MyDouble dp_dm[3];
-  MyFloat vs_dm[3];
+  Vec3<MyDouble> dp_dm;
+  Vec3<MyFloat> vs_dm;
 #endif
-  MyFloat vs[3];
+#ifdef SINK_NODE_MOTION_TRACKED
+  Vec3<MyDouble> sink_dp;   /*!< momentum change of the sinks in this node, applied to sink_vel on the next drift (mirrors dp/dp_dm) */
+#endif
+  Vec3<MyFloat> vs;
   MyFloat vmax;
   MyFloat hmax;			/*!< maximum gas kernel length in node. Only used for gas particles */
   MyFloat divVmax;

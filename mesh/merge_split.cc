@@ -29,12 +29,51 @@
 #define MASS_THRESHOLD_FOR_WINDPROMO(i) (DMAX(5.*target_mass_for_wind_spawning(i),0.25*All.MaxMassForParticleSplit))
 #endif /* define a mass threshold for this model above which a 'hyper-element' has accreted enough to be treated as 'normal' */
 
+#ifdef MERGE_SPLIT_LIMIT_KINETIC_DISSIPATION
+#ifndef MERGE_SPLIT_MAX_KINETIC_DISSIPATION_FRACTION
+#define MERGE_SPLIT_MAX_KINETIC_DISSIPATION_FRACTION (0.5) /* veto once KE_com exceeds E_light */
+#endif
+/*! Fraction of the energy involved in a candidate merger which is kinetic, KE_com/(KE_com+E_light).
+    Merging conserves momentum but not energy: it thermalizes KE_com = (1/2)*mu*|dv|^2 (mu = reduced
+    mass), which cooling then radiates away. Where that dominates, the merger is an unresolved shock
+    and is vetoed so the solver follows the shock instead. Normalized to the thermal+magnetic energy of
+    the LIGHTER cell (the one destroyed); normalizing to the pair total would let the heavier target
+    dominate and weaken the test by ~1/q. Equivalent to a magnetosonic Mach test on the lighter cell. */
+static inline double merge_kinetic_dissipation_fraction(int i, int j)
+{
+    double mi = P[i].Mass, mj = P[j].Mass; if((mi <= 0) || (mj <= 0)) {return 0;}
+    Vec3<MyDouble> dvel = P[i].Vel; dvel -= P[j].Vel;
+    double ke_com = 0.5 * (mi*mj/(mi+mj)) * dvel.norm_sq() * All.cf_a2inv; /* physical; what the merge dissipates */
+    if(!(ke_com > 0)) {return 0;}
+    int l = (mi <= mj) ? i : j; double m_l = (mi <= mj) ? mi : mj; /* lighter cell = the one destroyed */
+    double vA_l = CellP[l].Alfven_speed(); /* E_B = (1/2)*v_A^2*m since v_A^2 = B^2/rho; =0 without MAGNETIC */
+    double e_light = m_l * (CellP[l].InternalEnergyPred + 0.5*vA_l*vA_l);
+    if(!(e_light > 0)) {return 1;} /* nothing to compare against: purely kinetic */
+    return ke_com / (ke_com + e_light);
+}
+#endif
+
+
+#if defined(SINK_SPAWN_MERGE_WHEN_AMBIENT) && defined(SINK_WIND_SPAWN)
+#ifndef SINK_SPAWN_MERGE_MAX_THERMAL_CONTRAST
+#define SINK_SPAWN_MERGE_MAX_THERMAL_CONTRAST (1.0)
+#endif
+#endif
+
+
+
+
 
 /*! Here we can insert any desired criteria for particle mergers: by default, this will occur
     when particles fall below some minimum mass threshold */
 int does_particle_need_to_be_merged(int i)
 {
     if(P[i].Mass <= 0) {return 0;}
+#ifdef PREVENT_PARTICLE_MERGE
+    /* disable merging but still allow splitting (cf. PREVENT_PARTICLE_MERGE_SPLIT, which disables
+       both): the diffusion-free, finest-resolution reference case. */
+    return 0;
+#endif
 #ifdef PREVENT_PARTICLE_MERGE_SPLIT
     return 0;
 #else
@@ -64,8 +103,8 @@ int does_particle_need_to_be_merged(int i)
 #ifdef PARTICLE_MERGE_SPLIT_TRUELOVE_REFINEMENT
     if(P[i].Type==0)
     {
-        double lambda_J = Get_Gas_Fast_MHD_wavespeed_i(i) * sqrt(M_PI / (All.G * CellP[i].Density * All.cf_a3inv));
-        if((lambda_J > 4. * PARTICLE_MERGE_SPLIT_TRUELOVE_REFINEMENT * Get_Particle_Size(i)*All.cf_atime) && (P[i].Mass < All.MaxMassForParticleSplit)) {return 1;} // de-refine
+        double lambda_J = CellP[i].fast_MHD_wavespeed() * sqrt(M_PI / (All.G * CellP[i].Density * All.cf_a3inv));
+        if((lambda_J > 4. * PARTICLE_MERGE_SPLIT_TRUELOVE_REFINEMENT * P[i].Get_Particle_Size()*All.cf_atime) && (P[i].Mass < All.MaxMassForParticleSplit)) {return 1;} // de-refine
     }
 #endif
 #if defined(FIRE_SUPERLAGRANGIAN_JEANS_REFINEMENT)
@@ -78,7 +117,7 @@ int does_particle_need_to_be_merged(int i)
 #if defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM_SPECIALBOUNDARIES)
         rmin_pc = 0;
 #endif
-        if(P[i].Type==0) {if(Get_Particle_Size(i)*All.cf_atime*UNIT_LENGTH_IN_PC < rmin_pc) {return 0;}} // if too high-res spatially, this equiv to size for m=7000 msun for nH=1e-3, dont let de-refine
+        if(P[i].Type==0) {if(P[i].Get_Particle_Size()*All.cf_atime*UNIT_LENGTH_IN_PC < rmin_pc) {return 0;}} // if too high-res spatially, this equiv to size for m=7000 msun for nH=1e-3, dont let de-refine
     }
 #endif
     if((P[i].Type>0) && (P[i].Mass > 0.5*All.MinMassForParticleMerger*target_mass_renormalization_factor_for_mergesplit(i,0))) {return 0;}
@@ -107,8 +146,8 @@ int does_particle_need_to_be_split(int i)
 #ifdef PARTICLE_MERGE_SPLIT_TRUELOVE_REFINEMENT
     if(P[i].Type == 0)
     {
-        double lambda_J = Get_Gas_Fast_MHD_wavespeed_i(i) * sqrt(M_PI / (All.G * CellP[i].Density * All.cf_a3inv));
-        if((lambda_J < PARTICLE_MERGE_SPLIT_TRUELOVE_REFINEMENT * Get_Particle_Size(i)*All.cf_atime) && (P[i].Mass > 2*All.MinMassForParticleMerger)) {return 1;} // refine
+        double lambda_J = CellP[i].fast_MHD_wavespeed() * sqrt(M_PI / (All.G * CellP[i].Density * All.cf_a3inv));
+        if((lambda_J < PARTICLE_MERGE_SPLIT_TRUELOVE_REFINEMENT * P[i].Get_Particle_Size()*All.cf_atime) && (P[i].Mass > 2*All.MinMassForParticleMerger)) {return 1;} // refine
     }
 #endif
     return 0;
@@ -133,10 +172,10 @@ double target_mass_renormalization_factor_for_mergesplit(int i, int split_key)
         double mcrit_0=1.*(4000.), T_eff = 1.23 * (5./3.-1.) * U_TO_TEMP_UNITS * CellP[i].InternalEnergyPred, nH_cgs = CellP[i].Density*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS, MJ = 9.e6 * pow( 1 + T_eff/1.e4, 1.5) / sqrt(1.e-12 + nH_cgs);
         if(All.ComovingIntegrationOn) {MJ *= pow(1. + (100.*COSMIC_BARYON_DENSITY_CGS) / (CellP[i].Density*All.cf_a3inv*UNIT_DENSITY_IN_CGS), 3);}
         double m_ref_mJ = 0.001 * MJ;
-        int k,j; double dx,r2=0,r2min=MAX_REAL_NUMBER;
+        int j; double r2=0,r2min=MAX_REAL_NUMBER;
         for(j=0;j<SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM;j++)
         {
-            r2=0; for(k=0;k<3;k++) {dx=(P[i].Pos[k]-All.SpecialParticle_Position_ForRefinement[j][k])*All.cf_atime; r2+=dx*dx;}
+            r2 = (P[i].Pos - All.SpecialParticle_Position_ForRefinement[j]).norm_sq() * All.cf_atime * All.cf_atime;
             if(r2<r2min) {r2min=r2;}
         }
         r2 = r2min; // want minimum distance to nearest refinement center
@@ -282,7 +321,7 @@ void merge_and_split_particles(void)
 
     int target_for_merger,dummy=0,numngb_inbox,startnode,i,j,n; double threshold_val;
     int n_particles_merged,n_particles_split,n_particles_gas_split,MPI_n_particles_merged,MPI_n_particles_split,MPI_n_particles_gas_split;
-    Ngblist = (int *) mymalloc("Ngblist",NumPart * sizeof(int));
+    Ngblist.resize(NumPart);
     Gas_split=0; n_particles_merged=0; n_particles_split=0; n_particles_gas_split=0; MPI_n_particles_merged=0; MPI_n_particles_split=0; MPI_n_particles_gas_split=0;
     Ptmp = (struct flags_merg_split *) mymalloc("Ptmp", NumPart * sizeof(struct flags_merg_split));
 
@@ -312,6 +351,36 @@ void merge_and_split_particles(void)
                 {
                     target_for_merger = -1;
                     threshold_val = MAX_REAL_NUMBER;
+#if defined(SINK_SPAWN_MERGE_WHEN_AMBIENT) && defined(SINK_WIND_SPAWN)
+                    /* Characterize the ambient medium around a spawned cell, so retirement is judged
+                       against the bulk flow rather than whichever single neighbor is picked as target.
+                       Spawned cells excluded: a jet cell among jet cells is still resolving the outflow. */
+                    int is_spawned_i = (P[i].ID==All.SpawnedWindCellID && P[i].Type==0);
+                    Vec3<double> v_ambient = {0,0,0}; double m_ambient = 0, cs_ambient = 0, lnU_ambient = 0;
+
+                    if(is_spawned_i)
+                    {
+                        int n_amb; for(n_amb=0; n_amb<numngb_inbox; n_amb++)
+                        {
+                            int j_amb = Ngblist[n_amb]; if((j_amb<0) || (j_amb==i)) {continue;}
+                            if((P[j_amb].Type!=0) || (P[j_amb].Mass<=0)) {continue;}
+                            if(P[j_amb].ID==All.SpawnedWindCellID) {continue;} /* ambient = non-spawned gas only */
+                            double w = P[j_amb].Mass; int k; for(k=0;k<3;k++) {v_ambient[k] += w * P[j_amb].Vel[k];}
+                            cs_ambient += w * CellP[j_amb].effective_soundspeed(); m_ambient += w;
+                            double uj = CellP[j_amb].InternalEnergyPred;
+                            if(uj > 0) {lnU_ambient += w * log(uj);}
+                        }
+                        if(m_ambient > 0)
+                        {
+                            v_ambient /= m_ambient; cs_ambient /= m_ambient; lnU_ambient /= m_ambient;
+                            /* Sound speed alone, deliberately: kinematic measures of the ambient velocity
+                               spread (kernel dispersion, |grad v|*cell size) are inflated near the outflow
+                               by the outflow itself, so thresholding on them is circular and admits fast
+                               jet material (18% and 44% of spawned cells mergeable vs 1.4%, when tested).
+                               Errs toward retiring late in sheared gas: the safe direction. */
+                        }
+                    }
+#endif
                     for(n=0; n<numngb_inbox; n++) /* loop over neighbors */
                     {
                         j = Ngblist[n]; double m_eff = P[j].Mass; int do_allow_merger = 0; // boolean flag to check
@@ -326,28 +395,82 @@ void merge_and_split_particles(void)
                             {
                                 if((P[j].ID != All.SpawnedWindCellID) || (P[j].Mass >= MASS_THRESHOLD_FOR_WINDPROMO(j))) {do_allow_merger *= 1;} else {do_allow_merger = 0;}
                             } else if(do_allow_merger) {
-                                double v2_tmp=0,vr_tmp=0; int ktmp=0; for(ktmp=0;ktmp<3;ktmp++) {v2_tmp+=(P[i].Vel[ktmp]-P[j].Vel[ktmp])*(P[i].Vel[ktmp]-P[j].Vel[ktmp]); vr_tmp+=(P[i].Vel[ktmp]-P[j].Vel[ktmp])*(P[i].Pos[ktmp]-P[j].Pos[ktmp]);}
+                                Vec3<MyDouble> dvel_tmp = P[i].Vel - P[j].Vel; double v2_tmp = dvel_tmp.norm_sq(); double vr_tmp = dot(dvel_tmp, P[i].Pos - P[j].Pos);
                                 if(vr_tmp > 0) {do_allow_merger = 0;}
                                 if(v2_tmp > 0) {v2_tmp=sqrt(v2_tmp*All.cf_a2inv);} else {v2_tmp=0;}
-                                if(v2_tmp >  DMIN(Get_Gas_effective_soundspeed_i(i),Get_Gas_effective_soundspeed_i(j))) {do_allow_merger = 0;}
+                                if(v2_tmp >  DMIN(CellP[i].effective_soundspeed(),CellP[j].effective_soundspeed())) {do_allow_merger = 0;}
 #if !defined(SINK_RIAF_SUBEDDINGTON_MODEL) && !defined(SINGLE_STAR_SINK_DYNAMICS) /* if spawning a lot of these, don't want to restrict this so much */
                                 if(P[j].ID == All.SpawnedWindCellID) {do_allow_merger = 0;} // wind particles can't intermerge
 #if !defined(SINGLE_STAR_FB_JETS) && !defined(SINGLE_STAR_FB_WINDS)
-                                if((v2_tmp > 0.25*All.Sink_outflow_velocity) && (v2_tmp > 0.9*Get_Gas_effective_soundspeed_i(j))) {do_allow_merger=0;}
+                                if((v2_tmp > 0.25*All.Sink_outflow_velocity) && (v2_tmp > 0.9*CellP[j].effective_soundspeed())) {do_allow_merger=0;}
 #endif
 #endif
                             }
+#if defined(SINK_SPAWN_MERGE_WHEN_AMBIENT) && defined(SINK_WIND_SPAWN)
+                            /* Retire into ambient gas only: restores the no-intermerging restriction
+                               added in 9ce8be04 (2020-03-25) and disabled for STARFORGE by 22c755df. */
+                            if(P[j].ID == All.SpawnedWindCellID) {do_allow_merger = 0;}
+                            /* ...and only once subsonic wrt the mean ambient velocity. No ambient gas
+                               in the kernel => still pure outflow. */
+                            if(do_allow_merger)
+                            {
+                                if(!(m_ambient > 0)) {do_allow_merger = 0;}
+                                else {
+                                    Vec3<double> dv_amb = {P[i].Vel[0]-v_ambient[0], P[i].Vel[1]-v_ambient[1], P[i].Vel[2]-v_ambient[2]};
+                                    if(dv_amb.norm()*sqrt(All.cf_a2inv) > cs_ambient) {do_allow_merger = 0;}
+                                    /* ...and only once thermally equilibrated with it too. Subsonic is not
+                                       enough: a contact discontinuity is by definition in pressure equilibrium
+                                       with no velocity jump, so outflow material sitting at the contact passes
+                                       every kinematic test while remaining a distinct phase.
+                                       Compares specific internal energy, NOT an entropic function. A=P/rho^gamma
+                                       is only a state function for a single-gamma ideal gas; with gamma varying
+                                       by composition and temperature (EOS_GAMMA_VARIABLE, COOL_MOLECFRAC_NONEQM)
+                                       equal P/rho^gamma does not mean equal entropy, so that test is not merely
+                                       imprecise there but ill-founded. u needs no EOS assumption, and it is the
+                                       quantity the merge actually averages: merging cells of equal u leaves u
+                                       unchanged and destroys no thermal structure, while merging across a u jump
+                                       averages the jump away. Deliberately a state of this cell against its own
+                                       kernel rather than a property of a candidate pair: a pairwise test is
+                                       evaded by picking another target or retrying next step, a cell state is
+                                       not. A cell that genuinely mixes into the ISM relaxes toward the local
+                                       value and becomes retirable, which is what bounds the spawned population. */
+                                    if(do_allow_merger)
+                                    {
+                                        double ui_ = CellP[i].InternalEnergyPred;
+                                        if(ui_ > 0)
+                                        {
+                                            double dlnU = fabs(log(ui_) - lnU_ambient);
+                                            if(dlnU > SINK_SPAWN_MERGE_MAX_THERMAL_CONTRAST) {do_allow_merger = 0;}
+                                        }
+                                    }
+                                }
+                            }
+#endif
                         }
 #ifdef SINK_RIAF_SUBEDDINGTON_MODEL
                         /* recall 'i' was already flagged to merge; for this module can get in a timestep trap when BH surrounded only by spawns, keep waking each other up and driving down; put a timestep 'escape' clause explicitly in here -- can tune timestep for different problems of course */
                         if(P[i].Type==0 && P[j].Type==0) {
                             if((P[j].Mass >= P[i].Mass) && (P[i].Mass+P[j].Mass < All.MaxMassForParticleSplit)) {
-                                double dti = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i), dtj=GET_PARTICLE_TIMESTEP_IN_PHYSICAL(j);
+                                double dti = get_particle_timestep_in_physical(i), dtj=get_particle_timestep_in_physical(j);
                                 double dt0 = 1.e-7;
                                 if(dti<dt0 || dtj<dt0) {do_allow_merger = 1;}
                             }}
 #endif
                         if(P[j].ID==All.SpawnedWindCellID && P[j].Type==0) {m_eff *= 1.0e10;} /* boost this enough to ensure the spawned element will never chosen if 'real' candidate exists */
+#endif
+#if defined(SINK_SPAWN_NO_MERGE) && defined(SINK_WIND_SPAWN)
+                        /* never merge a spawned cell, either direction: holds the population fixed so
+                           merged and unmerged outflows can be compared directly. */
+                        if((P[i].ID==All.SpawnedWindCellID && P[i].Type==0) ||
+                           (P[j].ID==All.SpawnedWindCellID && P[j].Type==0)) {do_allow_merger=0;}
+#endif
+#ifdef MERGE_SPLIT_LIMIT_KINETIC_DISSIPATION
+                        /* Never merge through a shock. After every module clause above (incl. the
+                           SINK_RIAF timestep escape, which forces =1) so it cannot be overridden. */
+                        if(do_allow_merger && (P[i].Type==0) && (P[j].Type==0) && (P[j].Mass>0) && (j>=0) && (j!=i))
+                        {
+                            if(merge_kinetic_dissipation_fraction(i,j) > MERGE_SPLIT_MAX_KINETIC_DISSIPATION_FRACTION) {do_allow_merger = 0;}
+                        }
 #endif
                         /* make sure we're not taking the same particle (and that its available to be merged into)! and that its the least-massive available candidate for merging onto */
                         if((j<0)||(j==i)||(P[j].Type!=P[i].Type)||(P[j].Mass<=0)||(Ptmp[j].flag!=0)||(m_eff>=threshold_val)) {do_allow_merger=0;}
@@ -374,10 +497,9 @@ void merge_and_split_particles(void)
                         j = Ngblist[n];
                         /* make sure we're not taking the same particle */
                         if((j>=0)&&(j!=i)&&(P[j].Type==P[i].Type) && (P[j].Mass > 0) && (Ptmp[j].flag == 0)) {
-                            double dp[3]; int k; double r2=0;
-                            for(k=0;k<3;k++) {dp[k]=P[i].Pos[k]-P[j].Pos[k];}
-                            NEAREST_XYZ(dp[0],dp[1],dp[2],1);
-                            for(k=0;k<3;k++) {r2+=dp[k]*dp[k];}
+                            Vec3<double> dp = P[i].Pos - P[j].Pos;
+                            nearest_xyz(dp);
+                            double r2 = dp.norm_sq();
                             if(r2<threshold_val) {threshold_val=r2; target_for_merger=j;} // position-based //
                         }
                     }
@@ -405,14 +527,14 @@ void merge_and_split_particles(void)
     if(failed_splits) {printf ("On Task=%d with NumPart=%d we tried and failed to split %d elements, after running out of space (REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPart=%d, REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPartGas=%d ).\n We did split %d total (%d gas) elements. Try using more nodes, or raising PartAllocFac, or changing the split conditions to avoid this.\n", ThisTask, NumPart, failed_splits, (int)(REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPart), (int)(REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPartGas), n_particles_split, n_particles_gas_split); fflush(stdout);}
 
 #ifdef BOX_PERIODIC
-    /* map the particles back onto the box (make sure they get wrapped if they go off the edges). this is redundant here,
-     because we only do splits in the beginning of a domain decomposition step, where this will be called as soon as
-     the particle re-order is completed. but it is still useful to keep here in case this changes (and to note what needs
-     to be done for any more complicated splitting operations */
+    /* map the particles back onto the box (make sure they get wrapped if they go off the edges). Redundant
+     when this runs at the start of a domain decomposition (which wraps after the re-order anyway), but NOT
+     redundant under PARTICLE_MERGE_SPLIT_EVERY_TIMESTEP, where merge/split runs mid-step with no
+     decomposition following. */
     do_box_wrapping();
 #endif
     myfree(Ptmp);
-    myfree(Ngblist);
+    
     MPI_Allreduce(&n_particles_merged, &MPI_n_particles_merged, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
 #if defined(GALSF_RESOLVEDISM_SN_SPAWN) && defined(GALSF_RESOLVEDISM_FB)
     /* ---- SN ejecta-spawn executor (prototype, 2026-07-05) ----
@@ -457,7 +579,7 @@ void merge_and_split_particles(void)
                 CellP[j_sp].VelPred[kk_sp] = P[i_sp].Vel[kk_sp];
                 CellP[j_sp].HydroAccel[kk_sp] = 0;
             }
-            P[j_sp].Mass = P[i_sp].SpawnEjMass;
+            P[j_sp].Mass = P[i_sp].SpawnEjMass; CellP[j_sp].Mass = P[j_sp].Mass;
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
             CellP[j_sp].MassTrue = P[j_sp].Mass; CellP[j_sp].dMass = 0; CellP[j_sp].DtMass = 0;
 #endif
@@ -524,21 +646,20 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
     k=0;
     phi = 2.0*M_PI*get_random_number(i+1+ThisTask); // random from 0 to 2pi //
     cos_theta = 2.0*(get_random_number(i+3+2*ThisTask)-0.5); // random between 1 to -1 //
-    double dp[3], r_near=0; for(k = 0; k < 3; k++) {dp[k] = P[i].Pos[k] - P[i_nearest].Pos[k];}
-    NEAREST_XYZ(dp[0],dp[1],dp[2],1);
-    for(k = 0; k < 3; k++) {r_near += dp[k]*dp[k];}
-    r_near = sqrt(r_near);
+    Vec3<double> dp = P[i].Pos - P[i_nearest].Pos;
+    nearest_xyz(dp);
+    double r_near = dp.norm();
     /* set d_r to the Voronoi-optimal daughter offset: d = (V_daughter)^{1/NDIMS}/2 = 2^{-(NDIMS+1)/NDIMS} * dx_eff,
        placing each daughter at its sub-cell centroid. minimizes O(d^2) perturbations to neighbor density estimates
        while maintaining a glass-like configuration. dimension-general: 0.397*dx_eff in 3D, 0.354 in 2D, 0.25 in 1D */
-    double dx_eff = Get_Particle_Size(i), dx_h = KERNEL_CORE_SIZE * P[i].KernelRadius;
+    double dx_eff = P[i].Get_Particle_Size(), dx_h = KERNEL_CORE_SIZE * P[i].KernelRadius;
     dx_eff = DMAX(DMIN(dx_eff, 3.*dx_h), 0.1*dx_h); // clamp to reasonable range relative to kernel radius
     dx_h = r_near; dx_eff = DMAX(DMIN(dx_eff, 3.*dx_h), 0.1*dx_h); // clamp to reasonable range relative to nearest-neighbor distance
     double d_r = pow(0.5, (NUMDIMS + 1.) / (double)NUMDIMS) * dx_eff; // 2^{-(NDIMS+1)/NDIMS} * dx_eff
     d_r = DMIN(d_r, 0.4 * r_near); // keep displacement well within nearest-neighbor distance
     /*
     double r_near = sqrt(r2_nearest);
-    double rkern = Get_Particle_Size(i);
+    double rkern = P[i].Get_Particle_Size();
     if(rkern < r_near) {rkern = r_near;}
     r_near *= 0.35;
     double d_r = 0.25 * rkern; // needs to be epsilon*KernelRadius where epsilon<<1, to maintain stability //
@@ -574,10 +695,10 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
     /* assign masses to both particles (so they sum correctly), but first record some numbers in case we need them below */
     double mass_before_split = 0, density_before_split = 0, volume_before_split = 0; mass_before_split = P[i].Mass; // save for use below
     if(P[i].Type==0) {density_before_split = CellP[i].Density; volume_before_split = mass_before_split/density_before_split;} // save for use below
-    P[j].Mass = mass_of_new_particle * P[i].Mass;
-    P[i].Mass -= P[j].Mass;
+    P[j].Mass = mass_of_new_particle * P[i].Mass; CellP[j].Mass = P[j].Mass;
+    P[i].Mass -= P[j].Mass; CellP[i].Mass = P[i].Mass;
 #ifdef BOX_BND_PARTICLES
-    if(P[i].ID==0)  {P[j].ID=1; double m0=P[i].Mass+P[j].Mass; P[i].Mass=P[j].Mass=m0;}
+    if(P[i].ID==0)  {P[j].ID=1; double m0=P[i].Mass+P[j].Mass; P[i].Mass=P[j].Mass=m0;} CellP[i].Mass = P[i].Mass;
 #endif
 
     /* prepare to shift the particle locations according to the random number we drew above */
@@ -605,17 +726,17 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
         CellP[j].ConditionNumber = CellP[i].ConditionNumber;
 #ifdef MAGNETIC
         /* we evolve the -conserved- VB and Vphi, so this must be partitioned */
-        for(k=0;k<3;k++) {
-            double B_before_split = CellP[i].B[k] / volume_before_split; /* calculate the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed */
-            CellP[j].BField_prerefinement[k] = B_before_split; CellP[i].BField_prerefinement[k] = B_before_split; /* record the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed */
-            CellP[j].B[k] = mass_of_new_particle * CellP[i].B[k]; CellP[i].B[k] -= CellP[j].B[k]; /* take a reasonable -guess- for the new updated conserved B */
-            CellP[j].BPred[k] = mass_of_new_particle * CellP[i].BPred[k]; CellP[i].BPred[k] -= CellP[j].BPred[k]; CellP[j].DtB[k] = mass_of_new_particle * CellP[i].DtB[k]; CellP[i].DtB[k] -= CellP[j].DtB[k]; /* partition these terms as well, doesn't have much effect if zero them, since before re-calc anyways */
-            //CellP[j].BPred[k] = CellP[j].B[k]; CellP[i].BPred[k] = CellP[i].B[k]; CellP[j].DtB[k] = CellP[i].DtB[k] = 0; /* set BPred equal to the conserved B, and zero the time derivatives and cleaning terms: these will be re-calculated self-consistently from the new mesh configuration */
+        {
+            auto B_before_split = CellP[i].B * (1.0 / volume_before_split); /* calculate the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed */
+            CellP[j].BField_prerefinement = B_before_split; CellP[i].BField_prerefinement = B_before_split; /* record the real value of B pre-split */
+            CellP[j].B = CellP[i].B * mass_of_new_particle; CellP[i].B -= CellP[j].B; /* take a reasonable -guess- for the new updated conserved B */
+            CellP[j].BPred = CellP[i].BPred * mass_of_new_particle; CellP[i].BPred -= CellP[j].BPred; CellP[j].DtB = CellP[i].DtB * mass_of_new_particle; CellP[i].DtB -= CellP[j].DtB; /* partition these terms as well, doesn't have much effect if zero them, since before re-calc anyways */
+            //CellP[j].BPred = CellP[j].B; CellP[i].BPred = CellP[i].B; CellP[j].DtB = CellP[i].DtB = {}; /* set BPred equal to the conserved B, and zero the time derivatives and cleaning terms */
         }
         CellP[j].divB = mass_of_new_particle * CellP[i].divB; CellP[i].divB -= CellP[j].divB; //CellP[i].divB = CellP[j].divB = 0; /* this will be self-consistently recomputed on the next timestep */
 #ifdef DIVBCLEANING_DEDNER
         CellP[j].Phi = mass_of_new_particle * CellP[i].Phi; CellP[i].Phi -= CellP[j].Phi; CellP[j].DtPhi = mass_of_new_particle * CellP[i].DtPhi; CellP[i].DtPhi -= CellP[j].DtPhi; CellP[j].PhiPred = mass_of_new_particle * CellP[i].PhiPred; CellP[i].PhiPred -= CellP[j].PhiPred; /* same partition as above */
-        for(k=0;k<3;k++) {CellP[j].DtB_PhiCorr[k] = mass_of_new_particle * CellP[i].DtB_PhiCorr[k]; CellP[i].DtB_PhiCorr[k] -= CellP[j].DtB_PhiCorr[k];} /* same partition as above */
+        CellP[j].DtB_PhiCorr = CellP[i].DtB_PhiCorr * mass_of_new_particle; CellP[i].DtB_PhiCorr -= CellP[j].DtB_PhiCorr; /* same partition as above */
         //CellP[i].Phi = CellP[i].PhiPred = CellP[i].DtPhi = CellP[j].Phi = CellP[j].PhiPred = CellP[j].DtPhi = 0; for(k=0;k<3;k++) {CellP[i].DtB_PhiCorr[k] = CellP[j].DtB_PhiCorr[k] = 0;} /* zero the time derivatives and cleaning terms: these will be re-calculated self-consistently from the new mesh configuration */
 #endif
         /* ideally, particle-splits should be accompanied by a re-partition of the density via the density() call for the particles affected, after the tree-reconstruction, with quantities like B used to re-calculate after */
@@ -654,11 +775,7 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
         dmass = mass_of_new_particle * CellP[i].dMass;
         CellP[j].dMass = dmass;
         CellP[i].dMass -= dmass;
-        for(k=0;k<3;k++)
-        {
-            CellP[j].GravWorkTerm[k] =0;//= mass_of_new_particle * CellP[i].GravWorkTerm[k];//appears more stable with this zero'd
-            CellP[i].GravWorkTerm[k] =0;//-= CellP[j].GravWorkTerm[k];//appears more stable with this zero'd
-        }
+        CellP[j].GravWorkTerm = {}; CellP[i].GravWorkTerm = {}; //= mass_of_new_particle * ...; //appears more stable with this zero'd
         CellP[j].MassTrue = mass_of_new_particle * CellP[i].MassTrue;
         CellP[i].MassTrue -= CellP[j].MassTrue;
 #endif
@@ -677,11 +794,8 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
             CellP[j].CosmicRay_Number_in_Bin[k_CRegy] = mass_of_new_particle * CellP[i].CosmicRay_Number_in_Bin[k_CRegy]; CellP[i].CosmicRay_Number_in_Bin[k_CRegy] -= CellP[j].CosmicRay_Number_in_Bin[k_CRegy];
             CellP[j].DtCosmicRay_Number_in_Bin[k_CRegy] = mass_of_new_particle * CellP[i].DtCosmicRay_Number_in_Bin[k_CRegy]; CellP[i].DtCosmicRay_Number_in_Bin[k_CRegy] -= CellP[j].DtCosmicRay_Number_in_Bin[k_CRegy];
 #endif
-            for(k=0;k<3;k++)
-            {
-                CellP[j].CosmicRayFlux[k_CRegy][k] = mass_of_new_particle * CellP[i].CosmicRayFlux[k_CRegy][k]; CellP[i].CosmicRayFlux[k_CRegy][k] -= CellP[j].CosmicRayFlux[k_CRegy][k];
-                CellP[j].CosmicRayFluxPred[k_CRegy][k] = mass_of_new_particle * CellP[i].CosmicRayFluxPred[k_CRegy][k]; CellP[i].CosmicRayFluxPred[k_CRegy][k] -= CellP[j].CosmicRayFluxPred[k_CRegy][k];
-            }
+            CellP[j].CosmicRayFlux[k_CRegy] = CellP[i].CosmicRayFlux[k_CRegy] * mass_of_new_particle; CellP[i].CosmicRayFlux[k_CRegy] -= CellP[j].CosmicRayFlux[k_CRegy];
+            CellP[j].CosmicRayFluxPred[k_CRegy] = CellP[i].CosmicRayFluxPred[k_CRegy] * mass_of_new_particle; CellP[i].CosmicRayFluxPred[k_CRegy] -= CellP[j].CosmicRayFluxPred[k_CRegy];
 #ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
             for(k=0;k<2;k++)
             {
@@ -732,7 +846,7 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
                 for(k=0;k<NUMDIMS;k++) {grad_rho[k]=CellP[i].Gradients.Density[k]; grad_rho_norm+=grad_rho[k]*grad_rho[k];}
                 grad_rho_norm = sqrt(grad_rho_norm);
                 if(grad_rho_norm > 0 && CellP[i].Density > 0) {
-                    double relative_gradient = grad_rho_norm * Get_Particle_Size(i) / CellP[i].Density; // dimensionless: |grad_rho|*dx/rho
+                    double relative_gradient = grad_rho_norm * P[i].Get_Particle_Size() / CellP[i].Density; // dimensionless: |grad_rho|*dx/rho
                     if(relative_gradient > 0.1) { // non-trivial gradient: project dp onto isodensity plane
                         double dot=0; for(k=0;k<NUMDIMS;k++) {dot += dp[k] * grad_rho[k] / grad_rho_norm;}
                         double dp_perp[3]={0}, perp_norm=0;
@@ -746,7 +860,10 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
         }
 #endif
 #ifdef WAKEUP  /* TO: rather conservative. But we want to update Density and KernelRadius after the particle masses were changed */
-        P[i].wakeup = -1; P[j].wakeup = -1; NeedToWakeupParticles_local = 1;
+        P[i].wakeup = -2; P[j].wakeup = -2; NeedToWakeupParticles_local = 1; /* -2 = split; only the sign is semantic, the value is for attribution.
+            NB the daughter needs no ActiveParticleList push: the timebin splice below puts it on the
+            parent's cadence, so force_update_hmax covers it from the next step; within the remainder of
+            THIS step its own leaf is covered by the child-kernel hmax bump in force_add_element_to_tree */
 #endif
 
     } // closes special operations required only of gas particles
@@ -760,14 +877,16 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
     P[i].Time_Of_Last_MergeSplit = All.Time; P[j].Time_Of_Last_MergeSplit = All.Time;
 #endif
     
-    /* Note: New tree construction can be avoided because of  `force_add_element_to_tree()' */
-#ifdef PARTICLE_MERGE_SPLIT_EVERY_TIMESTEP    
+    /* Under PARTICLE_MERGE_SPLIT_EVERY_TIMESTEP the daughter must be spliced into the live tree and the
+       timebin lists, since no decomposition follows this call. In the default configuration these are
+       deliberately skipped: merge/split then runs only at the start of a domain decomposition, which
+       frees and rebuilds the tree before anything walks it, so the daughter needs no insertion. */
+#ifdef PARTICLE_MERGE_SPLIT_EVERY_TIMESTEP
     long bin = P[i].TimeBin;
     if(FirstInTimeBin[bin] < 0) {FirstInTimeBin[bin]=j; LastInTimeBin[bin]=j; NextInTimeBin[j]=-1; PrevInTimeBin[j]=-1;} /* only particle in this time bin on this task */
     else {NextInTimeBin[j]=FirstInTimeBin[bin]; PrevInTimeBin[j]=-1; PrevInTimeBin[FirstInTimeBin[bin]]=j; FirstInTimeBin[bin]=j;} /* there is already at least one particle; add this one "to the front" of the list */
     force_add_element_to_tree(i, j);
-#endif    
-    /* we solve this by only calling the merge/split algorithm when we're doing the new domain decomposition */
+#endif
     
 #if defined(MHD_CONSERVE_B_ON_REFINEMENT)
     /* flag cells as having just undergone refinement/derefinement for other subroutines to be aware */
@@ -790,12 +909,12 @@ int merge_particles_ij(int i, int j)
     int k;
     if(P[i].Mass <= 0)
     {
-        P[i].Mass = 0;
+        P[i].Mass = 0; CellP[i].Mass = P[i].Mass;
         return 0;
     }
     if(P[j].Mass <= 0)
     {
-        P[j].Mass = 0;
+        P[j].Mass = 0; CellP[j].Mass = P[j].Mass;
         return 0;
     }
     double mtot = P[j].Mass + P[i].Mass;
@@ -814,9 +933,9 @@ int merge_particles_ij(int i, int j)
 #ifdef GALSF_MERGER_STARCLUSTER_PARTICLES
     if(P[i].Type==4 && P[j].Type==P[i].Type) /* identify a star-star merger, need to update the effective size -before- updating anything else */
     {
-        double m_i=P[i].Mass, m_j=P[j].Mass, dr_i=P[i].StarParticleEffectiveSize*All.cf_atime, dr_j=P[j].StarParticleEffectiveSize*All.cf_atime, dr2_ij=0, dv2_ij=0, dp[3], dv[3];
-        for(k=0;k<3;k++) {dp[k]=(P[j].Pos[k]-P[i].Pos[k])*All.cf_atime; dr2_ij+=dp[k]*dp[k];} // ij position separation (physical units)
-        for(k=0;k<3;k++) {dv[k]=(P[j].Vel[k]-P[i].Vel[k])/All.cf_atime; dv2_ij+=dv[k]*dv[k];} // ij velocity separation (physical units)
+        double m_i=P[i].Mass, m_j=P[j].Mass, dr_i=P[i].StarParticleEffectiveSize*All.cf_atime, dr_j=P[j].StarParticleEffectiveSize*All.cf_atime;
+        Vec3<double> dp_star = (P[j].Pos - P[i].Pos) * All.cf_atime; double dr2_ij = dp_star.norm_sq(); // ij position separation (physical units)
+        Vec3<double> dv_star = (P[j].Vel - P[i].Vel) / All.cf_atime; double dv2_ij = dv_star.norm_sq(); // ij velocity separation (physical units)
         double phi_prefac=2.01887, phi_tot=-All.G*(0.5*phi_prefac*m_i*m_i/dr_i + 0.5*phi_prefac*m_j*m_j/dr_j + m_i*m_j/sqrt(dr_i*dr_i + dr_j*dr_j + dr2_ij)); // estimate the total gravitational energy of the system here; the '0.5' in phi_prefac accounts for assuming each is virialized, so will sum such that only 1/2 of the potential adds to the total; note phi_prefac is the integral over the kernel functions. its pre-computed here for the cubic spline default choice with this module, but can in general be numerically computed from the kernel functions, though its not so important as long as you are consistent
         double ke_sum = 0.5 * (m_i*m_j/(m_i+m_j)) * dv2_ij; // kinetic energy sum
         double etot_new = DMIN(phi_tot + ke_sum , 0.5 * (-All.G*0.5*phi_prefac*(m_i*m_i/dr_i + m_j*m_j/dr_j))); // updated total energy -- don't let it get too close to zero or positive or this will give a bogus result for the final softening
@@ -828,26 +947,16 @@ int merge_particles_ij(int i, int j)
     // block for merging non-gas particles (much simpler, assume collisionless)
     if((P[i].Type>0)&&(P[j].Type>0))
     {
-        double pos_new_xyz[3], dp[3];
-        for(k=0;k<3;k++) {dp[k]=P[j].Pos[k]-P[i].Pos[k];}
-        NEAREST_XYZ(dp[0],dp[1],dp[2],-1);
-        for(k=0;k<3;k++) {pos_new_xyz[k] = P[i].Pos[k] + wt_j * dp[k];}
-
-        double p_old_i[3],p_old_j[3];
-        for(k=0;k<3;k++)
-        {
-            p_old_i[k] = P[i].Mass * P[i].Vel[k];
-            p_old_j[k] = P[j].Mass * P[j].Vel[k];
-        }
-        for(k=0;k<3;k++)
-        {
-            P[j].Pos[k] = pos_new_xyz[k]; // center-of-mass conserving //
-            P[j].Vel[k] = wt_j*P[j].Vel[k] + wt_i*P[i].Vel[k]; // momentum-conserving //
-            P[j].GravAccel[k] = wt_j*P[j].GravAccel[k] + wt_i*P[i].GravAccel[k]; // force-conserving //
+        Vec3<double> dp = P[j].Pos - P[i].Pos;
+        nearest_xyz(dp,-1);
+        Vec3<double> p_old_i = P[i].Vel * P[i].Mass;
+        Vec3<double> p_old_j = P[j].Vel * P[j].Mass;
+        P[j].Pos = P[i].Pos + dp * wt_j; // center-of-mass conserving //
+        P[j].Vel = P[j].Vel * wt_j + P[i].Vel * wt_i; // momentum-conserving //
+        P[j].GravAccel = P[j].GravAccel * wt_j + P[i].GravAccel * wt_i; // force-conserving //
 #ifdef PMGRID
-            P[j].GravPM[k] = wt_j*P[j].GravPM[k] + wt_i*P[i].GravPM[k]; // force-conserving //
+        P[j].GravPM = P[j].GravPM * wt_j + P[i].GravPM * wt_i; // force-conserving //
 #endif
-        }
         P[j].KernelRadius = pow(pow(P[j].KernelRadius,NUMDIMS)+pow(P[i].KernelRadius,NUMDIMS),1.0/NUMDIMS); // volume-conserving to leading order //
 #ifdef METALS
         for(k=0;k<NUM_METAL_SPECIES;k++) {P[j].Metallicity[k] = wt_j*P[j].Metallicity[k] + wt_i*P[i].Metallicity[k];} // metal-mass conserving //
@@ -877,14 +986,11 @@ int merge_particles_ij(int i, int j)
         }
 #endif
         /* finally zero out the particle mass so it will be deleted */
-        P[i].Mass = 0;
-        P[j].Mass = mtot;
-        for(k=0;k<3;k++)
-        {
-            /* momentum shift for passing to tree (so we know how to move it) */
-            P[i].dp[k] += P[i].Mass*P[i].Vel[k] - p_old_i[k];
-            P[j].dp[k] += P[j].Mass*P[j].Vel[k] - p_old_j[k];
-        }
+        P[i].Mass = 0; CellP[i].Mass = P[i].Mass;
+        P[j].Mass = mtot; CellP[j].Mass = P[j].Mass;
+        /* momentum shift for passing to tree (so we know how to move it) */
+        P[i].dp += P[i].Vel * P[i].Mass - p_old_i;
+        P[j].dp += P[j].Vel * P[j].Mass - p_old_j;
         return 1;
     } // closes merger of non-gas particles, only gas particles will see the blocks below //
 
@@ -897,21 +1003,19 @@ int merge_particles_ij(int i, int j)
         P[j].wakeup = -1; NeedToWakeupParticles_local = 1;
 #endif
     }
-    double dm_i=0,dm_j=0,de_i=0,de_j=0,dp_i[3],dp_j[3],dm_ij,de_ij,dp_ij[3];
+    double dm_i=0,dm_j=0,de_i=0,de_j=0,dm_ij,de_ij;
+    Vec3<double> dp_i{}, dp_j{}, dp_ij{};
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
     dm_i += CellP[i].DtMass;
     dm_j += CellP[j].DtMass;
 #endif
     de_i = P[i].Mass * CellP[i].DtInternalEnergy + dm_i*CellP[i].InternalEnergy;
     de_j = P[j].Mass * CellP[j].DtInternalEnergy + dm_j*CellP[j].InternalEnergy;
-    for(k=0;k<3;k++)
-    {
-        dp_i[k] = P[i].Mass * CellP[i].HydroAccel[k] + dm_i * CellP[i].VelPred[k] / All.cf_atime;
-        dp_j[k] = P[j].Mass * CellP[j].HydroAccel[k] + dm_j * CellP[j].VelPred[k] / All.cf_atime;
-        de_i += dp_i[k] * CellP[i].VelPred[k] / All.cf_atime - 0.5 * dm_i * CellP[i].VelPred[k] * CellP[i].VelPred[k] * All.cf_a2inv;
-        de_j += dp_j[k] * CellP[j].VelPred[k] / All.cf_atime - 0.5 * dm_j * CellP[j].VelPred[k] * CellP[j].VelPred[k] * All.cf_a2inv;
-        dp_ij[k] = dp_i[k] + dp_j[k];
-    }
+    dp_i = CellP[i].HydroAccel * P[i].Mass + CellP[i].VelPred * (dm_i / All.cf_atime);
+    dp_j = CellP[j].HydroAccel * P[j].Mass + CellP[j].VelPred * (dm_j / All.cf_atime);
+    de_i += dot(dp_i, CellP[i].VelPred) / All.cf_atime - 0.5 * dm_i * CellP[i].VelPred.norm_sq() * All.cf_a2inv;
+    de_j += dot(dp_j, CellP[j].VelPred) / All.cf_atime - 0.5 * dm_j * CellP[j].VelPred.norm_sq() * All.cf_a2inv;
+    dp_ij = dp_i + dp_j;
     dm_ij = dm_i+dm_j;
     de_ij = de_i+de_j;
 
@@ -927,80 +1031,96 @@ int merge_particles_ij(int i, int j)
     /* make sure to update the conserved variables correctly: mass and momentum are easy, energy is non-trivial */
     double egy_old = 0;
     egy_old += mtot * (wt_j*CellP[j].InternalEnergy + wt_i*CellP[i].InternalEnergy); // internal energy //
-    double pos_new_xyz[3], dp[3];
     /* for periodic boxes, we need to (arbitrarily) pick one position as our coordinate center. we pick i. then everything defined in
         position differences relative to i. the final position will be appropriately box-wrapped after these operations are completed */
-    for(k=0;k<3;k++) {dp[k]=P[j].Pos[k]-P[i].Pos[k];}
-    NEAREST_XYZ(dp[0],dp[1],dp[2],-1);
-    for(k=0;k<3;k++) {pos_new_xyz[k] = P[i].Pos[k] + wt_j * dp[k];}
+    Vec3<double> dp = P[j].Pos - P[i].Pos;
+    nearest_xyz(dp,-1);
+    Vec3<double> pos_new = P[i].Pos + dp * wt_j;
+    Vec3<double> dr_j = (P[i].Pos + dp - pos_new) * All.cf_atime; // displacement of j relative to new pos (physical)
+    Vec3<double> dr_i = (P[i].Pos - pos_new) * All.cf_atime;       // displacement of i relative to new pos (physical)
 
-    for(k=0;k<3;k++)
-    {
-        egy_old += mtot*wt_j * 0.5 * P[j].Vel[k]*P[j].Vel[k]*All.cf_a2inv; // kinetic energy (j) //
-        egy_old += mtot*wt_i * 0.5 * P[i].Vel[k]*P[i].Vel[k]*All.cf_a2inv; // kinetic energy (i) //
-        // gravitational energy terms need to be added (including work for moving particles 'together') //
-        // Egrav = m*g*h = m * (-grav_acc) * (position relative to zero point) //
-        egy_old += mtot*wt_j * (P[i].Pos[k]+dp[k] - pos_new_xyz[k])*All.cf_atime * (-P[j].GravAccel[k])*All.cf_a2inv; // work (j) //
-        egy_old += mtot*wt_i * (P[i].Pos[k] - pos_new_xyz[k])*All.cf_atime * (-P[i].GravAccel[k])*All.cf_a2inv; // work (i) //
+    egy_old += mtot*wt_j * 0.5 * P[j].Vel.norm_sq() * All.cf_a2inv; // kinetic energy (j) //
+    egy_old += mtot*wt_i * 0.5 * P[i].Vel.norm_sq() * All.cf_a2inv; // kinetic energy (i) //
+    // gravitational energy terms need to be added (including work for moving particles 'together') //
+    // Egrav = m*g*h = m * (-grav_acc) * (position relative to zero point) //
+    egy_old -= mtot*wt_j * dot(dr_j, P[j].GravAccel) * All.cf_a2inv; // work (j) //
+    egy_old -= mtot*wt_i * dot(dr_i, P[i].GravAccel) * All.cf_a2inv; // work (i) //
 #ifdef PMGRID
-        egy_old += mtot*wt_j * (P[i].Pos[k]+dp[k] - pos_new_xyz[k])*All.cf_atime * (-P[j].GravPM[k])*All.cf_a2inv; // work (j) [PMGRID] //
-        egy_old += mtot*wt_i * (P[i].Pos[k] - pos_new_xyz[k])*All.cf_atime * (-P[i].GravPM[k])*All.cf_a2inv; // work (i) [PMGRID] //
+    egy_old -= mtot*wt_j * dot(dr_j, P[j].GravPM) * All.cf_a2inv; // work (j) [PMGRID] //
+    egy_old -= mtot*wt_i * dot(dr_i, P[i].GravPM) * All.cf_a2inv; // work (i) [PMGRID] //
 #endif
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
-        CellP[j].GravWorkTerm[k] = 0; // since we're accounting for the work above and dont want to accidentally double-count //
+    CellP[j].GravWorkTerm = {}; // since we're accounting for the work above and dont want to accidentally double-count //
 #endif
-    }
+#ifdef MERGE_SPLIT_CONSERVE_ENERGY
+    /* Same accounting for the PREDICTED state, which carries its own (VelPred, InternalEnergyPred) pair
+       and is mass-weighted separately below. The true-state residual does not balance it, since VelPred
+       != Vel mid-step, so reusing it leaves the predicted state inconsistent -- and the hydro builds its
+       fluxes from the predicted state, so that error propagates. Must be captured here, before the
+       assignments below overwrite VelPred/InternalEnergyPred. GravAccel has no predicted variant, so the
+       work terms are the same ones. */
+    double egy_old_pred = mtot * (wt_j*CellP[j].InternalEnergyPred + wt_i*CellP[i].InternalEnergyPred);
+    egy_old_pred += mtot*wt_j * 0.5 * CellP[j].VelPred.norm_sq() * All.cf_a2inv;
+    egy_old_pred += mtot*wt_i * 0.5 * CellP[i].VelPred.norm_sq() * All.cf_a2inv;
+    egy_old_pred -= mtot*wt_j * dot(dr_j, P[j].GravAccel) * All.cf_a2inv;
+    egy_old_pred -= mtot*wt_i * dot(dr_i, P[i].GravAccel) * All.cf_a2inv;
+#ifdef PMGRID
+    egy_old_pred -= mtot*wt_j * dot(dr_j, P[j].GravPM) * All.cf_a2inv;
+    egy_old_pred -= mtot*wt_i * dot(dr_i, P[i].GravPM) * All.cf_a2inv;
+#endif
+#endif
 
 
     CellP[j].InternalEnergy = wt_j*CellP[j].InternalEnergy + wt_i*CellP[i].InternalEnergy;
     CellP[j].InternalEnergyPred = wt_j*CellP[j].InternalEnergyPred + wt_i*CellP[i].InternalEnergyPred;
-    double p_old_i[3],p_old_j[3];
-    for(k=0;k<3;k++)
-    {
-        p_old_i[k] = P[i].Mass * P[i].Vel[k];
-        p_old_j[k] = P[j].Mass * P[j].Vel[k];
-    }
-    for(k=0;k<3;k++)
-    {
-        P[j].Pos[k] = pos_new_xyz[k]; // center-of-mass conserving //
-        P[j].Vel[k] = wt_j*P[j].Vel[k] + wt_i*P[i].Vel[k]; // momentum-conserving //
-        CellP[j].VelPred[k] = wt_j*CellP[j].VelPred[k] + wt_i*CellP[i].VelPred[k]; // momentum-conserving //
-        P[j].GravAccel[k] = wt_j*P[j].GravAccel[k] + wt_i*P[i].GravAccel[k]; // force-conserving //
+    Vec3<double> p_old_i = P[i].Vel * P[i].Mass;
+    Vec3<double> p_old_j = P[j].Vel * P[j].Mass;
+    P[j].Pos = pos_new; // center-of-mass conserving //
+    P[j].Vel = P[j].Vel * wt_j + P[i].Vel * wt_i; // momentum-conserving //
+    CellP[j].VelPred = CellP[j].VelPred * wt_j + CellP[i].VelPred * wt_i; // momentum-conserving //
+    P[j].GravAccel = P[j].GravAccel * wt_j + P[i].GravAccel * wt_i; // force-conserving //
 #ifdef PMGRID
-        P[j].GravPM[k] = wt_j*P[j].GravPM[k] + wt_i*P[i].GravPM[k]; // force-conserving //
+    P[j].GravPM = P[j].GravPM * wt_j + P[i].GravPM * wt_i; // force-conserving //
 #endif
-    }
-#ifdef MAGNETIC 
+#ifdef MAGNETIC
     // we evolve the conservative variables VB and Vpsi, these should simply add in particle-merge operations //
-    for(k=0;k<3;k++) {
-        double B_before_split = (CellP[i].B[k] + CellP[j].B[k]) / (volume_before_merger_i + volume_before_merger_j); /* calculate the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed. here since VB is the conserved variable explicitly integrated, that gets added with the pre-summation volumes (so we take a volume-weighted mean here) */
-        CellP[j].BField_prerefinement[k] = B_before_split; CellP[i].BField_prerefinement[k] = B_before_split; /* record the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed */
-        CellP[j].B[k] += CellP[i].B[k]; CellP[j].BPred[k] += CellP[i].BPred[k]; CellP[j].DtB[k] += CellP[i].DtB[k]; /* simply add conserved quantities */
-        //CellP[j].DtB[k] = CellP[i].DtB[k] = 0; CellP[j].BPred[k] = CellP[j].B[k]; CellP[i].BPred[k] = CellP[i].B[k]; /* zero the time derivatives and cleaning terms: these will be re-calculated self-consistently from the new mesh configuration */
-    }
+    { Vec3<double> B_before_split = (CellP[i].B + CellP[j].B) * (1.0 / (volume_before_merger_i + volume_before_merger_j)); /* calculate the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed. here since VB is the conserved variable explicitly integrated, that gets added with the pre-summation volumes (so we take a volume-weighted mean here) */
+    CellP[j].BField_prerefinement = B_before_split; CellP[i].BField_prerefinement = B_before_split; } /* record the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed */
+    CellP[j].B += CellP[i].B; CellP[j].BPred += CellP[i].BPred; CellP[j].DtB += CellP[i].DtB; /* simply add conserved quantities */
+    //CellP[j].DtB = CellP[i].DtB = {}; CellP[j].BPred = CellP[j].B; CellP[i].BPred = CellP[i].B; /* zero the time derivatives and cleaning terms: these will be re-calculated self-consistently from the new mesh configuration */
     CellP[j].divB += CellP[i].divB; // CellP[i].divB = CellP[j].divB = 0; /* this is a conserved quantity (volume-integrated) so can simply be added */
 #ifdef DIVBCLEANING_DEDNER
-    CellP[j].Phi += CellP[i].Phi; CellP[j].PhiPred += CellP[i].PhiPred; CellP[j].DtPhi += CellP[i].DtPhi; for(k=0;k<3;k++) {CellP[j].DtB_PhiCorr[k] += CellP[j].DtB_PhiCorr[k];} /* on a merge, can simply add all of these conservative quantities */
-    //CellP[i].Phi = CellP[i].PhiPred = CellP[i].DtPhi = CellP[j].Phi = CellP[j].PhiPred = CellP[j].DtPhi = 0; for(k=0;k<3;k++) {CellP[i].DtB_PhiCorr[k] = CellP[j].DtB_PhiCorr[k] = 0;} /* zero the time derivatives and cleaning terms: these will be re-calculated self-consistently from the new mesh configuration */
+    CellP[j].Phi += CellP[i].Phi; CellP[j].PhiPred += CellP[i].PhiPred; CellP[j].DtPhi += CellP[i].DtPhi; CellP[j].DtB_PhiCorr += CellP[i].DtB_PhiCorr; /* on a merge, can simply add all of these conservative quantities */
+    //CellP[i].Phi = CellP[i].PhiPred = CellP[i].DtPhi = CellP[j].Phi = CellP[j].PhiPred = CellP[j].DtPhi = 0; CellP[i].DtB_PhiCorr = CellP[j].DtB_PhiCorr = {}; /* zero the time derivatives and cleaning terms: these will be re-calculated self-consistently from the new mesh configuration */
 #endif
 #endif
 
     /* correct our 'guess' for the internal energy with the residual from exact energy conservation */
-    double egy_new = mtot * CellP[j].InternalEnergy;
-    for(k=0;k<3;k++) {egy_new += mtot * 0.5*P[j].Vel[k]*P[j].Vel[k]*All.cf_a2inv;}
+    double egy_new = mtot * CellP[j].InternalEnergy + mtot * 0.5 * P[j].Vel.norm_sq() * All.cf_a2inv;
     egy_new = (egy_old - egy_new) / mtot; /* this residual needs to be put into the thermal energy */
     if(egy_new < -0.5*CellP[j].InternalEnergy) egy_new = -0.5 * CellP[j].InternalEnergy;
+#ifdef MERGE_SPLIT_CONSERVE_ENERGY
+    /* The merge sets the velocity momentum-conservingly, so the pair's COM-frame kinetic energy
+       (1/2)*mu*|dv|^2 leaves the kinetic budget; returning it here as heat makes the operation
+       energy-conserving. Without this the residual is computed and then discarded -- the line had
+       been commented out (originally marked '//???') since the earliest revision in this repo, so
+       every merge silently destroyed that energy: ~23% of the injected energy in the adiabatic
+       wind_singlestar test, where E_kin+E_th = L*t exactly. Auto-enabled with SINK_WIND_SPAWN
+       (precompiler_logic.h); MERGE_SPLIT_DISCARD_ENERGY opts back out. */
+    double egy_new_pred = mtot * CellP[j].InternalEnergyPred + mtot * 0.5 * CellP[j].VelPred.norm_sq() * All.cf_a2inv;
+    egy_new_pred = (egy_old_pred - egy_new_pred) / mtot;
+    if(egy_new_pred < -0.5*CellP[j].InternalEnergyPred) egy_new_pred = -0.5 * CellP[j].InternalEnergyPred;
+    CellP[j].InternalEnergy += egy_new; CellP[j].InternalEnergyPred += egy_new_pred;
+#else
     //CellP[j].InternalEnergy += egy_new; CellP[j].InternalEnergyPred += egy_new;//test during splits
+#endif
     if(CellP[j].InternalEnergyPred<0.5*CellP[j].InternalEnergy) CellP[j].InternalEnergyPred=0.5*CellP[j].InternalEnergy;
 
 
     // now use the conserved variables to correct the derivatives to primitive variables //
     de_ij -= dm_ij * CellP[j].InternalEnergyPred;
-    for(k=0;k<3;k++)
-    {
-        CellP[j].HydroAccel[k] = (dp_ij[k] - dm_ij * CellP[j].VelPred[k]/All.cf_atime) / mtot;
-        de_ij -= mtot * CellP[j].VelPred[k]/All.cf_atime * CellP[j].HydroAccel[k] + 0.5 * dm_ij * CellP[j].VelPred[k]*CellP[j].VelPred[k]*All.cf_a2inv;
-    }
+    CellP[j].HydroAccel = (dp_ij - CellP[j].VelPred * (dm_ij / All.cf_atime)) * (1.0 / mtot);
+    de_ij -= mtot * dot(CellP[j].VelPred, CellP[j].HydroAccel) / All.cf_atime + 0.5 * dm_ij * CellP[j].VelPred.norm_sq() * All.cf_a2inv;
     CellP[j].DtInternalEnergy = de_ij;
     // to be conservative adopt the maximum signal velocity and kernel length //
     CellP[j].MaxSignalVel = sqrt(CellP[j].MaxSignalVel*CellP[j].MaxSignalVel + CellP[i].MaxSignalVel*CellP[i].MaxSignalVel); /* need to be conservative */
@@ -1012,10 +1132,10 @@ int merge_particles_ij(int i, int j)
 
     // below, we need to take care of additional physics //
 #if defined(RADTRANSFER)
+    int k_dir;
     for(k=0;k<N_RT_FREQ_BINS;k++)
     {
-        int k_dir;
-        for(k_dir=0;k_dir<6;k_dir++) CellP[j].ET[k][k_dir] = wt_j*CellP[j].ET[k][k_dir] + wt_i*CellP[i].ET[k][k_dir];
+        CellP[j].ET[k] = wt_j * CellP[j].ET[k] + wt_i * CellP[i].ET[k];
         CellP[j].Rad_E_gamma[k] = CellP[j].Rad_E_gamma[k] + CellP[i].Rad_E_gamma[k]; /* this is a photon number, so its conserved (we simply add) */
 #if defined(RT_EVOLVE_ENERGY)
         CellP[j].Rad_E_gamma_Pred[k] = CellP[j].Rad_E_gamma_Pred[k] + CellP[i].Rad_E_gamma_Pred[k];
@@ -1129,17 +1249,13 @@ int merge_particles_ij(int i, int j)
         CellP[j].CosmicRay_Number_in_Bin[k_CRegy] += CellP[i].CosmicRay_Number_in_Bin[k_CRegy];
         CellP[j].DtCosmicRay_Number_in_Bin[k_CRegy] += CellP[i].DtCosmicRay_Number_in_Bin[k_CRegy];
 #endif
-        for(k=0;k<3;k++)
-        {
-            CellP[j].CosmicRayFlux[k_CRegy][k] += CellP[i].CosmicRayFlux[k_CRegy][k];
-            CellP[j].CosmicRayFluxPred[k_CRegy][k] += CellP[i].CosmicRayFluxPred[k_CRegy][k];
-        }
+        CellP[j].CosmicRayFlux[k_CRegy] += CellP[i].CosmicRayFlux[k_CRegy];
+        CellP[j].CosmicRayFluxPred[k_CRegy] += CellP[i].CosmicRayFluxPred[k_CRegy];
 #ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
-        for(k=0;k<3;k++)
-        {
-            CellP[j].CosmicRayAlfvenEnergy[k_CRegy][k] += CellP[i].CosmicRayAlfvenEnergy[k_CRegy][k];
-            CellP[j].CosmicRayAlfvenEnergyPred[k_CRegy][k] += CellP[i].CosmicRayAlfvenEnergyPred[k_CRegy][k];
-            CellP[j].DtCosmicRayAlfvenEnergy[k_CRegy][k] += CellP[i].DtCosmicRayAlfvenEnergy[k_CRegy][k];
+        int kAlfDir; for(kAlfDir=0; kAlfDir<2; kAlfDir++) {
+            CellP[j].CosmicRayAlfvenEnergy[k_CRegy][kAlfDir] += CellP[i].CosmicRayAlfvenEnergy[k_CRegy][kAlfDir];
+            CellP[j].CosmicRayAlfvenEnergyPred[k_CRegy][kAlfDir] += CellP[i].CosmicRayAlfvenEnergyPred[k_CRegy][kAlfDir];
+            CellP[j].DtCosmicRayAlfvenEnergy[k_CRegy][kAlfDir] += CellP[i].DtCosmicRayAlfvenEnergy[k_CRegy][kAlfDir];
         }
 #endif
     }
@@ -1150,16 +1266,13 @@ int merge_particles_ij(int i, int j)
 #endif
     
     /* finally zero out the particle mass so it will be deleted */
-    P[i].Mass = 0;
-    P[j].Mass = mtot;
-    for(k=0;k<3;k++)
-    {
-        /* momentum shift for passing to tree (so we know how to move it) */
-        P[i].dp[k] += P[i].Mass*P[i].Vel[k] - p_old_i[k];
-        P[j].dp[k] += P[j].Mass*P[j].Vel[k] - p_old_j[k];
-    }
+    P[i].Mass = 0; CellP[i].Mass = P[i].Mass;
+    P[j].Mass = mtot; CellP[j].Mass = P[j].Mass;
+    /* momentum shift for passing to tree (so we know how to move it) */
+    P[i].dp += P[i].Vel * P[i].Mass - p_old_i;
+    P[j].dp += P[j].Vel * P[j].Mass - p_old_j;
     /* call the pressure routine to re-calculate pressure (and sound speeds) as needed */
-    set_eos_pressure(j);
+    set_eos_pressure(j, P, CellP);
 #if defined(MHD_CONSERVE_B_ON_REFINEMENT)
     /* flag cells as having just undergone refinement/derefinement for other subroutines to be aware */
     CellP[j].recent_refinement_flag = CellP[i].recent_refinement_flag = 1;
@@ -1171,27 +1284,31 @@ int merge_particles_ij(int i, int j)
 /*!
   This routine swaps the location of two pointers/indices (either to a node or to a particle) in the treewalk needed for neighbor searches and gravity.
   This should be run if you are messing around with the indices of things but don't intend to do a whole treebuild after. - MYG
+  CAVEAT: both slots must currently be IN the tree. If one is not (e.g. a freshly split daughter that
+  was never spliced in), the swap silently orphans the real particle: it becomes unreachable from the
+  walk and its Father[] is garbage. Cost is O(all tree nodes) per call -- the price of not rebuilding.
  */
 
 void swap_treewalk_pointers(int i, int j){
     // walk the tree and any time we see a nextnode or sibling set to i, swap it to j and vice versa
-    int no, next, pre_sibling_i=-1, pre_sibling_j=-1, previous_node_i, previous_node_j;
+    double _t0 = my_second(); TreeMaintCount_SwapPointers++;
+    int no, next;
     no = All.MaxPart;
 
     while(no >= 0){ // walk the whole tree, starting from the root node (=All.MaxPart)
         if(no < All.MaxPart) { // we got a particle
             next=Nextnode[no];
             if(no != i && no != j){ // don't mess with Nextnodes if looking at i or j - handle that separately
-                if(next == i) {Nextnode[no] = j; previous_node_i = no;}
-                else if(next == j) { Nextnode[no] = i; previous_node_j = no;}
+                if(next == i) {Nextnode[no] = j;}
+                else if(next == j) {Nextnode[no] = i;}
             }
             no = next;
         } else if(no < All.MaxPart+MaxNodes)  { // we have a node
             next = Nodes[no].u.d.nextnode;
-            if(next == i) { previous_node_i = no; Nodes[no].u.d.nextnode = j;}
-            else if(next == j) { previous_node_j = no; Nodes[no].u.d.nextnode = i;}
-            if(Nodes[no].u.d.sibling == i) {Nodes[no].u.d.sibling = j; pre_sibling_i = no;}
-            else if(Nodes[no].u.d.sibling == j) { Nodes[no].u.d.sibling = i; pre_sibling_j = no;}
+            if(next == i) {Nodes[no].u.d.nextnode = j;}
+            else if(next == j) {Nodes[no].u.d.nextnode = i;}
+            if(Nodes[no].u.d.sibling == i) {Nodes[no].u.d.sibling = j;}
+            else if(Nodes[no].u.d.sibling == j) {Nodes[no].u.d.sibling = i;}
             no = next;
         } else { // pseudoparticle
             next = Nextnode[no - MaxNodes];
@@ -1215,11 +1332,17 @@ void swap_treewalk_pointers(int i, int j){
     no = Father[i];
     Father[i] = Father[j];
     Father[j] = no;
+    TreeMaintTime_SwapPointers += my_second() - _t0;
 }
 
 
 /*!
-  This routine deletes a particle from the linked list for the treewalk, preserving the lists's integrity. This must be run if you are deleting particles but don't want to do a while treebuild after. - MYG
+  This routine deletes a particle from the linked list for the treewalk, preserving the LIST's integrity
+  (Nextnode/sibling threading only). It does NOT touch Father[] of anything, and it does NOT remove the
+  particle's contribution from any ancestor node moment (mass, N_part, hmax, ...) -- those stay stale
+  until the next rebuild or moments refresh. Callers rely on the removed slot always being NumPart-1
+  immediately before NumPart--, so its stale Father/Nextnode fall out of every i<NumPart loop and are
+  overwritten on slot reuse. - MYG
 */
 void remove_particle_from_treewalk(int i){
     int no, next;
@@ -1253,6 +1376,8 @@ void remove_particle_from_treewalk(int i){
  */
 void rearrange_particle_sequence(void)
 {
+    TreeOpsCount[TREEOPS_REARRANGE]++;
+    double _t0_rearr = my_second();
     int i, j, flag = 0, flag_sum, j_next;
     int count_elim, count_gaselim, count_sink_elim, tot_elim, tot_gaselim, tot_sink_elim;
     struct particle_data psave;
@@ -1322,7 +1447,7 @@ void rearrange_particle_sequence(void)
     for(i = 0; i < NumPart; i++)
         if(P[i].Mass <= 0 || !isfinite(P[i].Mass))
         {
-            P[i].Mass = 0;
+            P[i].Mass = 0; CellP[i].Mass = P[i].Mass;
             TimeBinCount[P[i].TimeBin]--;
             if(TimeBinActive[P[i].TimeBin]) {NumForceUpdate--;}
 
@@ -1383,6 +1508,29 @@ void rearrange_particle_sequence(void)
 
     MPI_Allreduce(&flag, &flag_sum, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     if(flag_sum) {reconstruct_timebins();}
+#ifndef MAINTAIN_TREE_IN_REARRANGE
+    /* Slots moved and nothing above repaired the tree's walk links: the standing tree no longer
+       describes the particle list. Condemn it deterministically -- flag_sum is the SUM every rank
+       just reduced, so all ranks agree, and no walk may run before the rebuild. Covers every
+       elimination path (swallow victims, outflow BCs, excision, mergers) and every reorder in one
+       place; the old code was safe only when a rebuild happened to follow. (cf. gizmo-cpp a06e0073) */
+    if(flag_sum) {TreeReconstructFlag = 1;}
+#else
+    /* Topology was maintained per-swap above, but an eliminated particle's mass and type-conditioned
+       contributions are still in every ancestor moment. Re-derive them before the next force
+       evaluation -- tot_elim is Allreduce'd above, so this is rank-uniform. Safety net: this fires
+       even if the site that zeroed the mass forgot to raise the moments flag itself. */
+    if(tot_elim > 0) {TreeMomentsStaleFlag = 1;}
+    if(flag) {TreeWalkValidatePending = 1;} /* rank-local note: this rank's threading was edited; the next tree consumer validates it (tier-0) */
+    if(flag || count_elim) {TreeAuditMomentsPending = 1;} /* the next refresh audits moments un-strided: post-mutation is exactly when a wrong Father shows as a moment mismatch */
+#ifdef TREE_INTEGRITY_AUDITS
+    /* not when the tree is about to be freed (decomposition prelude): splits there deliberately
+       leave daughters uninserted, which the audit would misread as orphans (and the audit work
+       would be spent on a structure nothing will walk) */
+    if(flag && !TreeDiscardImminent) {force_tree_full_audit(0, "rearrange");}
+#endif
+#endif
+    TreeMaintTime_Rearrange += my_second() - _t0_rearr;
 }
 
 
@@ -1396,17 +1544,17 @@ double evaluate_starstar_merger_for_starcluster_particle_pair(int i, int j)
         double eta_position = 1., eta_velocity2 = 2.; // variables for below, defined for convenience here
         
         // consider separation and relative velocities
-        int k; double dp[3], r2=0; for(k=0;k<3;k++) {dp[k]=P[j].Pos[k]-P[i].Pos[k];} // calculate separation
-        NEAREST_XYZ(dp[0],dp[1],dp[2],-1); // correct for box appropriately
-        for(k=0;k<3;k++) {r2+=dp[k]*dp[k];} // squared position difference
+        int k; Vec3<double> dp = P[j].Pos - P[i].Pos; // calculate separation
+        nearest_xyz(dp,-1); // correct for box appropriately
+        double r2 = dp.norm_sq(); // squared position difference
         
         double eps_i = ForceSoftening_KernelRadius(i), eps_j = ForceSoftening_KernelRadius(j), eps_ij = DMAX(eps_i,eps_j);
         double threshold_separation = eta_position * eps_ij; // threshold separation to consider
         if(r2 > threshold_separation*threshold_separation) {return -1;} // only allow if sufficiently close
         
-        double dv[3], v2=0; for(k=0;k<3;k++) {dv[k]=P[j].Vel[k]-P[i].Vel[k];} // calculate separation
+        Vec3<double> dv = P[j].Vel - P[i].Vel; // calculate velocity difference
         NGB_SHEARBOX_BOUNDARY_VELCORR_(P[i].Pos,P[j].Pos,dv,-1); // correct for box appropriately
-        for(k=0;k<3;k++) {v2+=dv[k]*dv[k];} // squared velocity difference
+        double v2 = dv.norm_sq(); // squared velocity difference
         v2 *= All.cf_a2inv; // physical
         
         double threshold_velocity2 = eta_velocity2 * All.G*(P[i].Mass+P[j].Mass)/(All.cf_atime*sqrt(r2)); // threshold 'escape' velocity to consider
@@ -1432,14 +1580,14 @@ int evaluate_starstar_merger_for_starcluster_eligibility(int i)
     double r_NGB = 1.25 * pow((All.DesNumNgb*All.G*P[i].Mass)/P[i].tidal_tensor_mag_prev , 1./3.); // kernel size enclosing some target neighbor number in a constant-density medium
     if(r_NGB > 0.5*ForceSoftening_KernelRadius(i)) {return 0;} // sufficiently dense region (need to have effective nearest-neighbor spacing approaching the minimum softening, with some arbitrary threshold we set)
 #elif defined(COMPUTE_TIDAL_TENSOR_IN_GRAVTREE)
-    double h_i=ForceSoftening_KernelRadius(i), tidal_mag=0., fac_self=-P[i].Mass*kernel_gravity(0.,1.,1.,1)/(h_i*h_i*h_i); int k,j; // get what's needed for tidal tensor computation
-    for(k=0;k<3;k++) {tidal_mag -= P[i].tidal_tensorps[k][k];} // want the trace, actually, and in general this -shouldn't- include the self-contribution
+    double h_i=ForceSoftening_KernelRadius(i), tidal_mag=0., fac_self=-P[i].Mass*kernel_gravity(0.,1.,1.,1)/(h_i*h_i*h_i); // get what's needed for tidal tensor computation
+    tidal_mag -= P[i].tidal_tensorps.trace(); // want the (negative) trace, actually, and in general this -shouldn't- include the self-contribution
     if(tidal_mag > 0) {
         double ngb_dist = 1.25 * pow( (All.DesNumNgb * All.G * P[i].Mass / tidal_mag) , 1./3. ); // distance to the N'th nearest-neighbor
         if(ngb_dist > h_i) {return 0;} // sufficiently dense region (need to have effective nearest-neighbor spacing approaching the minimum softening, with some arbitrary threshold we set)
     }
 #else
-    if(GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i)*UNIT_TIME_IN_GYR*1000. > 0.01) {return 0;} // if the particle is taking a very long timestep, it's probably in a very low-density region, so don't allow it to merge (this is a crude proxy for the local density, but it's very fast to check and works well in practice) 
+    if(get_particle_timestep_in_physical(i)*UNIT_TIME_IN_GYR*1000. > 0.01) {return 0;} // if the particle is taking a very long timestep, it's probably in a very low-density region, so don't allow it to merge (this is a crude proxy for the local density, but it's very fast to check and works well in practice) 
 #endif
     return 1; // allow this particle to -consider- the possibility of a merger
 }
@@ -1457,7 +1605,7 @@ int check_if_sufficient_mergesplit_time_has_passed(int i)
 #endif
     if(P[i].Time_Of_Last_MergeSplit <= All.TimeBegin) {N_timesteps_fac *= 10. * get_random_number(832LL*i + 890345645LL + 83457LL*ThisTask + 12313403LL*P[i].ID);} // spread initial timing out over a broader range so it doesn't all happen at once after the startup
     double dtime_code = All.Time - P[i].Time_Of_Last_MergeSplit; // time [in code units] since last merge/split
-    double dt_incodescale = (GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i) * All.cf_hubble_a) * All.cf_atime; // timestep converted appropriately to code units [physical if non-comoving, else scale factor]
+    double dt_incodescale = (get_particle_timestep_in_physical(i) * All.cf_hubble_a) * All.cf_atime; // timestep converted appropriately to code units [physical if non-comoving, else scale factor]
     if(dtime_code < N_timesteps_fac*dt_incodescale) {return 0;} // not enough time passed, prohibit
 #if !defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM)
     if(All.ComovingIntegrationOn) {if(dtime_code < 1.e-8) {return 0;}} // also enforce an absolute time limit (don't use for nuclear zooms since absolute timesteps can become arbitrarily short

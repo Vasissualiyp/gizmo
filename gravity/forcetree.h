@@ -29,7 +29,11 @@
 #define BITFLAG_INSIDE_LINKINGLENGTH       9
 
 void force_update_tree(void);
-
+void force_refresh_node_moments(void);
+void force_validate_tree_links(const char *tag);
+#ifdef TREE_INTEGRITY_AUDITS
+void force_tree_full_audit(int audit_moments, const char *tag);
+#endif
 
 void force_flag_localnodes(void);
 
@@ -43,13 +47,13 @@ void force_drift_node(int no, integertime time1);
 void force_tree_discardpartials(void);
 void force_treeupdate_pseudos(int);
 void force_update_pseudoparticles(void);
-void force_kick_node(int i, MyDouble *dv);
+void force_kick_node(int i, Vec3<MyDouble>& dv);
 void force_dynamic_update(void);
 void force_dynamic_update_node(int no, int mode, MyFloat *minbound, MyFloat *maxbound);
 void force_update_hmax(void);
 void force_update_hmax_of_node(int no, int mode);
 void force_finish_kick_nodes(void);
-void force_create_empty_nodes(int no, int topnode, int bits, int x, int y, int z, int *nodecount, int *nextfree);
+int force_create_empty_nodes(int no, int topnode, int bits, int x, int y, int z, int *nodecount, int *nextfree);
 void force_exchange_pseudodata(void);
 void force_insert_pseudo_particles(void);
 void force_add_element_to_tree(int igas, int istar);
@@ -90,13 +94,16 @@ void ngb_treefind_flagexport(MyDouble searchcenter[3], MyFloat hguess);
 
 
 int ngb_treefind_pairs_threads(MyDouble searchcenter[3], MyFloat rkern, int target, int *startnode,
-		       int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist);		       
+		       int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist);
+inline int ngb_treefind_pairs_threads(const Vec3<MyDouble>& searchcenter, MyFloat rkern, int target, int *startnode, int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist) { return ngb_treefind_pairs_threads(const_cast<MyDouble*>(searchcenter.data), rkern, target, startnode, mode, exportflag, exportnodecount, exportindex, ngblist); }
 int ngb_treefind_variable_targeted(MyDouble searchcenter[3], MyFloat rkern, int target, int *startnode, int mode,
  			  int *nexport, int *nsend_local, int TARGET_BITMASK);
+inline int ngb_treefind_variable_targeted(const Vec3<MyDouble>& searchcenter, MyFloat rkern, int target, int *startnode, int mode, int *nexport, int *nsend_local, int TARGET_BITMASK) { return ngb_treefind_variable_targeted(const_cast<MyDouble*>(searchcenter.data), rkern, target, startnode, mode, nexport, nsend_local, TARGET_BITMASK); }
 int ngb_treefind_pairs_targeted(MyDouble searchcenter[3], MyFloat rkern, int target, int *startnode, int mode,
                                    int *nexport, int *nsend_local, int TARGET_BITMASK);
 int ngb_treefind_variable_threads(MyDouble searchcenter[3], MyFloat rkern, int target, int *startnode, int mode,
 			  int *exportflag, int *exportnodecount, int *exportindex, int *ngblist);
+inline int ngb_treefind_variable_threads(const Vec3<MyDouble>& searchcenter, MyFloat rkern, int target, int *startnode, int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist) { return ngb_treefind_variable_threads(const_cast<MyDouble*>(searchcenter.data), rkern, target, startnode, mode, exportflag, exportnodecount, exportindex, ngblist); }
 
 #endif
 

@@ -33,9 +33,9 @@ static int N_gas_swallowed, N_star_swallowed, N_dm_swallowed, N_sink_swallowed;
 /* this structure defines the variables that need to be sent -from- the 'searching' element */
 struct INPUT_STRUCT_NAME
 {
-    int NodeList[NODELISTLENGTH]; MyDouble Pos[3]; MyFloat Vel[3], KernelRadius, Mass, Sink_Mass, Dt, Mdot; MyIDType ID, ID_child_number, ID_generation;
+    int NodeList[NODELISTLENGTH]; Vec3<MyDouble> Pos; Vec3<MyFloat> Vel; MyFloat KernelRadius, Mass, Sink_Mass, Dt, Mdot; MyIDType ID, ID_child_number, ID_generation;
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS) || defined(SINK_WIND_KICK)
-    MyFloat Jgas_in_Kernel[3];
+    Vec3<MyFloat> Jgas_in_Kernel;
 #endif
 #ifdef SINK_ALPHADISK_ACCRETION
     MyFloat Sink_Mass_Reservoir;
@@ -44,10 +44,10 @@ struct INPUT_STRUCT_NAME
     MyFloat Sink_angle_weighted_kernel_sum;
 #endif
 #if defined(SINK_RETURN_ANGMOM_TO_GAS)
-    MyFloat Sink_Specific_AngMom[3], angmom_norm_topass_in_swallowloop;
+    Vec3<MyFloat> Sink_Specific_AngMom; MyFloat angmom_norm_topass_in_swallowloop;
 #endif
 #if defined(SINK_RETURN_BFLUX)
-    MyFloat B[3];
+    Vec3<MyFloat> B;
     MyFloat kernel_norm_topass_in_swallowloop;
 #endif
 #ifdef SINGLE_STAR_FB_LOCAL_RP
@@ -60,13 +60,13 @@ struct INPUT_STRUCT_NAME
 static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
 {
     int k, j_tempinfo; j_tempinfo = P[i].IndexMapToTempStruc; /* link to the location in the shared structure where this is stored */
-    for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k]; in->Vel[k]=P[i].Vel[k];} /* good example - always needed */
+    in->Pos=P[i].Pos; in->Vel=P[i].Vel; /* good example - always needed */
     in->KernelRadius = P[i].KernelRadius; in->Mass = P[i].Mass; in->Sink_Mass = P[i].Sink_Mass; in->ID = P[i].ID; in->ID_child_number=P[i].ID_child_number; in->ID_generation=P[i].ID_generation; in->Mdot = P[i].Sink_Mdot;
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS) || defined(SINK_WIND_KICK)
 #if defined(SINK_FOLLOW_ACCRETED_ANGMOM)
-    for(k=0;k<3;k++) {in->Jgas_in_Kernel[k] = P[i].Sink_Specific_AngMom[k];}
+    in->Jgas_in_Kernel = P[i].Sink_Specific_AngMom;
 #else
-    for(k=0;k<3;k++) {in->Jgas_in_Kernel[k] = SinkTempInfo[j_tempinfo].Jgas_in_Kernel[k];}
+    in->Jgas_in_Kernel = SinkTempInfo[j_tempinfo].Jgas_in_Kernel;
 #endif
 #endif
 #ifdef SINK_ALPHADISK_ACCRETION
@@ -75,16 +75,16 @@ static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int l
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS)
     in->Sink_angle_weighted_kernel_sum = SinkTempInfo[j_tempinfo].Sink_angle_weighted_kernel_sum;
 #endif
-    in->Dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(i);
+    in->Dt = get_particle_feedback_timestep_in_physical(i);
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
     in->Dt = P[i].dt_since_last_gas_search;
 #endif
 #if defined(SINK_RETURN_ANGMOM_TO_GAS)
-    for(k=0;k<3;k++) {in->Sink_Specific_AngMom[k] = P[i].Sink_Specific_AngMom[k];}
+    in->Sink_Specific_AngMom = P[i].Sink_Specific_AngMom;
     in->angmom_norm_topass_in_swallowloop = SinkTempInfo[j_tempinfo].angmom_norm_topass_in_swallowloop;
 #endif
 #if defined(SINK_RETURN_BFLUX)
-    for(k=0;k<3;k++) {in->B[k] = P[i].B[k];}
+    in->B = P[i].B;
     in->kernel_norm_topass_in_swallowloop = SinkTempInfo[j_tempinfo].kernel_norm_topass_in_swallowloop;
 #endif
 #ifdef SINGLE_STAR_FB_LOCAL_RP
@@ -109,17 +109,17 @@ struct OUTPUT_STRUCT_NAME
     MyDouble accreted_photon_energy;
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_MOMENTUM)
-    MyDouble accreted_momentum[3];
+    Vec3<MyDouble> accreted_momentum;
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_COM)
-    MyDouble accreted_centerofmass[3];
+    Vec3<MyDouble> accreted_centerofmass;
 #endif
 #if defined(SINK_RETURN_BFLUX)
-    MyDouble accreted_B[3];
+    Vec3<MyDouble> accreted_B;
 //    MyDouble accreted_Phi;
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_ANGMOM)
-    MyDouble accreted_J[3];
+    Vec3<MyDouble> accreted_J;
 #endif
 #ifdef SINK_COUNTPROGS
     int Sink_CountProgs;
@@ -148,16 +148,16 @@ static inline void OUTPUTFUNCTION_NAME(struct OUTPUT_STRUCT_NAME *out, int i, in
     ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_photon_energy, out->accreted_photon_energy, mode);
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_MOMENTUM)
-    for(k=0;k<3;k++) {ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_momentum[k], out->accreted_momentum[k], mode);}
+    ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_momentum, out->accreted_momentum, mode);
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_COM)
-    for(k=0;k<3;k++) {ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_centerofmass[k], out->accreted_centerofmass[k], mode);}
+    ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_centerofmass, out->accreted_centerofmass, mode);
 #endif
 #if defined(SINK_RETURN_BFLUX)
-    for(k=0;k<3;k++) {ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_B[k], out->accreted_B[k], mode);}
+    ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_B, out->accreted_B, mode);
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_ANGMOM)
-    for(k=0;k<3;k++) {ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_J[k], out->accreted_J[k], mode);}
+    ASSIGN_ADD_PRESET(SinkTempInfo[target].accreted_J, out->accreted_J, mode);
 #endif
 #ifdef SINK_COUNTPROGS
     P[i].Sink_CountProgs += out->Sink_CountProgs;
@@ -185,9 +185,9 @@ int sink_swallow_and_kick_evaluate(int target, int mode, int *exportflag, int *e
 #endif
 #endif
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS) || defined(SINK_WIND_KICK)
-    double J_dir[3]; for(k=0;k<3;k++) {J_dir[k] = local.Jgas_in_Kernel[k];}
-    double norm=0; for(k=0;k<3;k++) {norm+=J_dir[k]*J_dir[k];}
-    if(norm>0) {norm=1/sqrt(norm); for(k=0;k<3;k++) {J_dir[k]*=norm;}} else {J_dir[0]=J_dir[1]=0; J_dir[2]=1;}
+    Vec3<double> J_dir{(double)local.Jgas_in_Kernel[0], (double)local.Jgas_in_Kernel[1], (double)local.Jgas_in_Kernel[2]};
+    double norm = J_dir.norm_sq();
+    if(norm>0) {norm=1/sqrt(norm); J_dir *= norm;} else {J_dir[0]=J_dir[1]=0; J_dir[2]=1;}
 #endif
 #if defined(SINK_WIND_KICK)
     double sink_mass_withdisk=local.Sink_Mass;
@@ -224,29 +224,25 @@ int sink_swallow_and_kick_evaluate(int target, int mode, int *exportflag, int *e
                 }
                 double Mass_j_0 = Mass_j, InternalEnergy_j_0 = InternalEnergy_j, Vel_j_0[3]; for(k=0;k<3;k++) {Vel_j_0[k]=Vel_j[k];} // save initial values to know if we need to update neighbor values below
                 
-                double dpos[3]={0},dvel[3]={0}; for(k=0;k<3;k++) {dpos[k]=P[j].Pos[k]-local.Pos[k]; dvel[k]=Vel_j[k]-local.Vel[k];}
-                NEAREST_XYZ(dpos[0],dpos[1],dpos[2],-1); /*  find the closest image in the given box size  */
+                Vec3<double> dpos = P[j].Pos - local.Pos;
+                Vec3<double> dvel{Vel_j[0]-local.Vel[0], Vel_j[1]-local.Vel[1], Vel_j[2]-local.Vel[2]};
+                nearest_xyz(dpos,-1); /*  find the closest image in the given box size  */
                 NGB_SHEARBOX_BOUNDARY_VELCORR_(local.Pos,P[j].Pos,dvel,-1); /* wrap velocities for shearing boxes if needed */
-                double r2=0; for(k=0;k<3;k++) {r2+=dpos[k]*dpos[k];}
+                double r2 = dpos.norm_sq();
 
-                
 #if defined(SINK_RETURN_ANGMOM_TO_GAS) || defined(SINK_RETURN_BFLUX)
                 double wk, dwk, u=0;
                 if(P[j].Type == 0){
-                    for(k=0;k<3;k++) {u+=dpos[k]*dpos[k];}
-                    u=sqrt(u)/DMAX(h_i, P[j].KernelRadius); if(u<1) { kernel_main(u,1., 1.,&wk,&dwk,-1); } else {wk=dwk=0;}
+                    u=sqrt(r2)/DMAX(h_i, P[j].KernelRadius); if(u<1) { kernel_main(u,1., 1.,&wk,&dwk,-1); } else {wk=dwk=0;}
                 }
 #endif
 #if defined(SINK_RETURN_ANGMOM_TO_GAS) /* this should go here [right before the loop that accretes it back onto the BH] */
                 if(P[j].Type == 0)
                 {
-                    double dlv[3]; dlv[0]=local.Sink_Specific_AngMom[1]*dpos[2]-local.Sink_Specific_AngMom[2]*dpos[1]; dlv[1]=local.Sink_Specific_AngMom[2]*dpos[0]-local.Sink_Specific_AngMom[0]*dpos[2]; dlv[2]=local.Sink_Specific_AngMom[0]*dpos[1]-local.Sink_Specific_AngMom[1]*dpos[0];
-                    for(k=0;k<3;k++) {
-                        dlv[k] *= wk * local.angmom_norm_topass_in_swallowloop;
-                        Vel_j[k] += dlv[k];
-                        out.accreted_momentum[k]-=Mass_j*dlv[k];
-                    }
-                    out.accreted_J[0]-=Mass_j*(dpos[1]*dlv[2] - dpos[2]*dlv[1]); out.accreted_J[1]-=Mass_j*(dpos[2]*dlv[0] - dpos[0]*dlv[2]); out.accreted_J[2]-=Mass_j*(dpos[0]*dlv[1] - dpos[1]*dlv[0]);
+                    Vec3<double> dlv = cross(local.Sink_Specific_AngMom, dpos) * (wk * local.angmom_norm_topass_in_swallowloop);
+                    for(k=0;k<3;k++) {Vel_j[k] += dlv[k];}
+                    out.accreted_momentum -= Mass_j * dlv;
+                    out.accreted_J -= Mass_j * cross(dpos, dlv);
                 }
 #endif
 #if defined(SINK_RETURN_BFLUX) // do a kernel-weighted redistribution of the magnetic flux in the sink into surrounding particles
@@ -299,19 +295,17 @@ int sink_swallow_and_kick_evaluate(int target, int mode, int *exportflag, int *e
 		            }
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_MOMENTUM)
-                    for(k=0;k<3;k++) {out.accreted_momentum[k] += ( mcount_for_conserve * dvel[k]);}
+                    out.accreted_momentum += mcount_for_conserve * dvel;
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_COM)
-                    for(k=0;k<3;k++) {out.accreted_centerofmass[k] += (mcount_for_conserve * dpos[k]);}
+                    out.accreted_centerofmass += mcount_for_conserve * dpos;
 #endif
 #ifdef SINK_RETURN_BFLUX
-                    for(k=0;k<3;k++) {out.accreted_B[k] += (CellP[j].BPred[k]);}
+                    out.accreted_B += CellP[j].BPred;
 #endif
 #if defined(SINK_FOLLOW_ACCRETED_ANGMOM)
-                    out.accreted_J[0] += (mcount_for_conserve * ( dpos[1]*dvel[2] - dpos[2]*dvel[1] ));
-                    out.accreted_J[1] += (mcount_for_conserve * ( dpos[2]*dvel[0] - dpos[0]*dvel[2] ));
-                    out.accreted_J[2] += (mcount_for_conserve * ( dpos[0]*dvel[1] - dpos[1]*dvel[0] ));
-                    if(P[j].Type == 5) {for(k=0;k<3;k++) {out.accreted_J[k] += (mcount_for_conserve * P[j].Sink_Specific_AngMom[k]);}}
+                    out.accreted_J += mcount_for_conserve * cross(dpos, dvel);
+                    if(P[j].Type == 5) {out.accreted_J += mcount_for_conserve * P[j].Sink_Specific_AngMom;}
 #endif
 
                     
@@ -339,6 +333,9 @@ int sink_swallow_and_kick_evaluate(int target, int mode, int *exportflag, int *e
 #endif
 #ifdef SINK_WIND_SPAWN
                         out_accreted_Sink_Mass_alphaornot += (P[j].unspawned_wind_mass);
+#ifdef SINGLE_STAR_FB_JETS
+                        out_accreted_Sink_Mass_alphaornot += (P[j].unspawned_jet_mass); // the jet reservoir too, or a merger loses it
+#endif
 #endif
 #ifdef SINK_COUNTPROGS
                         out.Sink_CountProgs += P[j].Sink_CountProgs;
@@ -407,15 +404,15 @@ int sink_swallow_and_kick_evaluate(int target, int mode, int *exportflag, int *e
                         double Mass_initial = Mass_j; // save this for possible IO below
                         Mass_j *= (1-f_accreted);
 #ifdef SINK_WIND_KICK     /* BAL kicking operations. NOTE: we have two separate BAL wind models, particle kicking and smooth wind model. This is where we do the particle kicking BAL model. This should also work when there is alpha-disk. */
-                        double v_kick=All.Sink_outflow_velocity, dir[3]; for(k=0;k<3;k++) {dir[k]=dpos[k];} // DAA: default direction is radially outwards
+                        double v_kick=All.Sink_outflow_velocity; Vec3<double> dir={dpos[0],dpos[1],dpos[2]}; // DAA: default direction is radially outwards
 #if defined(COSMIC_RAY_FLUID) && defined(SINK_COSMIC_RAYS) /* inject cosmic rays alongside wind injection */
                         double dEcr = All.Sink_CosmicRay_Injection_Efficiency * Mass_j * (All.Sink_accreted_fraction/(1.-All.Sink_accreted_fraction)) * C_LIGHT_CODE*C_LIGHT_CODE;
-                        inject_cosmic_rays(dEcr,All.Sink_outflow_velocity,5,j,dir);
+                        inject_cosmic_rays(dEcr,All.Sink_outflow_velocity,5,j,dir.data_ptr(), P, CellP);
 #endif
 #if (SINK_WIND_KICK < 0)  /* DAA: along polar axis defined by angular momentum within Kernel (we could add finite opening angle) work out the geometry w/r to the plane of the disk */
-                        if((dir[0]*J_dir[0] + dir[1]*J_dir[1] + dir[2]*J_dir[2]) > 0){for(k=0;k<3;k++) {dir[k]=J_dir[k];}} else {for(k=0;k<3;k++) {dir[k]=-J_dir[k];}}
+                        if(dot(dir,J_dir) > 0){dir=J_dir;} else {dir=-J_dir;}
 #endif
-                        for(k=0,norm=0;k<3;k++) {norm+=dir[k]*dir[k];} if(norm<=0) {dir[0]=0;dir[1]=0;dir[2]=1;norm=1;} else {norm=sqrt(norm); dir[0]/=norm;dir[1]/=norm;dir[2]/=norm;}
+                        norm=dir.norm_sq(); if(norm<=0) {dir={0,0,1};norm=1;} else {norm=sqrt(norm); dir/=norm;}
                         for(k=0;k<3;k++) {Vel_j[k]+=v_kick*All.cf_atime*dir[k];}
 #ifdef GALSF_SUBGRID_WINDS // if sub-grid galactic winds are decoupled from the hydro, we decouple the sink kick winds as well
                         #pragma omp atomic write
@@ -429,9 +426,9 @@ int sink_swallow_and_kick_evaluate(int target, int mode, int *exportflag, int *e
                         #pragma omp atomic
                         N_gas_swallowed++;
 #ifdef OUTPUT_SINK_ACCRETION_HIST
-                        MyDouble tempB[3]={0,0,0};
+                        Vec3<MyDouble> tempB={};
 #ifdef MAGNETIC
-                        for(k=0;k<3;k++) {tempB[k]=Get_Gas_BField(j,k);} //use particle magnetic field
+                        tempB = CellP[j].Bfield(); //use particle magnetic field
 #endif
                         fprintf(FdSinkSwallowDetails,"%.16g %llu %llu %llu %g %2.16g %2.16g %2.16g %llu %llu %llu %g %2.16g %2.16g %2.16g %2.16g %2.16g %2.16g %2.16g %2.16g %2.16g %2.16g %2.16g\n", All.Time, (unsigned long long)local.ID,(unsigned long long)local.ID_child_number,(unsigned long long)local.ID_generation,local.Mass,local.Pos[0],local.Pos[1],local.Pos[2],  (unsigned long long)P[j].ID, (unsigned long long)P[j].ID_child_number, (unsigned long long)P[j].ID_generation, Mass_initial, (P[j].Pos[0]-local.Pos[0]),(P[j].Pos[1]-local.Pos[1]),(P[j].Pos[2]-local.Pos[2]), (Vel_j[0]-local.Vel[0]),(Vel_j[1]-local.Vel[1]),(Vel_j[2]-local.Vel[2]), CellP[j].InternalEnergy, tempB[0], tempB[1], tempB[2], CellP[j].Density); fflush(FdSinkSwallowDetails);
 #endif
@@ -445,16 +442,16 @@ int sink_swallow_and_kick_evaluate(int target, int mode, int *exportflag, int *e
                 /* now, do any other feedback "kick" operations (which used the previous loops to calculate weights) */
                 if(mom>0 && local.Dt>0 && OriginallyMarkedSwallowID==0 && P[j].SwallowID==0 && Mass_j>0 && P[j].Type==0) // particles NOT being swallowed!
                 {
-                    double r=0, dir[3]; for(k=0;k<3;k++) {dir[k]=dpos[k]; r+=dir[k]*dir[k];} // should be away from BH
+                    double r=dpos.norm_sq(); Vec3<double> dir={dpos[0],dpos[1],dpos[2]}; // should be away from BH
                     if(r>0)
                     {
-                        r=sqrt(r); for(k=0;k<3;k++) {dir[k]/=r;} /* cos_theta with respect to disk of sink is given by dot product of r and Jgas */
-                        for(norm=0,k=0;k<3;k++) {norm+=dir[k]*J_dir[k];}
+                        r=sqrt(r); dir/=r; /* cos_theta with respect to disk of sink is given by dot product of r and Jgas */
+                        norm=dot(dir,J_dir);
                         mom_wt = sink_fb_angleweight_localcoupling(j,norm,r,h_i) / local.Sink_angle_weighted_kernel_sum;
                         if(local.Sink_angle_weighted_kernel_sum<=0) {mom_wt=0;}
 #ifdef SINK_PHOTONMOMENTUM /* inject radiation pressure: add initial L/c optical/UV coupling to the gas at the dust sublimation radius */
                         double v_kick = All.Sink_Rad_MomentumFactor * mom_wt * mom / Mass_j;
-                        for(k=0;k<3;k++) {Vel_j[k]+=v_kick*All.cf_atime*dir[k];}
+                        Vel_j[0]+=v_kick*All.cf_atime*dir[0]; Vel_j[1]+=v_kick*All.cf_atime*dir[1]; Vel_j[2]+=v_kick*All.cf_atime*dir[2];
 #endif
                     } // r > 0
                 } // (check if valid gas neighbor of interest)
@@ -473,11 +470,11 @@ int sink_swallow_and_kick_evaluate(int target, int mode, int *exportflag, int *e
                         if(Mass_j_0_n > 0)
                         {
                             #pragma omp atomic
-                            P[j].Mass += Mass_j - Mass_j_0; // finite mass update [delta difference added here, allowing for another element to update in the meantime]
+                            P[j].Mass += Mass_j - Mass_j_0; // finite mass update [delta difference added here, allowing for another element to update in the meantime] if(P[j].Type==0) {CellP[j].Mass = P[j].Mass;}
                         }
                     } else {
                         #pragma omp atomic write
-                        P[j].Mass = 0; // make sure the mass is -actually- zero'd here
+                        P[j].Mass = 0; // make sure the mass is -actually- zero'd here if(P[j].Type==0) {CellP[j].Mass = P[j].Mass;}
                     }
                     
                     for(k=0;k<3;k++) {
@@ -526,12 +523,18 @@ void sink_swallow_and_kick_loop(void)
     #include "../system/code_block_xchange_perform_ops_malloc.h" /* this calls the large block of code which contains the memory allocations for the MPI/OPENMP/Pthreads parallelization block which must appear below */
     #include "../system/code_block_xchange_perform_ops.h" /* this calls the large block of code which actually contains all the loops, MPI/OPENMP/Pthreads parallelization */
     #include "../system/code_block_xchange_perform_ops_demalloc.h" /* this de-allocates the memory for the MPI/OPENMP/Pthreads parallelization block which must appear above */
-    /* collect and print results on any swallow operations in this pass */
+    /* collect results on any swallow operations in this pass. Allreduce (not Reduce): every rank
+       needs the global count -- it raises the moments flag, and it gates the cleanup rearrange in
+       run.cc, both of which must be rank-uniform decisions. */
     int Ntot_gas_swallowed=0, Ntot_star_swallowed=0, Ntot_dm_swallowed=0, Ntot_sink_swallowed=0;
-    MPI_Reduce(&N_gas_swallowed, &Ntot_gas_swallowed, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&N_sink_swallowed, &Ntot_sink_swallowed, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&N_star_swallowed, &Ntot_star_swallowed, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
-    MPI_Reduce(&N_dm_swallowed, &Ntot_dm_swallowed, 1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
+    MPI_Allreduce(&N_gas_swallowed, &Ntot_gas_swallowed, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&N_sink_swallowed, &Ntot_sink_swallowed, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&N_star_swallowed, &Ntot_star_swallowed, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&N_dm_swallowed, &Ntot_dm_swallowed, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    NtotSwallowedThisStep = Ntot_gas_swallowed + Ntot_star_swallowed + Ntot_dm_swallowed + Ntot_sink_swallowed;
+    /* a swallowed particle's mass (and its momentum bookkeeping) must leave the node moments before
+       the next force evaluation; the victims themselves are eliminated by the cleanup rearrange */
+    if(NtotSwallowedThisStep > 0) {TreeMomentsStaleFlag = 1;}
     if((ThisTask == 0)&&(Ntot_gas_swallowed+Ntot_star_swallowed+Ntot_dm_swallowed+Ntot_sink_swallowed>0))
     {
         printf("Accretion done: swallowed %d gas, %d star, %d dm, and %d sink particles\n",
@@ -557,7 +560,7 @@ void spawn_sink_wind_feedback(void)
         }
 
     /* don't loop or go forward if there are no gas particles in the domain, or the code will crash */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         long nmax = (int)(0.99*All.MaxPart); if(All.MaxPart-20 < nmax) nmax=All.MaxPart-20; int ptype_can_spawn = 0; if(P[i].Type == 5) {ptype_can_spawn = 1;}
 #ifdef SNE_NONSINK_SPAWN
@@ -569,7 +572,7 @@ void spawn_sink_wind_feedback(void)
         if((NumPart+n_particles_split+(int)(2.*(SINK_WIND_SPAWN+0.1)) < nmax) && (ptype_can_spawn==1)) // basic condition: particle is a 'spawner' (sink), and code can handle the event safely without crashing.
         {
             int sink_eligible_to_spawn = 0; // flag to check eligibility for spawning
-            if(P[i].unspawned_wind_mass >= (SINK_WIND_SPAWN)*target_mass_for_wind_spawning(i)) {sink_eligible_to_spawn=1;} // have 'enough' mass to spawn
+            if(*active_unspawned_mass_ptr(i) >= (SINK_WIND_SPAWN)*target_mass_for_wind_spawning(i)) {sink_eligible_to_spawn=1;} // have 'enough' mass to spawn, in whichever reservoir is currently the spawning one
 #if defined(SINGLE_STAR_SINK_DYNAMICS)
             if(P[i].Type==5) {if((P[i].Mass <= 3.5*P[i].Sink_Formation_Mass) || (P[i].Sink_Mass*UNIT_MASS_IN_SOLAR < 0.01)) {sink_eligible_to_spawn=0;}}  // spawning causes problems in these modules for low-mass sinks, so arbitrarily restrict to this, since it's roughly a criterion on the minimum particle mass. and for <0.01 Msun, in pre-collapse phase, no jets
 #if defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)
@@ -600,7 +603,8 @@ void spawn_sink_wind_feedback(void)
     MPI_Allreduce(&n_particles_split, &MPI_n_particles_split, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
     if(MPI_n_particles_split>0) {
 #ifdef MAINTAIN_TREE_IN_REARRANGE
-        All.NumForcesSinceLastDomainDecomp +=  0.0001 * All.TreeDomainUpdateFrequency * All.TotNumPart; // we can insert spawned particles in the tree, but still a good idea to rebuild the tree every now and then, so we make the next domain+treebuild come a bit sooner; additional cost should be small
+        All.NumForcesSinceLastDomainDecomp +=  0.0001 * All.TreeDomainUpdateFrequency * All.TotNumPart; /* nudge the next tree rebuild slightly closer per spawn EVENT (~1e4 events to force one alone); the insertion counter is the primary guard, this ages the tree a little per event on top */
+        TreeMomentsStaleFlag = 1; /* the spawned cells' mass and the debited sink mass enter the node moments at the next refresh; rank-uniform (inside the reduced MPI_n_particles_split>0 gate) */
 #else
         TreeReconstructFlag = 1; // otherwise just wipe and rebuild the tree next chance you get - more expensive but more accurate
 #endif
@@ -614,26 +618,24 @@ void spawn_sink_wind_feedback(void)
 }
 
 
-void get_random_orthonormal_basis(int seed, double *nx, double *ny, double *nz)
+void get_random_orthonormal_basis(int seed, Vec3<double>& nx, Vec3<double>& ny, Vec3<double>& nz)
 {
     double phi, cos_theta, sin_theta, sin_phi, cos_phi;
     phi=2.*M_PI*get_random_number(seed+1+ThisTask), cos_theta=2.*(get_random_number(seed+3+2*ThisTask)-0.5); sin_theta=sqrt(1-cos_theta*cos_theta), sin_phi=sin(phi), cos_phi=cos(phi);
     /* velocities (determined by wind velocity direction) */
-    nz[0]=sin_theta*cos_phi; nz[1]=sin_theta*sin_phi; nz[2]=cos_theta; // random z axis
+    nz = {sin_theta*cos_phi, sin_theta*sin_phi, cos_theta}; // random z axis
 
-    double dot_product=0, norm=0; int k;
+    double norm=0;
     while(norm==0){ // necessary in case ny is parallel to nz - believe it or not this happened once!
         phi=2.*M_PI*get_random_number(seed+4+ThisTask), cos_theta=2.*(get_random_number(seed+5+2*ThisTask)-0.5); sin_theta=sqrt(1-cos_theta*cos_theta), sin_phi=sin(phi), cos_phi=cos(phi);
-        ny[0]=sin_theta*cos_phi; ny[1]=sin_theta*sin_phi; ny[2]=cos_theta; // random y axis, needs to have its z component deprojected
+        ny = {sin_theta*cos_phi, sin_theta*sin_phi, cos_theta}; // random y axis, needs to have its z component deprojected
         // do Gram-Schmidt to get an orthonormal basis
-        for(k=0; k<3; k++) {dot_product += ny[k] * nz[k];}
-        for(k=0; k<3; k++) {ny[k] -= dot_product * nz[k]; norm += ny[k]*ny[k];} // deproject component along z
+        ny -= nz * dot(ny, nz); // deproject component along z
+        norm = ny.norm_sq();
         if(norm==0) continue;
-        norm = 1./sqrt(norm); for(k=0; k<3; k++) {ny[k] *= norm;}
+        ny *= 1./sqrt(norm);
     }
-    nx[0] = ny[1]*nz[2] - ny[2]*nz[1];
-    nx[1] = ny[2]*nz[0] - ny[0]*nz[2];
-    nx[2] = ny[0]*nz[1] - ny[1]*nz[0];
+    nx = cross(ny, nz);
     return;
 }
 
@@ -646,19 +648,19 @@ void get_random_orthonormal_basis(int seed, double *nx, double *ny, double *nz)
 /*          is the axis                                                                                         */
 /* dir - shape (3,) array containing the direction - pass as an input to remember the previous direction        */
 
-void get_wind_spawn_direction(int i, int num_spawned_this_call, int mode, double *ny, double *nz, double *veldir, double *dpdir)
+void get_wind_spawn_direction(int i, int num_spawned_this_call, int mode, Vec3<double>& ny, Vec3<double>& nz, Vec3<double>& veldir, Vec3<double>& dpdir)
 {
     int k;
     if((mode != 3) && (num_spawned_this_call % 2)) { // every second particle is spawned in the opposite direction to the last, conserving momentum and COM
-        for(k=0; k<3;k++) {veldir[k] = -veldir[k]; dpdir[k]=-dpdir[k];}
+        veldir = -veldir; dpdir = -dpdir;
         return; // we're done
     }
-    double nx[3] = {ny[1]*nz[2] - ny[2]*nz[1], ny[2]*nz[0] - ny[0]*nz[2], ny[0]*nz[1] - ny[1]*nz[0]};
+    Vec3<double> nx = cross(ny, nz);
     // now do the actual direction based on the mode we're in
     double phi, cos_theta, sin_theta, sin_phi, cos_phi;
     if(mode==0){ // fully random
         phi=2.*M_PI*get_random_number(num_spawned_this_call+1+ThisTask), cos_theta=2.*(get_random_number(num_spawned_this_call+3+2*ThisTask)-0.5); sin_theta=sqrt(1-cos_theta*cos_theta), sin_phi=sin(phi), cos_phi=cos(phi);
-        veldir[0]=sin_theta*cos_phi; veldir[1]=sin_theta*sin_phi; veldir[2]=cos_theta;dpdir[0]=veldir[0];dpdir[1]=veldir[1];dpdir[2]=veldir[2];
+        veldir = {sin_theta*cos_phi, sin_theta*sin_phi, cos_theta}; dpdir = veldir;
     } else if (mode==1){ // collimated according to a conical velocity field
         double theta0=0.01, thetamax=30.*(M_PI/180.); // "flattening parameter" and max opening angle of jet velocity distribution from Matzner & McKee 1999, sets the collimation of the jets
 #if !defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)
@@ -667,25 +669,23 @@ void get_wind_spawn_direction(int i, int num_spawned_this_call, int mode, double
         double theta=atan(theta0*tan(get_random_number(num_spawned_this_call+7+5*ThisTask)*atan(sqrt(1+theta0*theta0)*tan(thetamax)/theta0))/sqrt(1+theta0*theta0)); // biased sampling to get collimation
         phi=2.*M_PI*get_random_number(num_spawned_this_call+1+ThisTask);
         cos_theta = cos(theta), sin_theta=sin(theta), sin_phi=sin(phi), cos_phi=cos(phi);
-        for(k=0;k<3;k++) {veldir[k] = sin_theta*cos_phi*nx[k] + sin_theta*sin_phi*ny[k] + cos_theta*nz[k]; dpdir[k]=veldir[k];} //converted from angular momentum relative to into standard coordinates
+        veldir = nx*(sin_theta*cos_phi) + ny*(sin_theta*sin_phi) + nz*cos_theta; dpdir = veldir; //converted from angular momentum relative to into standard coordinates
     }
 #if defined(SINGLE_STAR_FB_WINDS) && defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)
     else if (mode==2){ //random 3-axis isotropized - spawn along z axis, then y, then x
         if(((P[i].ID_generation-1) % 6) == 0) { // need to generate a brand new coordinate frame
             get_random_orthonormal_basis(P[i].ID_generation, nx, ny, nz);
-            for(k=0; k<3; k++) {veldir[k] = nz[k]; P[i].Wind_direction[k]=nx[k]; P[i].Wind_direction[k+3]=ny[k]; dpdir[k]=veldir[k];}
+            veldir = nz; for(k=0; k<3; k++) {P[i].Wind_direction[k]=nx[k]; P[i].Wind_direction[k+3]=ny[k];} dpdir = veldir;
         }
-        else if(((P[i].ID_generation-1) % 6) == 2) {for(k=0; k<3; k++) {veldir[k] = P[i].Wind_direction[k]; dpdir[k]=veldir[k];}}
-        else {for(k=0; k<3; k++) {veldir[k] = P[i].Wind_direction[k+3]; dpdir[k]=veldir[k];}}
+        else if(((P[i].ID_generation-1) % 6) == 2) {for(k=0; k<3; k++) {veldir[k] = P[i].Wind_direction[k];} dpdir = veldir;}
+        else {for(k=0; k<3; k++) {veldir[k] = P[i].Wind_direction[k+3];} dpdir = veldir;}
     }
 #endif
 #if (defined(SINGLE_STAR_FB_SNE) && defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)) || defined(SINGLE_STAR_FB_SNE_N_EJECTA_QUADRANT)
     else if (mode==3) { // spawn on a specific angular grid
         int dir_ind = num_spawned_this_call % SINGLE_STAR_FB_SNE_N_EJECTA;
-        for(k=0;k<3;k++) { //Particle positioned at one of the regular positions on the randomized coordinate system
-            veldir[k] = All.SN_Ejecta_Direction[dir_ind][0] * nx[k] + All.SN_Ejecta_Direction[dir_ind][1] * ny[k] + All.SN_Ejecta_Direction[dir_ind][2] * nz[k]; //use directions pre-computed to isotropically cover a sphere with SINGLE_STAR_FB_SNE_N_EJECTA particles
-            dpdir[k]=veldir[k];
-        }
+        veldir = nx*All.SN_Ejecta_Direction[dir_ind][0] + ny*All.SN_Ejecta_Direction[dir_ind][1] + nz*All.SN_Ejecta_Direction[dir_ind][2]; //use directions pre-computed to isotropically cover a sphere with SINGLE_STAR_FB_SNE_N_EJECTA particles
+        dpdir = veldir;
     }
 #endif
     return;
@@ -693,7 +693,7 @@ void get_wind_spawn_direction(int i, int num_spawned_this_call, int mode, double
 
 
 /* return desired cell launch speed for spawned cells, in physical (not comoving) units */
-double get_spawned_cell_launch_speed(int i)
+double get_spawned_cell_launch_speed(int i, struct particle_data *pp)
 {
     double v_magnitude = All.Sink_outflow_velocity; // velocity of the jet: default mode is to set this manually to a specific value in physical units
 
@@ -705,14 +705,14 @@ double get_spawned_cell_launch_speed(int i)
 #endif
     
 #ifdef SNE_NONSINK_SPAWN
-    if(P[i].Type == 4) {
+    if(pp[i].Type == 4) {
         double t_gyr = evaluate_stellar_age_Gyr(i); int SNeIaFlag=0; if(t_gyr > 0.03753) {SNeIaFlag=1;}; /* assume SNe before critical time are core-collapse, later are Ia */
         double Msne=10.5/UNIT_MASS_IN_SOLAR; if(SNeIaFlag) {Msne=1.4/UNIT_MASS_IN_SOLAR;} // average ejecta mass for single event (normalized to give total mass loss correctly)
         double SNeEgy = (1.0e51/UNIT_ENERGY_IN_CGS);
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2)
-        if(SNeIaFlag==0) {double z_eff = P[i].Metallicity[10]/All.SolarAbundances[10]; if(z_eff < 1) {SNeEgy *= pow(z_eff + 1.e-5 , -0.12);}} // updated to use same metallicity used for stellar evolution, rather than total metallicity, if this derives from pre-explosion winds, etc, for consistency
+        if(SNeIaFlag==0) {double z_eff = pp[i].Metallicity[10]/All.SolarAbundances[10]; if(z_eff < 1) {SNeEgy *= pow(z_eff + 1.e-5 , -0.12);}} // updated to use same metallicity used for stellar evolution, rather than total metallicity, if this derives from pre-explosion winds, etc, for consistency
 #if (FIRE_SNE_ENERGY_METAL_DEPENDENCE_EXPERIMENT > 1)
-        if(i>0) {double z0 = P[i].Metallicity[0]/All.SolarAbundances[0];
+        if(i>0) {double z0 = pp[i].Metallicity[0]/All.SolarAbundances[0];
 #if (FIRE_SNE_ENERGY_METAL_DEPENDENCE_EXPERIMENT > 2)
             SNeEgy *= pow(z0/0.1 + 1.e-3 , -0.2);
 #else
@@ -726,19 +726,19 @@ double get_spawned_cell_launch_speed(int i)
 #endif
 
 #ifdef SINK_RIAF_SUBEDDINGTON_MODEL
-    double Mdot_wind = P[i].Sink_Mdot_ROI - P[i].Sink_Mdot;
+    double Mdot_wind = pp[i].Sink_Mdot_ROI - pp[i].Sink_Mdot;
     if(Mdot_wind < 0) {return MIN_REAL_NUMBER;} // should be invalid
-    double mdot = P[i].Sink_Mdot / (P[i].Sink_Mass / (4.e7 / UNIT_TIME_IN_YR));
-    double L_over_c = evaluate_sink_radiative_efficiency(P[i].Sink_Mdot,P[i].Sink_Mass,i) * P[i].Sink_Mdot * C_LIGHT_CODE;
+    double mdot = pp[i].Sink_Mdot / (pp[i].Sink_Mass / (4.e7 / UNIT_TIME_IN_YR));
+    double L_over_c = evaluate_sink_radiative_efficiency(pp[i].Sink_Mdot,pp[i].Sink_Mass,i) * pp[i].Sink_Mdot * C_LIGHT_CODE;
     double Pdot_rad = 0.;
     if(mdot > 0.01) {Pdot_rad = L_over_c * DMIN(DMAX(mdot,1.),10.);}
-    double sigma_ROI = sqrt(All.G * P[i].Sink_Mass / P[i].Sink_ROI);
+    double sigma_ROI = sqrt(All.G * pp[i].Sink_Mass / pp[i].Sink_ROI);
     double Pdot_turb = 3. * Mdot_wind * sigma_ROI;
     double Pdot_wind = Pdot_rad + Pdot_turb;
     v_magnitude = Pdot_wind / Mdot_wind; 
     /* // (older deprecated model here)
-    double MSINK_4 = P[i].Sink_Mass * UNIT_MASS_IN_SOLAR / 1.e4; // sink mass in 1e4 Msun to scale
-    double lambda_edd_eff = DMAX( P[i].Sink_Mdot / sink_eddington_mdot(P[i].Sink_Mass) , 1.e-10 ); // eddington ratio, with floor just to prevent unphysical behaviors
+    double MSINK_4 = pp[i].Sink_Mass * UNIT_MASS_IN_SOLAR / 1.e4; // sink mass in 1e4 Msun to scale
+    double lambda_edd_eff = DMAX( pp[i].Sink_Mdot / sink_eddington_mdot(pp[i].Sink_Mass) , 1.e-10 ); // eddington ratio, with floor just to prevent unphysical behaviors
     if(lambda_edd_eff > (SINK_RIAF_SUBEDDINGTON_MODEL))
     {
         double v_eff_esc_BLR = 270. * sqrt(sqrt(MSINK_4 / lambda_edd_eff)) / UNIT_VEL_IN_KMS; // escape velocity from BLR in km/s, using canonical RBLR ~ 20 light-days * (L_bol/1e45)^(1/2)-ish scaling
@@ -753,27 +753,27 @@ double get_spawned_cell_launch_speed(int i)
     v_magnitude = single_star_jet_velocity(i); // get velocity from our more detailed function
 #endif
 #if defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION) && defined(SINGLE_STAR_FB_WINDS)
-    if((P[i].ProtoStellarStage == 5) && (P[i].wind_mode==1)) {v_magnitude = single_star_wind_velocity(i);} // only MS stars launch winds: get velocity from fancy model
+    if((pp[i].ProtoStellarStage == 5) && (pp[i].wind_mode==1)) {v_magnitude = single_star_wind_velocity(i);} // only MS stars launch winds: get velocity from fancy model
 #endif
 #if defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION) && defined(SINGLE_STAR_FB_SNE)
-    if(P[i].ProtoStellarStage == 6) {v_magnitude = single_star_SN_velocity(i);} // this star is about to go SNe: get velocity from fancy model
+    if(pp[i].ProtoStellarStage == 6) {v_magnitude = single_star_SN_velocity(i);} // this star is about to go SNe: get velocity from fancy model
 #endif
     return v_magnitude;
 }
 
 
 #ifdef MAGNETIC
-void get_wind_spawn_magnetic_field(int j, int mode, double *ny, double *nz, double *dpdir, double d_r)
+void get_wind_spawn_magnetic_field(int j, int mode, Vec3<double>& ny, Vec3<double>& nz, Vec3<double>& dpdir, double d_r)
 {
-    int k; CellP[j].divB = 0; for(k=0;k<3;k++) {CellP[j].DtB[k] = 0;}
+    int k; CellP[j].divB = 0; CellP[j].DtB = {};
 #ifdef DIVBCLEANING_DEDNER
-    CellP[j].DtPhi = CellP[j].PhiPred = CellP[j].Phi = 0; for(k=0;k<3;k++) {CellP[j].DtB_PhiCorr[k] = 0;}
+    CellP[j].DtPhi = CellP[j].PhiPred = CellP[j].Phi = 0; CellP[j].DtB_PhiCorr = {};
 #endif
-    
+
     double volume_for_BtoVB = P[j].Mass / CellP[j].Density;
 #ifdef SINK_WIND_SPAWN_SET_BFIELD_POLTOR /* user manually sets the poloidal and toroidal components here */
-    double inj_scale=All.Sink_spawn_injectionradius/All.cf_atime, Bfield[3]={0}, nx[3]={ny[1]*nz[2]-ny[2]*nz[1], ny[2]*nz[0]-ny[0]*nz[2], ny[0]*nz[1]-ny[1]*nz[0]};
-    double cos_theta=nz[0]*dpdir[0]+nz[1]*dpdir[1]+nz[2]*dpdir[2], sin_theta=sqrt(1-cos_theta*cos_theta), cos_phi=(nx[0]*dpdir[0]+nx[1]*dpdir[1]+nx[2]*dpdir[2])/sin_theta, sin_phi=(ny[0]*dpdir[0]+ny[1]*dpdir[1]+ny[2]*dpdir[2])/sin_theta;
+    double inj_scale=All.Sink_spawn_injectionradius/All.cf_atime; Vec3<double> Bfield={}, nx=cross(ny,nz);
+    double cos_theta=dot(nz,dpdir), sin_theta=sqrt(1-cos_theta*cos_theta), cos_phi=dot(nx,dpdir)/sin_theta, sin_phi=dot(ny,dpdir)/sin_theta;
     /* initialize poloidal component, in the nx,ny,nz coordinate frame */
     Bfield[0]+= All.B_spawn_pol*d_r*cos_theta*d_r*sin_theta/inj_scale/inj_scale*cos_phi*exp(-1.0*d_r*d_r/inj_scale/inj_scale)/exp(-1.0);
     Bfield[1]+= All.B_spawn_pol*d_r*cos_theta*d_r*sin_theta/inj_scale/inj_scale*sin_phi*exp(-1.0*d_r*d_r/inj_scale/inj_scale)/exp(-1.0);
@@ -782,13 +782,13 @@ void get_wind_spawn_magnetic_field(int j, int mode, double *ny, double *nz, doub
     Bfield[0]+= -1*All.B_spawn_tor*(d_r/inj_scale)*sin_theta*sin_phi*exp(-1.0*d_r*d_r/inj_scale/inj_scale)/exp(-1.0);
     Bfield[1]+=    All.B_spawn_tor*(d_r/inj_scale)*sin_theta*cos_phi*exp(-1.0*d_r*d_r/inj_scale/inj_scale)/exp(-1.0);
     /* assign it back to the actual evolved B in the lab/simulation coordinate frame */
-    for(k=0;k<3;k++) {CellP[j].IniB[k] = Bfield[0]*nx[k] + Bfield[1]*ny[k] + Bfield[2]*nz[k]; CellP[j].DtB[k]=0;
-        CellP[j].BPred[k]=CellP[j].B[k]=CellP[j].IniB[k]*(All.UnitMagneticField_in_gauss/UNIT_B_IN_GAUSS)*(volume_for_BtoVB/All.cf_a2inv);}
+    CellP[j].IniB = nx*Bfield[0] + ny*Bfield[1] + nz*Bfield[2]; CellP[j].DtB = {};
+    CellP[j].BPred = CellP[j].B = CellP[j].IniB * ((All.UnitMagneticField_in_gauss/UNIT_B_IN_GAUSS)*(volume_for_BtoVB/All.cf_a2inv));
     
 #else /* set B-fields to be weak relative to local ISM values */
 
     double Bmag=0, Bmag_0=0;
-    for(k=0;k<3;k++) {double B=CellP[j].B[k]*All.cf_a2inv/volume_for_BtoVB; Bmag+=B*B; Bmag_0+=CellP[j].B[k]*CellP[j].B[k];} // get actual Bfield
+    {auto Bphys = CellP[j].B * (All.cf_a2inv/volume_for_BtoVB); Bmag = Bphys.norm_sq(); Bmag_0 = CellP[j].B.norm_sq();} // get actual Bfield
     double Bmag_low_rel_to_progenitor = 1.e-10 * sqrt(Bmag); // set to some extremely low value relative to cloned element
     double u_internal_new_cell = All.Sink_outflow_temperature / (  0.59 * (5./3.-1.) * U_TO_TEMP_UNITS ); // internal energy of new wind cell
     double Bmag_low_rel_to_pressure = 1.e-3 * sqrt(2.*CellP[j].Density*All.cf_a3inv * u_internal_new_cell); // set to beta = 1e6
@@ -804,19 +804,65 @@ void get_wind_spawn_magnetic_field(int j, int mode, double *ny, double *nz, doub
     /* add magnetic flux here to 'Bmag' if desired */
     Bmag *= volume_for_BtoVB / All.cf_a2inv; // convert back to code units
     for(k=0;k<3;k++) {if(Bmag_0>0) {CellP[j].B[k]*=Bmag/sqrt(Bmag_0);} else {CellP[j].B[k]=Bmag;}} // assign if valid values
-    for(k=0;k<3;k++) {CellP[j].BPred[k]=CellP[j].B[k]; CellP[j].DtB[k]=0;} // set predicted = actual, derivative to null
+    CellP[j].BPred=CellP[j].B; CellP[j].DtB={}; // set predicted = actual, derivative to null
 #endif
-    for(k=0;k<3;k++) {CellP[j].BField_prerefinement[k] = CellP[j].B[k] / volume_for_BtoVB;} /* record the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed */
-    for(k=0;k<3;k++) {CellP[j].BPred[k] = CellP[j].B[k];} /* set predicted/drifted equal to the value above */
+    CellP[j].BField_prerefinement = CellP[j].B * (1.0 / volume_for_BtoVB); /* record the real value of B pre-split to know what we need to correctly re-initialize to once the volume partition can be recomputed */
+    CellP[j].BPred = CellP[j].B; /* set predicted/drifted equal to the value above */
     return;
 }
 #endif
 
 
 /*! this code copies what was used in merge_split.c for the gas particle split case */
+/*! Choose the fixed orthonormal basis {jx,jy,jz} that every element spawned in this event
+    shares. jz is the polar/launch axis: collimated spawning (mode 1, i.e. protostellar
+    jets) is emitted about +/-jz, so this function alone sets the outflow direction.
+    Modes: 0=isotropic, 1=collimated, 2=3-axis isotropized, 3=angular grid. */
+void set_spawn_orthonormal_basis(int i, int mode, Vec3<double>& jx, Vec3<double>& jy, Vec3<double>& jz)
+{
+    jz={0,0,1}; jy={0,1,0}; jx={1,0,0}; /* default coordinate system if we have no other information */
+
+#ifdef JET_DIRECTION_FIXED_Z
+    /* TESTING ONLY: keep the default basis, skipping angular-momentum reorientation and
+       precession, so the launch geometry can be validated against a known axis. Real jets
+       follow the disk/spin axis, so this is not physical for production. */
+    return;
+#endif
+
+#ifdef SINK_FOLLOW_ACCRETED_ANGMOM  /* use local angular momentum to estimate preferred directions/coordinates for spawning */
+    if(mode==1){ // set up so that the z axis is the angular momentum vector
+#ifdef JET_DIRECTION_FROM_KERNEL_AND_SINK // Jgas stores total angmom in COM frame of sink-gas system; use this for direction
+        double Jtot=P[i].Jgas_in_Kernel.norm_sq();
+        if(Jtot>0) {Jtot=1/sqrt(Jtot); jz = P[i].Jgas_in_Kernel * Jtot;}
+#else
+        double Jtot=P[i].Sink_Specific_AngMom.norm_sq();
+        if(Jtot>0) {Jtot=1/sqrt(Jtot); jz = P[i].Sink_Specific_AngMom * Jtot;}
+#endif
+        Jtot=jz[1]*jz[1]+jz[2]*jz[2]; if(Jtot>0) {Jtot=1/sqrt(Jtot); jy={0, jz[2]*Jtot, -jz[1]*Jtot};} else {jy={0, 1, 0};}
+        jx = cross(jz, jy);
+    }
+#endif
+    if(mode == 3){ // if doing an angular grid, need some fixed coordinates to orient it, but want to switch em up each time to avoid artifacts
+        get_random_orthonormal_basis(P[i].ID_generation, jx, jy, jz);
+    }
+#ifdef SINK_WIND_SPAWN_SET_JET_PRECESSION /* rotate the jet angle according to the explicitly-included precession parameters */
+    double degree = All.Sink_jet_precess_degree, period = All.Sink_jet_precess_period/UNIT_TIME_IN_GYR; Vec3<double> new_dir;
+    new_dir[0]= jx[0]*cos(degree/180.*M_PI)-jx[2]*sin(degree/180.*M_PI); new_dir[1]= 1.0*jx[1]; new_dir[2]= jx[0]*sin(degree/180.*M_PI)+jx[2]*cos(degree/180.*M_PI);
+    jx[0]= new_dir[0]*cos(2.*M_PI/period*All.Time)-new_dir[1]*sin(2.*M_PI/period*All.Time); jx[1]= new_dir[0]*sin(2.*M_PI/period*All.Time)+new_dir[1]*cos(2.*M_PI/period*All.Time); jx[2]= new_dir[2];
+
+    new_dir[0]= jy[0]*cos(degree/180.*M_PI)-jy[2]*sin(degree/180.*M_PI); new_dir[1]= 1.0*jy[1]; new_dir[2]= jy[0]*sin(degree/180.*M_PI)+jy[2]*cos(degree/180.*M_PI);
+    jy[0]= new_dir[0]*cos(2.*M_PI/period*All.Time)-new_dir[1]*sin(2.*M_PI/period*All.Time); jy[1]= new_dir[0]*sin(2.*M_PI/period*All.Time)+new_dir[1]*cos(2.*M_PI/period*All.Time); jy[2]= new_dir[2];
+
+    new_dir[0]= jz[0]*cos(degree/180.*M_PI)-jz[2]*sin(degree/180.*M_PI); new_dir[1]= 1.0*jz[1]; new_dir[2]= jz[0]*sin(degree/180.*M_PI)+jz[2]*cos(degree/180.*M_PI);
+    jz[0]= new_dir[0]*cos(2.*M_PI/period*All.Time)-new_dir[1]*sin(2.*M_PI/period*All.Time); jz[1]= new_dir[0]*sin(2.*M_PI/period*All.Time)+new_dir[1]*cos(2.*M_PI/period*All.Time); jz[2]= new_dir[2];
+#endif
+}
+
+
 int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_already_spawned )
 {
-    double total_mass_in_winds = P[i].unspawned_wind_mass;
+    double *unspawned_mass_ptr = active_unspawned_mass_ptr(i); // the reservoir this event draws from and decrements
+    double total_mass_in_winds = *unspawned_mass_ptr;
 
     int n_particles_split   = (int) floor( total_mass_in_winds / target_mass_for_wind_spawning(i) ); /* if we set SINK_WIND_SPAWN we presumably wanted to do this in an exactly-conservative manner, which means we want to have an even number here. */
     int k=0; long j;
@@ -829,11 +875,14 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
             if(P[i].Sink_Mass <= m_relic) { // last batch to be spawned
                 n_particles_split = SINGLE_STAR_FB_SNE_N_EJECTA; // we are going to spawn a bunch of low mass particles to take the last bit of mass away
                 printf("Spawning last SN ejecta of star %llu with %g mass and %d particles \n",(unsigned long long) P[i].ID,total_mass_in_winds,n_particles_split);
-                P[i].Mass = DMAX(0, m_relic); // set mass to zero so that this sink will get cleaned up (TreeReconstructFlag = 1 should be already set in sink.c)
+                P[i].Mass = DMAX(0, m_relic); /* a zero-mass relic is removed by the next rearrange_particle_sequence()
+                    elimination pass. NB nothing here requests a tree rebuild: the old claim that sink.c sets
+                    TreeReconstructFlag has been false since the moments-refresh split -- sink_final_operations sets
+                    only TreeMomentsStaleFlag. Until the elimination runs, the slot stays linked in the tree. */
 #ifdef SINK_ALPHADISK_ACCRETION
                 P[i].Sink_Mass_Reservoir = 0; // just to be safe
 #endif
-                if(P[i].Sink_Mass > 0 && P[i].Sink_Mass > P[i].Sink_Formation_Mass) {P[i].ProtoStellarStage == 7;} // this is a relic now, move it to the next stage
+                if(P[i].Sink_Mass > 0 && P[i].Sink_Mass > P[i].Sink_Formation_Mass) {P[i].ProtoStellarStage = 7;} // this is a relic now, move it to the next stage
 	    }
 	}
     }
@@ -875,7 +924,7 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
         fflush(stdout); endrun(8888);
     }
     double d_r = 0.25 * KERNEL_CORE_SIZE*P[i].KernelRadius; // needs to be epsilon*KernelRadius where epsilon<<1, to maintain stability //
-    double r2=0; for(k=0;k<3;k++) {r2+=(P[dummy_cell_i_to_clone].Pos[k]-P[i].Pos[k])*(P[dummy_cell_i_to_clone].Pos[k]-P[i].Pos[k]);}
+    double r2 = (P[dummy_cell_i_to_clone].Pos - P[i].Pos).norm_sq();
     d_r = DMIN(d_r, 0.5*sqrt(r2));
 #ifndef SELFGRAVITY_OFF
     d_r = DMAX(d_r , 2.0*EPSILON_FOR_TREERND_SUBNODE_SPLITTING * All.ForceSoftening[0]);
@@ -895,7 +944,7 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
     long bin, bin_0; for(bin = 0; bin < TIMEBINS; bin++) {if(TimeBinCount[bin] > 0) break;} /* gives minimum active timebin of any particle */
     bin_0 = bin; int i0 = i; /* save minimum timebin, also save ID of sink particle for use below */
     bin = P[i0].TimeBin; /* make this particle active on the BH/star timestep */
-    double veldir[3], dpdir[3]; // velocity direction to spawn in - declare outside the loop so we remember it from the last iteration
+    Vec3<double> veldir, dpdir; // velocity direction to spawn in - declare outside the loop so we remember it from the last iteration
     int mode = 0; // 0 if doing totally random directions, 1 if collimated, 2 for 3-axis isotropized, and 3 if using an angular grid,  4 old collimatation script, position isotropic velicity coliminated within certain open angle (might be useful to still keep this option owing to the free open angle choice and better sampling the magnetic field geometry)
 #if defined(SINGLE_STAR_FB_JETS) || defined(JET_DIRECTION_FROM_KERNEL_AND_SINK) || defined(SINK_FB_COLLIMATED)
     mode = 1; // collimated mode
@@ -927,39 +976,13 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
 #endif
 
     // based on the mode we're in, let's pick a fixed orthonormal basis that all spawned elements are aware of
-    double jz[3]={0,0,1},jy[3]={0,1,0},jx[3]={1,0,0};  /* set up a coordinate system [xyz if we don't have any other information */
-#ifdef SINK_FOLLOW_ACCRETED_ANGMOM  /* use local angular momentum to estimate preferred directions/coordinates for spawning */
-    if(mode==1){ // set up so that the z axis is the angular momentum vector
-#ifdef JET_DIRECTION_FROM_KERNEL_AND_SINK // Jgas stores total angmom in COM frame of sink-gas system; use this for direction
-        double Jtot=0; for(k=0;k<3;k++) {Jtot+=P[i].Jgas_in_Kernel[k]*P[i].Jgas_in_Kernel[k];}
-        if(Jtot>0) {Jtot=1/sqrt(Jtot); for(k=0;k<3;k++) {jz[k]=P[i].Jgas_in_Kernel[k]*Jtot;}}
-#else
-        double Jtot=0; for(k=0;k<3;k++) {Jtot+=P[i].Sink_Specific_AngMom[k]*P[i].Sink_Specific_AngMom[k];}
-        if(Jtot>0) {Jtot=1/sqrt(Jtot); for(k=0;k<3;k++) {jz[k]=P[i].Sink_Specific_AngMom[k]*Jtot;}}
-#endif
-        Jtot=jz[1]*jz[1]+jz[2]*jz[2]; if(Jtot>0) {Jtot=1/sqrt(Jtot); jy[0]=0; jy[1]=jz[2]*Jtot; jy[2]=-jz[1]*Jtot;} else {jy[0]=0; jy[1]=1; jy[2]=0;}
-        jx[0]=jz[1]*jy[2]-jz[2]*jy[1]; jx[1]=jz[2]*jy[0]-jz[0]*jy[2]; jx[2]=jz[0]*jy[1]-jz[1]*jy[0];
-    }
-#endif
-    if(mode == 3){ // if doing an angular grid, need some fixed coordinates to orient it, but want to switch em up each time to avoid artifacts
-        get_random_orthonormal_basis(P[i].ID_generation, jx, jy, jz);
-    }
-#ifdef SINK_WIND_SPAWN_SET_JET_PRECESSION /* rotate the jet angle according to the explicitly-included precession parameters */
-    double degree = All.Sink_jet_precess_degree, period = All.Sink_jet_precess_period/UNIT_TIME_IN_GYR, new_dir[3];
-    new_dir[0]= jx[0]*cos(degree/180.*M_PI)-jx[2]*sin(degree/180.*M_PI); new_dir[1]= 1.0*jx[1]; new_dir[2]= jx[0]*sin(degree/180.*M_PI)+jx[2]*cos(degree/180.*M_PI);
-    jx[0]= new_dir[0]*cos(2.*M_PI/period*All.Time)-new_dir[1]*sin(2.*M_PI/period*All.Time); jx[1]= new_dir[0]*sin(2.*M_PI/period*All.Time)+new_dir[1]*cos(2.*M_PI/period*All.Time); jx[2]= new_dir[2];
-
-    new_dir[0]= jy[0]*cos(degree/180.*M_PI)-jy[2]*sin(degree/180.*M_PI); new_dir[1]= 1.0*jy[1]; new_dir[2]= jy[0]*sin(degree/180.*M_PI)+jy[2]*cos(degree/180.*M_PI);
-    jy[0]= new_dir[0]*cos(2.*M_PI/period*All.Time)-new_dir[1]*sin(2.*M_PI/period*All.Time); jy[1]= new_dir[0]*sin(2.*M_PI/period*All.Time)+new_dir[1]*cos(2.*M_PI/period*All.Time); jy[2]= new_dir[2];
-
-    new_dir[0]= jz[0]*cos(degree/180.*M_PI)-jz[2]*sin(degree/180.*M_PI); new_dir[1]= 1.0*jz[1]; new_dir[2]= jz[0]*sin(degree/180.*M_PI)+jz[2]*cos(degree/180.*M_PI);
-    jz[0]= new_dir[0]*cos(2.*M_PI/period*All.Time)-new_dir[1]*sin(2.*M_PI/period*All.Time); jz[1]= new_dir[0]*sin(2.*M_PI/period*All.Time)+new_dir[1]*cos(2.*M_PI/period*All.Time); jz[2]= new_dir[2];
-#endif    
+    Vec3<double> jx, jy, jz;
+    set_spawn_orthonormal_basis(i, mode, jx, jy, jz);
 
     /* create the  new particles to be added to the end of the particle list :
         i is the sink particle tag, j is the new "spawed" particle's location, dummy_cell_i_to_clone is a dummy gas cell's tag to be used to init the wind particle */
     int mode_default = mode, mode_prev = mode;
-    double v_magnitude_physical_default = get_spawned_cell_launch_speed(i), v_magnitude_physical=v_magnitude_physical_default, v_magnitude_physical_prev=v_magnitude_physical; /* call subroutine for this velocity */
+    double v_magnitude_physical_default = get_spawned_cell_launch_speed(i, P), v_magnitude_physical=v_magnitude_physical_default, v_magnitude_physical_prev=v_magnitude_physical; /* call subroutine for this velocity */
     
     for(j = NumPart + num_already_spawned; j < NumPart + num_already_spawned + n_particles_split; j++)
     {   /* first, clone the 'dummy' particle so various fields are set appropriately */
@@ -1013,28 +1036,27 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
 
         /* now we need to make sure everything is correctly placed in timebins for the tree */
         P[j].TimeBin = bin; // get the timebin, and put this particle into the appropriate timebin
-        NextActiveParticle[j] = FirstActiveParticle; FirstActiveParticle = j;
-        ActiveParticleList[ActiveParticleNumber] = j; ActiveParticleNumber++;
+        ActiveParticleList.push_back(j);
         NumForceUpdate++;
         TimeBinCount[bin]++; TimeBinCountGas[bin]++; PrevInTimeBin[j] = i0; /* likewise add it to the counters that register how many particles are in each timebin */
         NextInTimeBin[j] = NextInTimeBin[i0]; if(NextInTimeBin[i0] >= 0) {PrevInTimeBin[NextInTimeBin[i0]] = j;} NextInTimeBin[i0] = j; if(LastInTimeBin[bin] == i0) {LastInTimeBin[bin] = j;}
         P[j].Ti_begstep = All.Ti_Current; P[j].Ti_current = All.Ti_Current;
 #ifdef WAKEUP /* note - you basically MUST have this flag on for this routine to work at all -- */
         P[j].dt_step = GET_INTEGERTIME_FROM_TIMEBIN(bin);
-        P[j].wakeup = -1;
+        P[j].wakeup = -3; /* -3 = newly spawned cell; only the sign is semantic */
         NeedToWakeupParticles_local = 1;
 #endif
         /* this is a giant pile of variables to zero out. dont need everything here because we cloned a valid particle, but handy anyways */
-        P[j].Particle_DivVel = 0; CellP[j].DtInternalEnergy = 0; for(k=0;k<3;k++) {CellP[j].HydroAccel[k] = 0; P[j].GravAccel[k] = 0;}
+        P[j].Particle_DivVel = 0; CellP[j].DtInternalEnergy = 0; CellP[j].HydroAccel = {}; P[j].GravAccel = {};
         P[j].NumNgb=cbrt(All.DesNumNgb); // this gets cube rooted at the end of the density loop, so take cbrt here
 #ifdef PMGRID
-        for(k=0;k<3;k++) {P[j].GravPM[k] = 0;}
+        P[j].GravPM = {};
 #endif
 #ifdef ENERGY_ENTROPY_SWITCH_IS_ACTIVE
         CellP[j].MaxKineticEnergyNgb = 0;
 #endif
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
-        CellP[j].dMass = 0; CellP[j].DtMass = 0; CellP[j].MassTrue = P[j].Mass; for(k=0;k<3;k++) {CellP[j].GravWorkTerm[k] = 0;}
+        CellP[j].dMass = 0; CellP[j].DtMass = 0; CellP[j].MassTrue = P[j].Mass; CellP[j].GravWorkTerm = {};
 #endif
 #if defined(ADAPTIVE_GRAVSOFT_FORGAS) || defined(ADAPTIVE_GRAVSOFT_FORALL)
         P[j].AGS_zeta = 0;
@@ -1100,12 +1122,13 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
         if(mass_of_new_particle >= 0.5*P[i].Sink_Formation_Mass) {P[j].ID = All.SpawnedWindCellID + 1;} // this just has the nominal mass resolution, so no special treatment - this avoids the P[i].ID == All.SpawnedWindCellID checks throughout the code
 #endif
         P[j].ID_child_number = P[i].ID_child_number + P[i].ID_generation; P[i].ID_generation++; P[j].ID_generation = P[i].ID; // this allows us to track spawned particles by giving them unique sub-IDs. Remember we MUST NEVER alter an existing particle ID OR ID_child_number!
-        P[j].Mass = mass_of_new_particle; /* assign masses to both particles (so they sum correctly) */
+        P[j].Mass = mass_of_new_particle; /* assign masses to both particles (so they sum correctly) */ if(P[j].Type==0) {CellP[j].Mass = P[j].Mass;}
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
         CellP[j].MassTrue = P[j].Mass;
 #endif
-        P[i].Mass -= P[j].Mass; /* make sure the operation is mass conserving! */
-        P[i].unspawned_wind_mass -= P[j].Mass; /* remove the mass successfully spawned, to update the remaining unspawned mass */
+        P[i].dp -= P[j].Mass * P[i].Vel; /* track momentum change from mass loss for tree node update */
+        P[i].Mass -= P[j].Mass; /* make sure the operation is mass conserving! */ if(P[i].Type==0) {CellP[i].Mass = P[i].Mass;}
+        *unspawned_mass_ptr -= P[j].Mass; /* remove the mass successfully spawned, to update the remaining unspawned mass */
 
 #if defined(METALS) && (defined(SINGLE_STAR_FB_JETS) || defined(SINGLE_STAR_FB_WINDS) || defined(SINGLE_STAR_FB_SNE) || defined(SNE_NONSINK_SPAWN) || (SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM_SPECIALBOUNDARIES >= 4))
         double yields[NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION]={0}; get_jet_yields(yields,i); // default to jet-type
@@ -1120,7 +1143,7 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
         
         // actually lay down position and velocities using coordinate basis
         get_wind_spawn_direction(i, j - (NumPart + num_already_spawned), mode, jy, jz, veldir, dpdir);
-        for(k=0;k<3;k++) {P[j].Pos[k]=P[i].Pos[k] + dpdir[k]*d_r; P[j].Vel[k]=P[i].Vel[k] + veldir[k]*v_magnitude_physical*All.cf_atime; CellP[j].VelPred[k]=P[j].Vel[k];} // convert to code (comoving) velocity units
+        P[j].Pos = P[i].Pos + dpdir*d_r; P[j].Vel = P[i].Vel + veldir*(v_magnitude_physical*All.cf_atime); CellP[j].VelPred = P[j].Vel; // convert to code (comoving) velocity units
 
         /* condition number, smoothing length, and density */
         CellP[j].ConditionNumber *= 100.0; /* boost the condition number to be conservative, so we don't trigger madness in the kernel */
@@ -1156,9 +1179,9 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
 #ifdef CRFLUID_EVOLVE_SPECTRUM
             CellP[j].CosmicRay_Number_in_Bin[k_CRegy]=CellP[j].DtCosmicRay_Number_in_Bin[k_CRegy]=0;
 #endif
-            for(k=0;k<3;k++) {CellP[j].CosmicRayFlux[k_CRegy][k]=CellP[j].CosmicRayFluxPred[k_CRegy][k]=0;}
+            CellP[j].CosmicRayFlux[k_CRegy] = {}; CellP[j].CosmicRayFluxPred[k_CRegy] = {};
 #ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
-            for(k=0;k<3;k++) {CellP[j].CosmicRayAlfvenEnergy[k_CRegy][k]=CellP[j].CosmicRayAlfvenEnergyPred[k_CRegy][k]=CellP[j].DtCosmicRayAlfvenEnergy[k_CRegy][k]=0;}
+            CellP[j].CosmicRayAlfvenEnergy[k_CRegy] = {}; CellP[j].CosmicRayAlfvenEnergyPred[k_CRegy] = {}; CellP[j].DtCosmicRayAlfvenEnergy[k_CRegy] = {};
 #endif
         } /* complete CR initialization to null */
 #endif
@@ -1186,13 +1209,17 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
 #if defined(SINK_CR_INJECTION_AT_TERMINATION)
         CellP[j].Sink_CR_Energy_Available_For_Injection = dEcr;     /* store energy for later injection */
 #else
-        inject_cosmic_rays(dEcr, v_magnitude_physical, 5, j, veldir); /* inject directly */
+        inject_cosmic_rays(dEcr, v_magnitude_physical, 5, j, veldir.data, CellP); /* inject directly */
 #endif
 #endif
-        /* Note: New tree construction can be avoided because of  `force_add_element_to_tree()' */
-        force_add_element_to_tree(i0, j);// (buggy) /* we solve this by only calling the merge/split algorithm when we're doing the new domain decomposition */
+        /* Splice the spawned cell into the live tree. This maintains list connectivity and total node
+           mass (the mass was debited from the co-located sink), but NOT the type-conditioned moments
+           (gasmass, stellar_lum, ...) nor ancestor hmax beyond the immediate parent -- those are healed
+           by the next moments refresh / force_update_hmax pass. Runs on ordinary steps (the spawn gate
+           in run.cc), not only at decomposition. */
+        force_add_element_to_tree(i0, j);
     }
-    if(P[i].unspawned_wind_mass < 0) {P[i].unspawned_wind_mass=0;}
+    if(*unspawned_mass_ptr < 0) {*unspawned_mass_ptr=0;}
     return n_particles_split;
 }
 #endif
@@ -1213,7 +1240,8 @@ void special_rt_feedback_injection(void)
     int n_wt = 0, i; for(i=0;i<NumPart;i++) {
         if(is_particle_a_special_zoom_target(i)) {iBH0=i;}
         if(P[i].Type != 0) {continue;}
-        double dp[3], r2=0, wt, wt_new=0, r; for(k=0;k<3;k++) {dp[k]=All.cf_atime*(P[i].Pos[k]); r2+=dp[k]*dp[k];}
+        Vec3<double> dp{All.cf_atime*(double)P[i].Pos[0], All.cf_atime*(double)P[i].Pos[1], All.cf_atime*(double)P[i].Pos[2]};
+        double r2 = dp.norm_sq(), wt, wt_new=0, r;
         r = sqrt(r2); if(r < r_min || r >= r_max) {continue;}
         double vol = P[i].Mass / (CellP[i].Density*All.cf_a3inv), cos_t = dp[0] / r;
         wt = 1.e-5 * pow(fabs(cos_t),8) * vol * (r_max*r_max/(r*r)-1.); delta_wt_sum += wt;
@@ -1223,7 +1251,8 @@ void special_rt_feedback_injection(void)
     if(delta_wt_sumsum <= 0) {return;}
     for(i=0;i<NumPart;i++) {
         if(P[i].Type != 0) {continue;}
-        double dp[3], r2=0, wt, wt_new=0, r, de; for(k=0;k<3;k++) {dp[k]=All.cf_atime*(P[i].Pos[k]); r2+=dp[k]*dp[k];}
+        Vec3<double> dp{All.cf_atime*(double)P[i].Pos[0], All.cf_atime*(double)P[i].Pos[1], All.cf_atime*(double)P[i].Pos[2]};
+        double r2 = dp.norm_sq(), wt, wt_new=0, r, de;
         r = sqrt(r2); if(r < r_min || r >= r_max) {continue;}
         double vol = P[i].Mass / (CellP[i].Density*All.cf_a3inv), cos_t = dp[0] / r;
         wt = 1.e-5 * pow(fabs(cos_t),8) * vol * (r_max*r_max/(r*r)-1.); de = de_00 * wt / delta_wt_sumsum;
@@ -1243,6 +1272,24 @@ void special_rt_feedback_injection(void)
 }
 #endif
 
+
+#ifdef SINK_WIND_SPAWN
+/* which reservoir currently feeds discrete spawning. Must agree with the channel that
+   target_mass_for_wind_spawning() below prices cells for, or mass banks at one resolution and spawns at another. */
+double* active_unspawned_mass_ptr(int i)
+{
+#ifdef SINGLE_STAR_FB_JETS
+    if(P[i].Type==5) {
+#if defined(SINGLE_STAR_FB_WINDS) && defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)
+        if(P[i].ProtoStellarStage == 6) {return &P[i].unspawned_wind_mass;} // SNe ejecta
+        if((P[i].ProtoStellarStage == 5) && (P[i].wind_mode == 1)) {return &P[i].unspawned_wind_mass;} // MS, winds dominant
+#endif
+        return &P[i].unspawned_jet_mass; // pre-MS, or MS with jets dominant, or relic
+    }
+#endif
+    return &P[i].unspawned_wind_mass;
+}
+#endif
 
 /* simple routine that evaluates the target cell mass for the spawning subroutine */
 double target_mass_for_wind_spawning(int i)
@@ -1266,7 +1313,7 @@ double target_mass_for_wind_spawning(int i)
         if((All.Cell_Spawn_Mass_ratio_MS>0.0)&&(P[i].ProtoStellarStage == 5)&&(P[i].wind_mode==1)) {return All.Cell_Spawn_Mass_ratio_MS * P[i].Sink_Formation_Mass;} //use different (probably lower) mass for winds than for jets (will also reduce it for MS jets, but that should be fine)
         else {return All.Sink_outflow_particlemass * P[i].Sink_Formation_Mass;}
 #else // we specify the absolute value
-        if((P[i].ProtoStellarStage == 5) && (P[i].wind_mode==1)) {return All.Cell_Spawn_Mass_ratio_MS;} // specified absolute mass resolution for stellar winds
+        if((P[i].ProtoStellarStage == 5) && (P[i].wind_mode == 1)) {return (All.Cell_Spawn_Mass_ratio_MS > 0) ? All.Cell_Spawn_Mass_ratio_MS : All.Sink_outflow_particlemass;} // winds hold the discrete-spawn channel: specified absolute mass resolution for stellar winds; fall back to Sink_outflow_particlemass if not set. If jets hold the channel instead (wind_mode!=1), even at MS, fall through below to the jet mass.
         else if(P[i].ProtoStellarStage == 6) {return P[i].Sink_Formation_Mass;} // If supernova, use the nominal "average" mass resolution
 #endif
     }

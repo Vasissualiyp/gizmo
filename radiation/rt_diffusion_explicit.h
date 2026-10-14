@@ -13,11 +13,11 @@
 #define RT_ENHANCED_NUMERICAL_DIFFUSION /* option which increases numerical diffusion, to get smoother solutions, if desired; akin to slopelimiters~0 model */
 {
     // first define some variables needed regardless //
-    double c_light_eff = C_LIGHT_CODE_REDUCED(j), rsol_corr = RSOL_CORRECTION_FACTOR_FOR_VELOCITY_TERMS(j);
+    double c_light_eff = C_LIGHT_CODE_REDUCED, rsol_corr = RSOL_CORRECTION_FACTOR_FOR_VELOCITY_TERMS;
 #if defined(HYDRO_MESHLESS_FINITE_VOLUME)
-    double v_frame[3]={0}; for(k=0;k<3;k++) {v_frame[k]=0.5*(ParticleVel_j[k] + local.ParticleVel[k])/All.cf_atime;} // frame velocity, not fluid velocity, is what appears here
+    Vec3<double> v_frame = 0.5*(ParticleVel_j + local.ParticleVel)/All.cf_atime; // frame velocity, not fluid velocity, is what appears here
 #else
-    double v_frame[3]={0}; for(k=0;k<3;k++) {v_frame[k]=0.5*(VelPred_j[k] + local.Vel[k])/All.cf_atime;} // variable to use below //
+    Vec3<double> v_frame = 0.5*(VelPred_j + local.Vel)/All.cf_atime; // variable to use below //
 #endif
 #if defined(RT_INFRARED)
     double Fluxes_Rad_E_gamma_T_weighted_IR = 0;
@@ -30,7 +30,7 @@
     for(k_freq=0;k_freq<N_RT_FREQ_BINS;k_freq++)
     {
         Fluxes_Rad_E_gamma[k_freq] = 0;
-        double kappa_ij = 0.5 * (local.RT_DiffusionCoeff[k_freq] + rt_diffusion_coefficient(j,k_freq)); // physical
+        double kappa_ij = 0.5 * (local.RT_DiffusionCoeff[k_freq] + rt_diffusion_coefficient(j,k_freq, CellP)); // physical
         if((kappa_ij>0)&&(local.Mass>0)&&(P[j].Mass>0))
         {
             double scalar_i = local.Rad_E_gamma[k_freq] / V_i; // volumetric photon number density in this frequency bin (1/code volume) //
@@ -89,16 +89,16 @@
 #endif
             
             // now we need to add the advective flux. note we do this after the limiters above, since those are designed for the diffusive terms, and this is simpler and more stable. we do this zeroth order (super-diffusive, but that's fine for our purposes)
-            double cmag_adv=0, fluxlim_ij=1, v_Area_dot_rt=0, v_Fluid_dot_rt=0; for(k=0;k<3;k++) {v_Area_dot_rt += v_frame[k] * Face_Area_Vec[k]; v_Fluid_dot_rt += (0.5*(local.Vel[k]+VelPred_j[k])/All.cf_atime) * Face_Area_Vec[k];}
+            double cmag_adv=0, fluxlim_ij=1, v_Area_dot_rt = dot(v_frame, Face_Area_Vec), v_Fluid_dot_rt = dot(0.5*(local.Vel+VelPred_j)/All.cf_atime, Face_Area_Vec);
             double scalar_ij_phys = 2.*scalar_i*scalar_j/(scalar_i+scalar_j) * All.cf_a3inv; // use harmonic mean here, to weight lower value
 #ifdef RT_FLUXLIMITER
-            double fluxlim_j = return_flux_limiter(j,k_freq);
+            double fluxlim_j = CellP[j].flux_limiter(k_freq);
             double fluxlim_i = local.RT_DiffusionCoeff[k_freq] * local.Density * local.Rad_Kappa[k_freq] / c_light_eff; /* figure this out by what we've passed to save an extra variable being sent, here */
             fluxlim_ij = 0.5 * (fluxlim_i+fluxlim_j);
 #endif
             double fac_fluxlim = rsol_corr*(4./3.)*fluxlim_ij*v_Fluid_dot_rt - v_Area_dot_rt; /* also need to account for where the RSOL terms appear in the asymptotic flux with an RSOL */
 #ifdef RT_RADPRESSURE_IN_HYDRO
-            fac_fluxlim = rsol_corr*fluxlim_ij*v_Fluid_dot_rt - v_Area_dot_rt + (2.*rt_absorb_frac_albedo(j,k_freq))*(fluxlim_ij/3.)*v_Fluid_dot_rt; // when P is included in hydro solver, some terms are automatically included, some not, so the pre-factor here needs to be revised
+            fac_fluxlim = rsol_corr*fluxlim_ij*v_Fluid_dot_rt - v_Area_dot_rt + (2.*rt_absorb_frac_albedo(j,k_freq, P, CellP))*(fluxlim_ij/3.)*v_Fluid_dot_rt; // when P is included in hydro solver, some terms are automatically included, some not, so the pre-factor here needs to be revised
 #endif
             cmag_adv += scalar_ij_phys * fac_fluxlim; // need to be careful with the sign here. since this is an oriented area and A points from j to i, need to watch the sign here (recently flipped in push - need to test). the 1/3 sometimes above owes to the fact that this is really the --pressure-- term for FLD-like methods, the energy term is implicitly part of the flux already if we're actually doing this correctly //
             cmag_adv += fabs(v_Area_dot_rt) * (scalar_j-scalar_i); // hll (rusanov) flux to stabilize and smooth flow
@@ -133,7 +133,7 @@
 #else /* RT_EVOLVE_FLUX is ON, so we don't solve a diffusion equation, but a system of two standard advection-like equations */
 
 
-    int k_freq; double Fluxes_Rad_Flux[N_RT_FREQ_BINS][3], V_i_phys = V_i / All.cf_a3inv, V_j_phys = V_j / All.cf_a3inv;
+    int k_freq; Vec3<double> Fluxes_Rad_Flux[N_RT_FREQ_BINS]; double V_i_phys = V_i / All.cf_a3inv, V_j_phys = V_j / All.cf_a3inv;
 #ifdef RT_M1_SECONDORDER
     /* face distances for second-order reconstruction: face lies at midpoint, s_star_ij=0 */
     double dist_rt_i[3], dist_rt_j[3];
@@ -142,7 +142,7 @@
     for(k_freq=0;k_freq<N_RT_FREQ_BINS;k_freq++)
     {
         Fluxes_Rad_E_gamma[k_freq] = 0;
-        Fluxes_Rad_Flux[k_freq][0]=Fluxes_Rad_Flux[k_freq][1]=Fluxes_Rad_Flux[k_freq][2]=0;
+        Fluxes_Rad_Flux[k_freq] = {};
         double scalar_i = local.Rad_E_gamma[k_freq] / V_i_phys; // volumetric photon number density in this frequency bin (E_phys/L_phys^3)//
         double scalar_j = CellP[j].Rad_E_gamma_Pred[k_freq] / V_j_phys;
 #ifdef RT_M1_SECONDORDER
@@ -161,15 +161,18 @@
         if((scalar_i+scalar_j>0)&&(local.Mass>0)&&(P[j].Mass>0)&&(dt_hydrostep>0)&&(Face_Area_Norm>0))
         {
             double d_scalar = scalar_i - scalar_j;
-            double face_dot_flux=0., cmag=0., cmag_flux[3]={0}, grad_norm=0, flux_i[3]={0}, flux_j[3]={0}, thold_hll;
-            double kappa_i = local.RT_DiffusionCoeff[k_freq], kappa_j = rt_diffusion_coefficient(j,k_freq), kappa_ij = 0.5*(kappa_i+kappa_j); // physical units
+            double cmag=0., thold_hll;
+            Vec3<double> cmag_flux = {}, flux_i = local.Rad_Flux[k_freq]/V_i_phys - rsol_corr*v_frame*scalar_i, flux_j = CellP[j].Rad_Flux_Pred[k_freq]/V_j_phys - rsol_corr*v_frame*scalar_j; // units (E_phys/[t_phys*L_phys^2]) [physical]. include advective flux terms here
+            double kappa_i = local.RT_DiffusionCoeff[k_freq], kappa_j = rt_diffusion_coefficient(j,k_freq, CellP), kappa_ij = 0.5*(kappa_i+kappa_j); // physical units
 
             /* calculate the eigenvalues for the HLLE flux-weighting */
+#ifdef RT_M1_SECONDORDER
+            /* with second-order reconstruction, recompute flux_i, flux_j per-component at the face */
+            double grad_norm = 0, face_dot_flux = 0;
             for(k=0;k<3;k++)
             {
                 double flux_i_raw = local.Rad_Flux[k_freq][k]/V_i_phys;
                 double flux_j_raw = CellP[j].Rad_Flux_Pred[k_freq][k]/V_j_phys;
-#ifdef RT_M1_SECONDORDER
                 /* reconstruct each flux component at the face; grad is d(F_k/V_code)/dx_code, scale by cf_a3inv */
                 {
                     MyFloat grad_F_i[3], grad_F_j[3];
@@ -181,7 +184,6 @@
                     reconstruct_face_states(flux_i_raw, grad_F_i, flux_j_raw, grad_F_j, dist_rt_i, dist_rt_j, &flux_j_face, &flux_i_face, 1);
                     flux_i_raw = flux_i_face; flux_j_raw = flux_j_face;
                 }
-#endif
                 flux_i[k] = flux_i_raw - rsol_corr*v_frame[k]*scalar_i;
                 flux_j[k] = flux_j_raw - rsol_corr*v_frame[k]*scalar_j; // units (E_phys/[t_phys*L_phys^2]) [physical]. include advective flux terms here
                 double grad = 0.5*(flux_i[k] + flux_j[k]);
@@ -189,18 +191,22 @@
                 face_dot_flux += Face_Area_Vec[k] * grad; /* remember, our 'flux' variable is a volume-integral */
             }
             grad_norm = sqrt(grad_norm) + MIN_REAL_NUMBER;
+#else
+            Vec3<double> grad_vec = 0.5*(flux_i + flux_j);
+            double grad_norm = sqrt(grad_vec.norm_sq()) + MIN_REAL_NUMBER;
+            double face_dot_flux = dot(Face_Area_Vec, grad_vec); /* remember, our 'flux' variable is a volume-integral */
+#endif
             double cos_theta_face_flux = face_dot_flux / (Face_Area_Norm * grad_norm); // angle between flux and face vector normal
             if(cos_theta_face_flux < -1) {cos_theta_face_flux=-1;} else {if(cos_theta_face_flux > 1) {cos_theta_face_flux=1;}}
             double hlle_wtfac_u=0.5, hlle_wtfac_f=0.5; // this corresponds to the Global-Lax-Friedrichs (GLF) flux function
             /* the flux is already known (its explicitly evolved, rather than determined by the gradient of the energy density */
-            for(k=0;k<3;k++) {cmag += Face_Area_Vec[k] * (hlle_wtfac_f*flux_i[k] + (1.-hlle_wtfac_f)*flux_j[k]);} /* remember, our 'flux' variable is a volume-integral [all physical units here] */
+            cmag = dot(Face_Area_Vec, hlle_wtfac_f*flux_i + (1.-hlle_wtfac_f)*flux_j); /* remember, our 'flux' variable is a volume-integral [all physical units here] */
 
             /* now compute the 'flux source term' - divergence of the radiation pressure tensor */
-            double ET_dot_Face_i[3]={0}, ET_dot_Face_j[3]={0};
-            eddington_tensor_dot_vector(local.ET[k_freq],Face_Area_Vec,ET_dot_Face_i); /* compute face dotted into eddington tensors for both sides */
-            eddington_tensor_dot_vector(CellP[j].ET[k_freq],Face_Area_Vec,ET_dot_Face_j); /* compute face dotted into eddington tensors for both sides */
+            Vec3<double> ET_dot_Face_i = local.ET[k_freq].matvec(Face_Area_Vec); /* compute face dotted into eddington tensors for both sides */
+            Vec3<double> ET_dot_Face_j = CellP[j].ET[k_freq].matvec(Face_Area_Vec);
 #ifdef RT_ENHANCED_NUMERICAL_DIFFUSION
-            for(k=0;k<3;k++) {cmag_flux[k] += c_light_eff*c_light_eff * Face_Area_Vec[k] * 0.5*(scalar_i + scalar_j)/3.;}
+            cmag_flux += (c_light_eff*c_light_eff * 0.5*(scalar_i + scalar_j)/3.) * Face_Area_Vec;
 #else
             for(k=0;k<3;k++) {cmag_flux[k] += c_light_eff*c_light_eff * (hlle_wtfac_f*scalar_i*ET_dot_Face_i[k] + (1.-hlle_wtfac_f)*scalar_j*ET_dot_Face_j[k]);}
 #endif
@@ -228,7 +234,7 @@
 
 #ifndef RT_M1_SECONDORDER /* with RT_M1_SECONDORDER, scalar_i/j are already face-reconstructed so this correction is redundant */
             double scalar_jr=scalar_j, scalar_ir=scalar_i, d_scalar_hll=d_scalar, d_scalar_ij=0;
-            for(k=0;k<3;k++) {scalar_jr+=0.5*kernel.dp[k]*local.Gradients.Rad_E_gamma_ET[k_freq][k]*All.cf_a3inv; scalar_ir-=0.5*kernel.dp[k]*CellP[j].Gradients.Rad_E_gamma_ET[k_freq][k]*All.cf_a3inv;}
+            scalar_jr += 0.5*dot(kernel.dp, local.Gradients.Rad_E_gamma_ET[k_freq])*All.cf_a3inv; scalar_ir -= 0.5*dot(kernel.dp, CellP[j].Gradients.Rad_E_gamma_ET[k_freq])*All.cf_a3inv;
             d_scalar_ij=scalar_ir-scalar_jr; if((d_scalar_ij*d_scalar>0)&&(fabs(d_scalar_ij)<fabs(d_scalar))) {d_scalar_hll=d_scalar_ij;}
             d_scalar = d_scalar_hll;
 #endif
@@ -289,9 +295,9 @@
             }
                         
             // now we need to add the advective flux. note we do this after the limiters above, since those are designed for the diffusive terms, and this is simpler and more stable. we do this zeroth order (super-diffusive, but that's fine for our purposes)
-            double flux_dot_face=0,v_Area_dot_rt=0; for(k=0;k<3;k++) {flux_dot_face += 0.5*(flux_i[k]+flux_j[k])*Face_Area_Vec[k]; v_Area_dot_rt += rsol_corr*v_frame[k]*Face_Area_Vec[k];} // order of operations needs care here. following through on the divergence theorem carefully, the transport follows v, with A dotted into flux here, rather than A.v or some other law
+            double flux_dot_face = dot(0.5*(flux_i+flux_j), Face_Area_Vec), v_Area_dot_rt = rsol_corr*dot(v_frame, Face_Area_Vec); // order of operations needs care here. following through on the divergence theorem carefully, the transport follows v, with A dotted into flux here, rather than A.v or some other law
             //for(k=0;k<3;k++) {cmag_flux[k] += -v_frame[k]*flux_dot_face + 0.5*fabs(v_Area_dot_rt)*(flux_j[k]-flux_i[k]);} // need to be careful with the sign here. since this is an oriented area and A points from j to i, need to flip the sign here //
-            for(k=0;k<3;k++) {cmag_flux[k] += -0.5*(flux_i[k]+flux_j[k])*v_Area_dot_rt + 0.5*fabs(v_Area_dot_rt)*(flux_j[k]-flux_i[k]);} // need to be careful with the sign here. since this is an oriented area and A points from j to i, need to flip the sign here //
+            cmag_flux += -v_Area_dot_rt*0.5*(flux_i+flux_j) + (0.5*fabs(v_Area_dot_rt))*(flux_j-flux_i); // need to be careful with the sign here. since this is an oriented area and A points from j to i, need to flip the sign here //
 
             for(k=0;k<3;k++)
             {
@@ -324,8 +330,8 @@
     if(j_is_active_for_fluxes) {CellP[j].Dt_Rad_E_gamma_T_weighted_IR -= FluxCorrectionFactor_to_j * Fluxes_Rad_E_gamma_T_weighted_IR;}
 #endif
 #ifdef RT_EVOLVE_FLUX
-    for(k=0;k<N_RT_FREQ_BINS;k++) {int k_dir; for(k_dir=0;k_dir<3;k_dir++) {out.Dt_Rad_Flux[k][k_dir] += FluxCorrectionFactor_to_i * Fluxes_Rad_Flux[k][k_dir];}}
-    if(j_is_active_for_fluxes) {for(k=0;k<N_RT_FREQ_BINS;k++) {int k_dir; for(k_dir=0;k_dir<3;k_dir++) {CellP[j].Dt_Rad_Flux[k][k_dir] -= FluxCorrectionFactor_to_j * Fluxes_Rad_Flux[k][k_dir];}}}
+    for(k=0;k<N_RT_FREQ_BINS;k++) {out.Dt_Rad_Flux[k] += FluxCorrectionFactor_to_i * Fluxes_Rad_Flux[k];}
+    if(j_is_active_for_fluxes) {for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[j].Dt_Rad_Flux[k] -= FluxCorrectionFactor_to_j * Fluxes_Rad_Flux[k];}}
 #endif
     
 }

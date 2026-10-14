@@ -297,7 +297,7 @@ void pmforce_periodic(int mode, int *typelist)
 	      pos = pp;
 	    }
 	  else
-	    pos = P[i].Pos;
+	    pos = P[i].Pos.data_ptr();
 
 	  slab_x = (int) (to_slab_fac * pos[0]);
 	  slab_y = (int) (to_slab_fac * pos[1]);
@@ -419,7 +419,7 @@ void pmforce_periodic(int mode, int *typelist)
 	      pos = pp;
 	    }
 	  else
-	    pos = P[pindex].Pos;
+	    pos = P[pindex].Pos.data_ptr();
 
 	  slab_x = (int) (to_slab_fac * pos[0]);
 	  slab_y = (int) (to_slab_fac * pos[1]);
@@ -2173,12 +2173,10 @@ void pmtidaltensor_periodic_diff(void)
 	      if(dim == 1)
 		{
 		  P[i].tidal_tensorpsPM[0][1] += tidal_dim;
-		  P[i].tidal_tensorpsPM[1][0] += tidal_dim;
 		}
 	      if(dim == 2)
 		{
 		  P[i].tidal_tensorpsPM[0][2] += tidal_dim;
-		  P[i].tidal_tensorpsPM[2][0] += tidal_dim;
 		}
 	      if(dim == 3)
 		{
@@ -2187,7 +2185,6 @@ void pmtidaltensor_periodic_diff(void)
 	      if(dim == 4)
 		{
 		  P[i].tidal_tensorpsPM[1][2] += tidal_dim;
-		  P[i].tidal_tensorpsPM[2][1] += tidal_dim;
 		}
 	      if(dim == 5)
 		{
@@ -2650,23 +2647,20 @@ void pmtidaltensor_periodic_fourier(int component)
 	    P[i].tidal_tensorpsPM[0][0] += tidal;
 	} 
 	if(component == 1)
-	{ 
-	    P[i].tidal_tensorpsPM[0][1] += tidal; 
-	    P[i].tidal_tensorpsPM[1][0] += tidal;
-	} 
+	{
+	    P[i].tidal_tensorpsPM[0][1] += tidal;
+	}
 	if(component == 2)
 	{
-	    P[i].tidal_tensorpsPM[0][2] += tidal; 
-	    P[i].tidal_tensorpsPM[2][0] += tidal;
-	} 
+	    P[i].tidal_tensorpsPM[0][2] += tidal;
+	}
 	if(component == 3)
-	{ 
+	{
 	    P[i].tidal_tensorpsPM[1][1] += tidal;
-	} 
+	}
 	if(component == 4)
-	{ 
-	    P[i].tidal_tensorpsPM[1][2] += tidal; 
-	    P[i].tidal_tensorpsPM[2][1] += tidal;
+	{
+	    P[i].tidal_tensorpsPM[1][2] += tidal;
 	} 
 	if(component == 5) 
 	{ 

@@ -23,8 +23,8 @@
         rho_i = local.Density*All.cf_a3inv; rho_j = CellP[j].Density*All.cf_a3inv; rho_ij = 0.5*(rho_i+rho_j); // physical units
         
         // NOT SPH: Now we use the more accurate finite-volume formulation, with the effective faces we have already calculated //
-        double *grad_i = local.Gradients.InternalEnergy;  // physical u / code length
-        double *grad_j = CellP[j].Gradients.InternalEnergy;
+        double *grad_i = local.Gradients.InternalEnergy.data_ptr();  // physical u / code length
+        double *grad_j = CellP[j].Gradients.InternalEnergy.data_ptr();
         
         double flux_wt = rho_ij;
         double diffusion_wt = 0.5*(kappa_i+kappa_j);
@@ -33,7 +33,7 @@
 #endif
         int do_isotropic = 1;
         double b_hll=1, cmag=0, wt_i=0.5, wt_j=0.5, grad_dot_x_ij = 0;
-        double grad_ij[3];
+        Vec3<double> grad_ij;
         for(k=0;k<3;k++)
         {
             double q_grad = wt_i*grad_i[k] + wt_j*grad_j[k];
@@ -50,20 +50,17 @@
         if(bhat_mag > 0)
         {
             do_isotropic = 0;
-            double B_interface_dot_grad_T = 0.0, grad_mag = 0.0;
-            for(k=0;k<3;k++)
-            {
-                B_interface_dot_grad_T += bhat[k] * grad_ij[k];
-                grad_mag += grad_ij[k]*grad_ij[k];
-            }
-            for(k=0;k<3;k++) {cmag += bhat[k] * Face_Area_Vec[k];} // physical
+            Vec3<double> bhat_v = {bhat[0], bhat[1], bhat[2]};
+            double B_interface_dot_grad_T = dot(bhat_v, grad_ij);
+            double grad_mag = grad_ij.norm_sq();
+            cmag = dot(bhat_v, Face_Area_Vec); // physical
             cmag *= B_interface_dot_grad_T; // physical / code length
             if(grad_mag > 0) {grad_mag = sqrt(grad_mag);} else {grad_mag=1;}
             b_hll = B_interface_dot_grad_T / grad_mag; // physical
             b_hll *= b_hll; // physical
         }
 #endif
-        if(do_isotropic) {for(k=0;k<3;k++) {cmag += Face_Area_Vec[k] * grad_ij[k];}}
+        if(do_isotropic) {cmag = dot(Face_Area_Vec, grad_ij);}
         cmag /= All.cf_atime; // cmag has units of u/r -- convert to physical
         
         /* obtain HLL correction terms for Reimann problem solution */

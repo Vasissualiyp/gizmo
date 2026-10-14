@@ -180,6 +180,7 @@ void finalize_sampled_star(int i, double M_drawn)
 void recompute_resolvedism_fuv_luminosities(void)
 {
     int i;
+    for(int ia : ActiveParticleList) {if(P[ia].Type == 4) {TreeMomentsStaleFlag = 1; break;}} /* node luminosities follow per-step stellar lums */
 #ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
     /* TestFUVZero=1: silence ALL stellar radiation (UV/LW/NUV/OPT + Lyman) for
      * quiescent-medium experiments (e.g. clean KO15 terminal-momentum ladder:
@@ -193,7 +194,7 @@ void recompute_resolvedism_fuv_luminosities(void)
      * comparable to the Spitzer/Hosokawa-Inutsuka D-type solution. Checked BEFORE
      * TestFUVZero so it takes precedence. (Tier-2 variable-Q test: leave this =0.) */
     if(All.TestFixedQion > 0) {
-        for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+        for(int i : ActiveParticleList) {
             if(P[i].Type != 4) continue;
             P[i].UV_luminosity = 0; P[i].LW_luminosity = 0;
 #ifdef GALSF_RESOLVEDISM_NUV_VARIABLE
@@ -220,7 +221,7 @@ void recompute_resolvedism_fuv_luminosities(void)
      * TestFUVZero so it takes precedence. (Variable-L test: leave this =0.) */
     if(All.TestFixedLbol > 0) {
         double L = All.TestFixedLbol;
-        for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+        for(int i : ActiveParticleList) {
             if(P[i].Type != 4) continue;
             P[i].UV_luminosity = 0.5 * L; P[i].LW_luminosity = 0.15 * L;
 #ifdef GALSF_RESOLVEDISM_NUV_VARIABLE
@@ -239,7 +240,7 @@ void recompute_resolvedism_fuv_luminosities(void)
         return;
     }
     if(All.TestFUVZero) {
-        for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+        for(int i : ActiveParticleList) {
             if(P[i].Type != 4) continue;
             P[i].UV_luminosity = 0; P[i].LW_luminosity = 0;
 #ifdef GALSF_RESOLVEDISM_NUV_VARIABLE
@@ -261,7 +262,7 @@ void recompute_resolvedism_fuv_luminosities(void)
 #ifdef STELLA_SELFCHECK
     int n_selfcheck_life = 0;
 #endif
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for(int i : ActiveParticleList)
     {
         if(P[i].Type != 4) continue;
         if(P[i].sampled != 1) continue;             /* only finalized stars */
@@ -662,6 +663,8 @@ int resolvedismIMF_evaluate(int target, int mode, int *exportflag, int *exportno
 #endif
                     #pragma omp atomic
                     P[j].Mass -= dM;
+                    #pragma omp atomic
+                    CellP[j].Mass -= dM;
 #ifdef STELLA_SELFCHECK
                     { static long n_don = 0, n_low = 0; n_don++;   /* donor drained below the accretion floor */
                       if(P[j].Mass < (1 - 1.0e-9) * 0.01 * All.MinMassForParticleMerger && ++n_low <= 50)
@@ -895,7 +898,7 @@ void assign_stellar_masses(void)
         }
 
         /* Star mass = actual mass accreted (exact conservation) */
-        P[i].Mass = mass_acc;
+        P[i].Mass = mass_acc; TreeMomentsStaleFlag = 1;
 
         /* CoM velocity from all donor cells */
         if(mass_acc > 0) {

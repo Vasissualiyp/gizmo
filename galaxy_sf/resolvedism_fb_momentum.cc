@@ -622,6 +622,8 @@ int resolvedismFB_momentum_evaluate(int target, int mode, int *exportflag, int *
 #endif
                     #pragma omp atomic
                     P[j].Mass += dM;
+                    #pragma omp atomic
+                    CellP[j].Mass += dM;
                     /* ENERGY BUGFIX (2026-07-18, ledger-pinpointed): the deposited wind/AGB
                      * parcel is thermally cold — its energy budget is booked ENTIRELY by the
                      * kick + inelastic residual below. Adding dM at the receiver's CURRENT
@@ -878,10 +880,10 @@ void resolvedism_radpressure_treerad(void)
         STELLA_CHECK("radp_photon_cap", fcons * glob[1] <= glob[0] * (1 + 1e-9) || glob[1] <= 0, "L_emit=%.6e A_abs_all=%.6e fcons=%.6e", glob[0], glob[1], fcons);
         if(ThisTask == 0) STELLA_CHECK_RAN("radp_photon_cap", glob[1] > 0);
     }
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for(int i : ActiveParticleList)
     {
         if(P[i].Type != 0 || P[i].Mass <= 0) {continue;}
-        double dt = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);
+        double dt = get_particle_timestep_in_physical(i);
         if(dt <= 0) {continue;}
         double dt_cgs = dt * UNIT_TIME_IN_CGS;
         /* DGR: use EXACTLY the tree's tr_dgr (gravtree.cc:602, = All.DGRnormalized,

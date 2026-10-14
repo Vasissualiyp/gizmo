@@ -542,6 +542,8 @@ int resolvedismFB_thermal_evaluate(int target, int mode, int *exportflag, int *e
                     }
                     #pragma omp atomic
                     P[j].Mass += dM;
+                    #pragma omp atomic
+                    CellP[j].Mass += dM;
                     /* Accumulate actual deposition for measured-coupling reduction
                      * on the dying star (FIRE pattern); see out2particle. */
                     out.M_coupled += dM;

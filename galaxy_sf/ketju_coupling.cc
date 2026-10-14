@@ -927,7 +927,7 @@ static std::set<int> find_local_members(const std::vector<ketju_mpi_particle> &c
          * members, so the later find_regions call reproduces the same admission decisions. */
         if(!TimeBinActive[P[i].TimeBin] && !P[i].KetjuIntegrated) continue;
         for(size_t c = 0; c < centers.size(); c++) {
-            double dist = particle_distance(P[i].Pos, const_cast<double*>(centers[c].Pos));
+            double dist = particle_distance(P[i].Pos.data_ptr(), const_cast<double*>(centers[c].Pos));
             if(dist < radius) { members.insert(i); break; }
         }
     }
@@ -1768,7 +1768,7 @@ static void handle_mergers(KetjuRegion &reg,
          * a Mass=0 particle with live MstarSampleIMF/luminosities would still trigger
          * FB (SN/winds) and shine UV. Same retirement pattern as the FB death cleanup. */
         if(act.task_merged == ThisTask) {
-            P[act.idx_merged].Mass = 0;
+            P[act.idx_merged].Mass = 0; TreeMomentsStaleFlag = 1;
 #ifdef GALSF_RESOLVEDISM_SAMPLE_IMF
             P[act.idx_merged].MstarSampleIMF[0] = 0;
 #endif
@@ -2659,7 +2659,7 @@ void ketju_run_integration(void)
         integertime local_max_ti = 0;
         for(int idx : reg.local_member_indices) {
             if(!TimeBinActive[P[idx].TimeBin]) continue;
-            integertime ti_i = GET_PARTICLE_INTEGERTIME(idx);
+            integertime ti_i = P[idx].integertime_step();
             if(ti_i > local_max_ti) local_max_ti = ti_i;
         }
 

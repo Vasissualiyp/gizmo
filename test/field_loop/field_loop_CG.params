@@ -1,0 +1,33 @@
+% Field loop advection test (Hopkins & Raives 2016)
+%
+%        HYDRO_MESHLESS_FINITE_MASS
+%        BOX_PERIODIC
+%        BOX_SPATIAL_DIMENSION=2
+%        OUTPUT_BFIELD_DIVCLEAN_INFO
+%        MAGNETIC
+%        SELFGRAVITY_OFF
+%        INPUT_IN_DOUBLEPRECISION
+%        OUTPUT_IN_DOUBLEPRECISION
+%        DEVELOPER_MODE
+%        MHD_CONSTRAINED_GRADIENT=1
+%
+InitCondFile                       field_loop_ics
+OutputDir                          output_CG
+TimeMax                            0.21
+BoxSize                            1
+TimeOfFirstSnapshot                0.01
+TimeBetSnapshot                    0.025
+MaxSizeTimestep                    0.1
+DesNumNgb                          20
+ErrTolIntAccuracy                  0.01
+CourantFac                         0.2
+MaxRMSDisplacementFac              0.1
+ErrTolForceAcc                     0.001
+TimeBetStatistics                  0.5
+MaxMemSize                         1000
+ErrTolTheta                        0.7
+MaxNumNgbDeviation                 0.1
+ResubmitOn                         0
+ResubmitCommand                    none
+DivBcleaningParabolicSigma         0.1
+DivBcleaningHyperbolicSigma        1.0

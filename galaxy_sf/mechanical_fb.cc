@@ -35,9 +35,6 @@ int addFB_evaluate_active_check(int i, int fb_loop_iteration)
     if(P[i].AgeDeposition_ThisTimeStep>0) {if(fb_loop_iteration<0 || fb_loop_iteration==3) {return 1;}}
 #endif
 #endif
-#if defined(SINGLE_STAR_FB_WINDS) && defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)
-    if(P[i].wind_mode != 2 || P[i].ProtoStellarStage != 5) {return 0;}
-#endif
     return 0;
 }
 
@@ -50,7 +47,7 @@ void determine_where_SNe_occur(void)
     double mpi_npossible,mpi_nhosttotal,mpi_ntotal,mpi_ptotal,mpi_dtmean,mpi_rmean;
     mpi_npossible=mpi_nhosttotal=mpi_ntotal=mpi_ptotal=mpi_dtmean=mpi_rmean=0;
     // loop over particles //
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         P[i].SNe_ThisTimeStep=0;
 #ifdef GALSF_FB_FIRE_STELLAREVOLUTION
@@ -80,7 +77,7 @@ void determine_where_SNe_occur(void)
         if(All.ComovingIntegrationOn==0) {if((P[i].Type<2)||(P[i].Type>4)) {continue;}} // in non-cosmological sims, types 2,3,4 are valid 'stars'
 #endif
         if(P[i].Mass<=0) {continue;}
-        dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(i);
+        dt = get_particle_feedback_timestep_in_physical(i);
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
         if(P[i].Type == 5) {dt = P[i].dt_since_last_gas_search;}
 #endif
@@ -96,7 +93,7 @@ void determine_where_SNe_occur(void)
 #endif
         if(P[i].SNe_ThisTimeStep>0) {ntotal+=P[i].SNe_ThisTimeStep; nhosttotal++;}
         dtmean += dt;
-    } // for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) //
+    } // for (int i : ActiveParticleList) //
 
     MPI_Reduce(&dtmean, &mpi_dtmean, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
     MPI_Reduce(&rmean, &mpi_rmean, 1, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -142,7 +139,7 @@ static struct temporary_mech_fb_data_tohold
 #include "../system/code_block_xchange_initialize.h" /* pre-define all the ALL_CAPS variables we will use below, so their naming conventions are consistent and they compile together, as well as defining some of the function calls needed */
 
 // define kernel structure (purely for convenience, will hold variables below) //
-struct kernel_addFB {double dp[3], r, wk, dwk, hinv, hinv3, hinv4;};
+struct kernel_addFB {Vec3<double> dp; double r, wk, dwk, hinv, hinv3, hinv4;};
 
 struct OUTPUT_STRUCT_NAME
 {
@@ -154,7 +151,7 @@ struct OUTPUT_STRUCT_NAME
 void particle2in_addFB(struct addFB_evaluate_data_in_ *in, int i, int loop_iteration)
 {
     // pre-assign various values that will be used regardless of feedback physics //
-    int k; for(k=0;k<3;k++) {in->Pos[k] = P[i].Pos[k]; in->Vel[k] = P[i].Vel[k];}
+    int k; in->Pos = P[i].Pos; in->Vel = P[i].Vel;
     double heff = P[i].KernelRadius / P[i].NumNgb; in->V_i = heff*heff*heff; in->KernelRadius = P[i].KernelRadius;
 #ifdef METALS
     for(k=0;k<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;k++) {in->yields[k]=0.0;}
@@ -179,7 +176,8 @@ void out2particle_addFB(struct OUTPUT_STRUCT_NAME *out, int i, int mode, int loo
 #endif
             for(k=kmin;k<kmax;k++) {ASSIGN_ADD(P[i].Area_weighted_sum[k], out->Area_weighted_sum[k], mode);}
         } else {
-            P[i].Mass -= out->M_coupled; if((P[i].Mass<0)||(isnan(P[i].Mass))) {P[i].Mass=0;}
+            P[i].dp -= out->M_coupled * P[i].Vel; /* track momentum change from mass loss for tree node update */
+            P[i].Mass -= out->M_coupled; if((P[i].Mass<0)||(isnan(P[i].Mass))) {P[i].Mass=0;} if(P[i].Type==0) {CellP[i].Mass = P[i].Mass;}
 #ifdef SINGLE_STAR_FB_WINDS
             P[i].Sink_Mass -= out->M_coupled; if((P[i].Sink_Mass<0)||(isnan(P[i].Sink_Mass))) {P[i].Sink_Mass=0;}
 #endif
@@ -244,15 +242,15 @@ int addFB_evaluate(int target, int mode, int *exportflag, int *exportnodecount, 
                 
                 // quick block of checks to make sure it's actually worth continuing!
                 if(Mass_j <= 0) continue; // require the particle has mass //
-                for(k=0; k<3; k++) {kernel.dp[k] = local.Pos[k] - P[j].Pos[k];}
-                NEAREST_XYZ(kernel.dp[0],kernel.dp[1],kernel.dp[2], 1); // find the closest image in the given box size  //
-                r2=0; for(k=0;k<3;k++) {r2 += kernel.dp[k]*kernel.dp[k];}
+                kernel.dp = local.Pos - P[j].Pos;
+                nearest_xyz(kernel.dp); // find the closest image in the given box size  //
+                r2 = kernel.dp.norm_sq();
                 if(r2<=0) {continue;} // same particle //
                 double h2j = P[j].KernelRadius * P[j].KernelRadius;
                 if((r2>h2)&&(r2>h2j)) {continue;} // outside kernel (in both 'directions') //
                 if(r2 > r2max_phys) {continue;} // outside long-range cutoff //
                 kernel.r = sqrt(r2); if(kernel.r <= 0) {continue;}
-                
+
                 // calculate kernel quantities //
                 #pragma omp atomic read
                 rho_j = CellP[j].Density;
@@ -301,7 +299,7 @@ int addFB_evaluate(int target, int mode, int *exportflag, int *exportnodecount, 
                 double Mass_Where_Dust_Shocked=0.; // mass fraction of gas cleared of dust from SNe
                 for(k=NUM_METAL_SPECIES;k<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;k++) {
                     #pragma omp critical(_feedbackreturnyieldsFIRE2_)
-                    Metallicity_j[k] = return_ismdustchem_species_of_interest_for_diffusion_and_yields(j,k, Mass_j_0); // load local scalar dust properties, note for grain size evolution this includes dust grain bin mass and number but they still work as scalars
+                    Metallicity_j[k] = return_ismdustchem_species_of_interest_for_diffusion_and_yields(j,k, Mass_j_0, CellP); // load local scalar dust properties, note for grain size evolution this includes dust grain bin mass and number but they still work as scalars
                 }
 #endif
                 for(k=0;k<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;k++) {Metallicity_j_0[k] = Metallicity_j[k];} // save initial values to  use below
@@ -372,7 +370,7 @@ int addFB_evaluate(int target, int mode, int *exportflag, int *exportnodecount, 
 
                 /* if coupling radius > R_cooling, account for thermal energy loss in the post-shock medium:
                  from Thornton et al. thermal energy scales as R^(-6.5) for R>R_cool */
-                double r_eff_ij = sqrt(r2) - Get_Particle_Size(j);
+                double r_eff_ij = sqrt(r2) - P[j].Get_Particle_Size();
                 if(r_eff_ij > RsneKPC) {e_shock *= RsneKPC*RsneKPC*RsneKPC/(r_eff_ij*r_eff_ij*r_eff_ij);}
 
                 /* now we have the proper energy to couple */
@@ -409,8 +407,8 @@ int addFB_evaluate(int target, int mode, int *exportflag, int *exportnodecount, 
                 {
                     
 #if defined(COSMIC_RAY_FLUID) && defined(GALSF_FB_FIRE_STELLAREVOLUTION) /* inject cosmic rays */
-                double crdir[3]; for(k=0;k<3;k++) {crdir[k]=-kernel.dp[k]/kernel.r;}
-                inject_cosmic_rays(pnorm * CR_energy_to_inject, local.SNe_v_ejecta, loop_iteration, j, crdir);
+                Vec3<double> crdir = -kernel.dp / kernel.r;
+                inject_cosmic_rays(pnorm * CR_energy_to_inject, local.SNe_v_ejecta, loop_iteration, j, crdir.data_ptr(), CellP);
 #endif
                 /* inject the post-shock energy and momentum (convert to specific units as needed first) */
                 e_shock *= 1 / Mass_j;
@@ -438,10 +436,10 @@ int addFB_evaluate(int target, int mode, int *exportflag, int *exportnodecount, 
                 }
                     
                 } // couple_anything_but_scalar_mass_and_metals
-                
+
                 /* we updated variables that need to get assigned to element 'j' -- let's do it here in a thread-safe manner */
                 #pragma omp atomic
-                P[j].Mass += Mass_j - Mass_j_0; // finite mass update [delta difference added here, allowing for another element to update in the meantime]. done this way to ensure conservation.
+                P[j].Mass += Mass_j - Mass_j_0; // finite mass update [delta difference added here, allowing for another element to update in the meantime]. done this way to ensure conservation. if(P[j].Type==0) {CellP[j].Mass = P[j].Mass;}
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
                 #pragma omp atomic
                 CellP[j].MassTrue += Mass_j - Mass_j_0; // finite mass update
@@ -582,9 +580,9 @@ int addFB_evaluate(int target, int mode, int *exportflag, int *exportnodecount, 
                 
                 // now consider a block of conditions we will use to evaluate whether its worth opening this loop at all //
                 if(Mass_j <= 0) {continue;} // require the particle has mass //
-                for(k=0; k<3; k++) {kernel.dp[k] = local.Pos[k] - P[j].Pos[k];}
-                NEAREST_XYZ(kernel.dp[0],kernel.dp[1],kernel.dp[2],1); // find the closest image in the given box size  //
-                r2=0; for(k=0;k<3;k++) {r2 += kernel.dp[k]*kernel.dp[k];}
+                kernel.dp = local.Pos - P[j].Pos;
+                nearest_xyz(kernel.dp); // find the closest image in the given box size  //
+                r2 = kernel.dp.norm_sq();
                 if(r2<=0) {continue;} // same particle //
                 double h2j = P[j].KernelRadius * P[j].KernelRadius;
                 if((r2>h2)&&(r2>h2j)) {continue;} // outside kernel (in both 'directions') //
@@ -755,8 +753,8 @@ int addFB_evaluate(int target, int mode, int *exportflag, int *exportnodecount, 
                 if(couple_anything_but_scalar_mass_and_metals)
                 {
 #if defined(COSMIC_RAY_FLUID) && defined(GALSF_FB_FIRE_STELLAREVOLUTION)
-                    double crdir[3]; for(k=0;k<3;k++) {crdir[k]=-kernel.dp[k]/kernel.r;}
-                    inject_cosmic_rays(pnorm * CR_energy_to_inject, local.SNe_v_ejecta, loop_iteration, j, crdir);
+                    Vec3<double> crdir = -kernel.dp / kernel.r;
+                    inject_cosmic_rays(pnorm * CR_energy_to_inject, local.SNe_v_ejecta, loop_iteration, j, crdir.data_ptr(), CellP);
 #endif
                     /* inject momentum: account for ejecta being energy-conserving inside the cooling radius (or KernelRadius, if thats smaller) */
                     double mom_prefactor = All.cf_atime * momentum_to_couple_term_units / Mass_j; // divide by mass to make velocity units used below, include cosmological factor to correctly convert to comoving code units
@@ -777,7 +775,7 @@ int addFB_evaluate(int target, int mode, int *exportflag, int *exportnodecount, 
 #endif
                     
                 } // couple_anything_but_scalar_mass_and_metals
-                
+
                 /* we updated variables that need to get assigned to element 'j' -- let's do it here in a thread-safe manner */
 #pragma omp atomic
                 N_Gas_Couplings_ThisTask++; // note that a cell recieved some feedback
@@ -825,7 +823,7 @@ void verify_and_assign_local_mechfb_integrals(void)
         if(LocalGasMechFBInfoTemp[j].N_injected <= 0) {continue;} /* all mechanisms deposit non-zero mass, so skip if this is not >0*/
         if(P[j].Type==0 && P[j].Mass>0)
         {
-            double m0=P[j].Mass, dm=LocalGasMechFBInfoTemp[j].m_injected; P[j].Mass += dm; /* update mass */
+            double m0=P[j].Mass, dm=LocalGasMechFBInfoTemp[j].m_injected; P[j].Mass += dm; /* update mass */ if(P[j].Type==0) {CellP[j].Mass = P[j].Mass;}
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
             m0=CellP[j].MassTrue; CellP[j].MassTrue += dm; /* update conserved mass */
 #endif
@@ -840,7 +838,7 @@ void verify_and_assign_local_mechfb_integrals(void)
             {
                 double TE_0=m0*CellP[j].InternalEnergy; dTE=DMAX(-TE_0,dTE); /* ensure against non-negative values */
                 double dU = (-dm/mf)*CellP[j].InternalEnergy + (1./mf)*dTE; /* using new mass get updated internal energy */
-                double dt = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(j), implied_heating_cgs=(dU*UNIT_SPECEGY_IN_CGS*PROTONMASS_CGS)/(dt*UNIT_TIME_IN_CGS), typical_cooling_cgs=1.e-23*(CellP[j].Density*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS);
+                double dt = get_particle_timestep_in_physical(j), implied_heating_cgs=(dU*UNIT_SPECEGY_IN_CGS*PROTONMASS_CGS)/(dt*UNIT_TIME_IN_CGS), typical_cooling_cgs=1.e-23*(CellP[j].Density*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS);
                 if((implied_heating_cgs < 0.3*typical_cooling_cgs) && (dt > MIN_REAL_NUMBER) && ((dU < 4.*CellP[j].InternalEnergy) || ((dU < 1000.*CellP[j].InternalEnergy) && ((dU+CellP[j].InternalEnergy)*U_TO_TEMP_UNITS*2./3.*1.28 < 5.e5)))) {CellP[j].DtInternalEnergy += dU/dt;} else {CellP[j].InternalEnergy += dU; CellP[j].InternalEnergyPred += dU;}
                 //CellP[j].InternalEnergy += dU; CellP[j].InternalEnergyPred += dU; /* update internal energy; simpler (old) way to do it - less accurate phase diagrams at high density, however */
             }

@@ -73,7 +73,7 @@ void resolvedism_dust_evolve(void)
     /* conversion factor: sputtering rate is in yr^-1, need code time^-1 */
     double yr_to_code = SECONDS_PER_YEAR / UNIT_TIME_IN_CGS;
 
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for(int i : ActiveParticleList)
     {
         if(P[i].Type != 0) continue;
 
@@ -94,7 +94,7 @@ void resolvedism_dust_evolve(void)
 #endif
 
         /* particle timestep in code units */
-        double dt = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);
+        double dt = get_particle_timestep_in_physical(i);
 
         /* ---- Thermal sputtering (Nozawa+ 2006) ---- */
         /* tau_sput_inv = 3 * nH / a * Y(T), in yr^-1 */
@@ -135,7 +135,7 @@ void resolvedism_dust_evolve(void)
          * swept mass x DGR x eps -> the McKee-intended budget emerges from the
          * resolved blast, with the correct spatial/anisotropic distribution. */
         {
-            double cs_kms   = Get_Gas_effective_soundspeed_i(i) * UNIT_VEL_IN_KMS;
+            double cs_kms   = CellP[i].effective_soundspeed() * UNIT_VEL_IN_KMS;
             double vsig_kms = CellP[i].MaxSignalVel * UNIT_VEL_IN_KMS;
             double divv     = P[i].Particle_DivVel;   /* code 1/time; <0 = compression */
             double v_shock  = 0.5 * (vsig_kms - 2.0 * cs_kms); /* pairwise approach speed */

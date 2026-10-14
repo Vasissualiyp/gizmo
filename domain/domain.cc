@@ -3,7 +3,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-
+#include <algorithm>
 
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
@@ -55,7 +55,17 @@ static int *list_loadgas;
 static double *list_work;
 static double *list_workgas;
 extern int old_MaxPart, new_MaxPart;
-#define N_DOMAINDECOMP_QUEUES 3
+#define N_DOMAINDECOMP_QUEUES 4
+
+/* Adaptive domain balance weights: these are updated after each decomposition based
+   on measured imbalance, following the GADGET-4 approach of dynamically adjusting
+   the relative importance of work vs memory balance. */
+/* Exponential moving averages over the decomposition history (domain_update_adaptive_weights),
+   so they must survive a restart: reset to their seeds, the next split lands on different topnode
+   boundaries and every rank gets a different particle set. In All so restart() serializes them. */
+#define domain_fac_work    All.DomainFacWork
+#define domain_fac_workgas All.DomainFacWorkGas
+#define domain_fac_load    All.DomainFacLoad
 
 static struct local_topnode_data
 {
@@ -81,6 +91,23 @@ static struct peano_hilbert_data
 static void domain_insertnode(struct local_topnode_data *treeA, struct local_topnode_data *treeB, int noA, int noB);
 static void domain_add_cost(struct local_topnode_data *treeA, int noA, long long count, double cost, double gascost);
 
+/*! Walk the top tree to find the leaf node for a given Peano-Hilbert key, using bitwise operations instead of 128-bit division */
+static inline int domain_toptree_leaf(peanokey key, struct local_topnode_data *tNodes)
+{
+    int no = 0;
+    peanokey mask = ((peanokey)7) << (3 * (BITS_PER_DIMENSION - 1));
+    int shift = 3 * (BITS_PER_DIMENSION - 1);
+    while(tNodes[no].Daughter >= 0)
+    {
+        no = tNodes[no].Daughter + (int)((key & mask) >> shift);
+        mask >>= 3;
+        shift -= 3;
+    }
+    return tNodes[no].Leaf;
+}
+
+static float *particle_total_cost;  /*!< cached per-particle total work cost: (1+multiplier)*costfactor */
+static float *particle_costfactor;  /*!< cached per-particle base cost factor (for gas work accounting) */
 static float *domainWork;	/*!< a table that gives the total "work" due to the particles stored by each processor */
 static float *domainWorkGas;	/*!< a table that gives the total "work" due to the particles stored by each processor */
 static int *domainCount;	/*!< a table that gives the total number of particles held by each processor */
@@ -90,6 +117,100 @@ static int maxLoad, maxLoadgas;
 static double totgravcost, gravcost, totgascost, gascost;
 static long long totpartcount;
 static int UseAllParticles;
+static peanokey *PersistentKey = NULL; /*!< persistent Peano-Hilbert keys surviving between domain decompositions, used by lightweight repartition */
+static int PersistentKeySize = 0;     /*!< allocated size of PersistentKey array */
+static int LightRepartitionCount = 0; /*!< number of consecutive lightweight repartitions since last full decomposition */
+#define MAX_LIGHT_REPARTITIONS 20     /*!< force a full domain decomposition after this many consecutive lightweight ones, to adapt top tree to changed particle distribution */
+
+#if (DOMAIN_TIMEBINS == 1)
+/* Per-timebin cost tracking for Gadget-4-style domain decomposition.
+   Instead of a single composite cost, we track gravity and hydro costs separately
+   for each occupied timebin, then balance all timebins simultaneously during
+   domain assignment. */
+static int NumTimeBinsToBeBalanced;
+static int ListOfTimeBinsToBeBalanced[TIMEBINS];
+static double GravCostPerListedTimeBin[TIMEBINS];
+static double GravCostNormFactors[TIMEBINS];
+static double HydroCostPerListedTimeBin[TIMEBINS];
+static double HydroCostNormFactors[TIMEBINS];
+static double NormFactorLoad, NormFactorLoadGas;
+static float *domainBinGravCost = NULL;  /* [NumTimeBinsToBeBalanced * NTopleaves] per-timebin gravity cost per leaf */
+static float *domainBinHydroCost = NULL; /* [NumTimeBinsToBeBalanced * NTopleaves] per-timebin hydro cost per leaf */
+
+/*! Determine which timebins need to be individually balanced and compute their
+ *  normalization factors. Follows Gadget-4's domain_init_sum_cost() and
+ *  domain_find_total_cost(). */
+void domain_init_timebin_costs(void)
+{
+    /* Determine which timebins to balance: all occupied timebins from
+       HighestOccupiedTimeBin down to the lowest with particles */
+    NumTimeBinsToBeBalanced = 0;
+    long long tot_count[TIMEBINS], tot_count_gas[TIMEBINS];
+    sumup_large_ints(TIMEBINS, TimeBinCount, tot_count);
+    sumup_large_ints(TIMEBINS, TimeBinCountGas, tot_count_gas);
+
+    /* Always include the highest active timebin */
+    ListOfTimeBinsToBeBalanced[0] = All.HighestActiveTimeBin;
+    NumTimeBinsToBeBalanced = 1;
+
+    /* Add all lower timebins that have particles, with exponentially increasing weight */
+    for(int i = All.HighestActiveTimeBin - 1; i >= 0; i--)
+    {
+        if(tot_count[i] > 0 || tot_count_gas[i] > 0)
+        {
+            ListOfTimeBinsToBeBalanced[NumTimeBinsToBeBalanced] = i;
+            NumTimeBinsToBeBalanced++;
+        }
+    }
+
+    /* Compute global per-timebin cost totals and normalization factors.
+       A particle on timebin b contributes to all listed timebins with bin >= b. */
+    for(int n = 0; n < NumTimeBinsToBeBalanced; n++)
+    {
+        GravCostPerListedTimeBin[n] = 0;
+        HydroCostPerListedTimeBin[n] = 0;
+    }
+
+    for(int i = 0; i < NumPart; i++)
+    {
+        double gc = (double)particle_total_cost[i];
+        if(gc <= 0) gc = 1.0;
+        for(int n = 0; n < NumTimeBinsToBeBalanced; n++)
+        {
+            int bin = ListOfTimeBinsToBeBalanced[n];
+            if(bin >= P[i].TimeBin)
+                GravCostPerListedTimeBin[n] += gc;
+            if(P[i].Type == 0 && bin >= P[i].TimeBin)
+                HydroCostPerListedTimeBin[n] += 1.0;
+        }
+    }
+
+    MPI_Allreduce(MPI_IN_PLACE, GravCostPerListedTimeBin, NumTimeBinsToBeBalanced, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(MPI_IN_PLACE, HydroCostPerListedTimeBin, NumTimeBinsToBeBalanced, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+    /* Normalization: each timebin's total cost normalizes to ~1, so all timebins
+       contribute equally to the composite cost used for tree splitting */
+    for(int n = 0; n < NumTimeBinsToBeBalanced; n++)
+    {
+        GravCostNormFactors[n] = (GravCostPerListedTimeBin[n] > 0) ? 1.0 / GravCostPerListedTimeBin[n] : 0.0;
+        HydroCostNormFactors[n] = (HydroCostPerListedTimeBin[n] > 0) ? 1.0 / HydroCostPerListedTimeBin[n] : 0.0;
+    }
+
+    /* Load normalization */
+    NormFactorLoad = (totpartcount > 0) ? 1.0 / (double)totpartcount : 0.0;
+    long long totgas = 0; for(int i = 0; i < 6; i++) {if(i == 0) totgas = Ntype[0];}
+    NormFactorLoadGas = (totgas > 0) ? 1.0 / (double)totgas : 0.0;
+
+    if(ThisTask == 0)
+    {
+        printf("DOMAIN_TIMEBINS: balancing %d timebins:", NumTimeBinsToBeBalanced);
+        for(int n = 0; n < NumTimeBinsToBeBalanced; n++)
+            printf(" [bin=%d grav=%.3g hydro=%.3g]", ListOfTimeBinsToBeBalanced[n],
+                   GravCostPerListedTimeBin[n], HydroCostPerListedTimeBin[n]);
+        printf("\n");
+    }
+}
+#endif /* DOMAIN_TIMEBINS == 1 */
 
 /*! This is the main routine for the domain decomposition.  It acts as a driver routine that allocates various temporary buffers, maps the
  *  particles back onto the periodic box if needed, and then does the domain decomposition, and a final Peano-Hilbert order of all particles as a tuning measure. */
@@ -98,36 +219,63 @@ void domain_Decomposition(int UseAllTimeBins, int SaveKeys, int do_particle_merg
     int i, ret, retsum, diff, highest_bin_to_include; size_t bytes, all_bytes; double t0, t1;
     
     /* call first -before- a merge-split, to be sure particles are in the correct order in the tree */
-    // TO: we don't have to call this before merge_and_split particles() 
-    // Actually we shouldn't because there are tree-walks in merge_and_split_particles(). 
-    //rearrange_particle_sequence(); 
+    // TO: we don't have to call this before merge_and_split particles()
+    // Actually we shouldn't because there are tree-walks in merge_and_split_particles().
+    //rearrange_particle_sequence();
+    double t_drift_start = my_second(), t_mergesplit=0, t_rearrange=0, t_drift_loop=0, t_treefree=0, t_boxwrap=0, t_barrier=0;
+    TreeDiscardImminent = 1; /* the standing tree dies at the force_treefree below: the prelude's split daughters are deliberately not inserted */
     if((All.Ti_Current > All.TimeBegin)&&(do_particle_mergesplit_key==1))
     {
         merge_and_split_particles(); /* do the particle split/merge operations: only do this on tree-building super-steps */
     }
+    t_mergesplit = timediff(t_drift_start, my_second());
+    double t_tmp = my_second();
     rearrange_particle_sequence(); /* must be called after merge_and_split_particles, and should always be called before new domains are built */
+    t_rearrange = timediff(t_tmp, my_second());
 
     UseAllParticles = UseAllTimeBins;
-    
-    for(i = 0; i < NumPart; i++) {
-        if(P[i].Ti_current != All.Ti_Current) {drift_particle(i, All.Ti_Current);}
-    }
-    
+
+    t_tmp = my_second();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 256)
+#endif
+    for(i = 0; i < NumPart; i++) {if(P[i].Ti_current != All.Ti_Current) {drift_particle(i, All.Ti_Current);}}
+    t_drift_loop = timediff(t_tmp, my_second());
+
+#ifdef RANDOMIZE_GRAVTREE_PERIODIC
+    /* main-integration decompositions only. FOF/SUBFIND pass UseAllTimeBins=1 and must not
+     * change the frame: their group catalogs bypass fill_write_buffer and are never
+     * un-shifted. Group-finding is translation-invariant, so the stable frame is fine. */
+    if(UseAllTimeBins == 0) {domain_apply_random_shift();}
+#endif
+
+    t_tmp = my_second();
     force_treefree();
     domain_free();
-    
+    t_treefree = timediff(t_tmp, my_second());
+
     if(old_MaxPart) {All.MaxPart = new_MaxPart; old_MaxPart = 0;}
-    
+
 #ifdef BOX_PERIODIC
+    t_tmp = my_second();
     do_box_wrapping();		/* map the particles back onto the box */
+    t_boxwrap = timediff(t_tmp, my_second());
 #endif
-    
-    MPI_Barrier(MPI_COMM_WORLD); CPU_Step[CPU_DRIFT] += measure_time(); // sync everything after merge-split and rearrange //
+
+    t_tmp = my_second();
+    MPI_Barrier(MPI_COMM_WORLD);
+    t_barrier = timediff(t_tmp, my_second());
+    double t_drift_total = timediff(t_drift_start, my_second());
+    CPU_Step[CPU_DRIFT] += t_drift_total;
+    if(ThisTask == 0) {
+        printf("  domain_Decomp drift breakdown: mergesplit=%.4f rearrange=%.4f drift_loop=%.4f treefree=%.4f boxwrap=%.4f barrier=%.4f total=%.4f\n",
+               t_mergesplit, t_rearrange, t_drift_loop, t_treefree, t_boxwrap, t_barrier, t_drift_total);
+    }
     
     TreeReconstructFlag = 1;	/* ensures that new tree will be constructed */
-#ifdef SINGLE_STAR_SINK_DYNAMICS
-    All.NumForcesSinceLastDomainDecomp = 0;
-#endif
+    DomainReconstructFlag = 0;	/* the decomposition just happened; only the tree half remains owed */
+    TreeDiscardImminent = 0;
+    TreeOpsCount[TREEOPS_DECOMP]++;
     
     /* we take the closest cost factor */
     if(UseAllParticles) {highest_bin_to_include = All.HighestOccupiedTimeBin;} else {highest_bin_to_include = All.HighestActiveTimeBin;}
@@ -188,7 +336,6 @@ void domain_Decomposition(int UseAllTimeBins, int SaveKeys, int do_particle_merg
       report_memory_usage(&HighMark_domain, "DOMAIN");
 
       ret = domain_decompose();
-        
       /* copy what we need for the topnodes */
       for(i = 0; i < NTopnodes; i++)
       {
@@ -244,6 +391,16 @@ void domain_Decomposition(int UseAllTimeBins, int SaveKeys, int do_particle_merg
     {peano_hilbert_order();}
     CPU_Step[CPU_PEANO] += measure_time();
 
+  LightRepartitionCount = 0; /* reset counter: top tree is fresh */
+
+  /* save keys persistently for potential lightweight repartition */
+  if(PersistentKeySize < All.MaxPart) {
+      if(PersistentKey) {free(PersistentKey);}
+      PersistentKey = (peanokey *) malloc(All.MaxPart * sizeof(peanokey));
+      PersistentKeySize = All.MaxPart;
+  }
+  memcpy(PersistentKey, Key, NumPart * sizeof(peanokey));
+
   myfree(Key);
   memmove(TopNodes + NTopnodes, DomainTask, NTopnodes * sizeof(int));
   TopNodes = (struct topnode_data *) myrealloc(TopNodes, bytes = (NTopnodes * sizeof(struct topnode_data) + NTopnodes * sizeof(int)));
@@ -251,6 +408,230 @@ void domain_Decomposition(int UseAllTimeBins, int SaveKeys, int do_particle_merg
   DomainTask = (int *) (TopNodes + NTopnodes);
   force_treeallocate((int) (All.TreeAllocFactor * All.MaxPart) + NTopnodes, All.MaxPart);
   reconstruct_timebins();
+}
+
+
+/*! Lightweight domain repartition: reuses the existing top-tree structure and Peano-Hilbert keys,
+ *  only recomputing particle costs, re-splitting, and exchanging particles that changed domain.
+ *  Skips: key computation, sorting, top-tree building/combining, and PH reorder.
+ *  This is O(N) instead of O(N log N) and avoids expensive MPI tree combination. */
+void domain_Decomposition_light(int UseAllTimeBins)
+{
+    int i, no; size_t bytes; double t0, t1;
+
+    /* fall back to full decomposition if persistent state is not available, or if
+       too many consecutive lightweight repartitions have occurred (top tree may be stale) */
+    if(!PersistentKey || !domain_allocated_flag || LightRepartitionCount >= MAX_LIGHT_REPARTITIONS) {domain_Decomposition(UseAllTimeBins, 0, 1); return;}
+    LightRepartitionCount++;
+
+    double t_light_start = my_second(), t_light_rearrange=0, t_light_drift=0, t_light_boxwrap=0, t_light_barrier=0;
+    TreeDiscardImminent = 1; /* as in the full decomposition: the tree dies before the next walk */
+    rearrange_particle_sequence();
+    t_light_rearrange = timediff(t_light_start, my_second());
+    UseAllParticles = UseAllTimeBins;
+
+    double t_tmp2 = my_second();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 256)
+#endif
+    for(i = 0; i < NumPart; i++) {if(P[i].Ti_current != All.Ti_Current) {drift_particle(i, All.Ti_Current);}}
+    t_light_drift = timediff(t_tmp2, my_second());
+
+#ifdef BOX_PERIODIC
+    t_tmp2 = my_second();
+    do_box_wrapping();
+    t_light_boxwrap = timediff(t_tmp2, my_second());
+#endif
+
+    t_tmp2 = my_second();
+    MPI_Barrier(MPI_COMM_WORLD);
+    t_light_barrier = timediff(t_tmp2, my_second());
+    double t_light_total = timediff(t_light_start, my_second());
+    CPU_Step[CPU_DRIFT] += t_light_total;
+    if(ThisTask == 0) {
+        printf("  domain_light drift breakdown: rearrange=%.4f drift_loop=%.4f boxwrap=%.4f barrier=%.4f total=%.4f\n",
+               t_light_rearrange, t_light_drift, t_light_boxwrap, t_light_barrier, t_light_total);
+    }
+
+    /* The light path rekeys against the extent measured at the LAST full decomposition, and
+       domain_double_to_int() is a bare mantissa mask with no clamp: a coordinate at or beyond the
+       upper edge sums to >= 2.0 and keys to the FIRST cell (mantissa wraps), one below the corner
+       lands in the [0.5,1) binade -- either way a spatially wrong top node, silently. The full
+       decomposition is safe only because domain_findExtent() pads by 0.1%, which a fast-moving
+       particle (a sink ejection) can outrun between full decompositions. So validate the sum the
+       key is actually built from, and escalate to the full decomposition -- which remeasures the
+       extent -- when any particle has left it. Negated comparisons so a NaN position also trips. */
+    int extent_bad_loc = 0, extent_bad_glob = 0;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(static) reduction(||:extent_bad_loc)
+#endif
+    for(i = 0; i < NumPart; i++)
+    {
+        int k; for(k = 0; k < 3; k++)
+        {
+            double s = ((P[i].Pos[k] - DomainCorner[k]) / DomainLen) + 1.0;
+            if(!(s >= 1.0 && s < 2.0)) {extent_bad_loc = 1;}
+        }
+    }
+    MPI_Allreduce(&extent_bad_loc, &extent_bad_glob, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if(extent_bad_glob)
+    {
+        if(ThisTask == 0) {printf("  domain_light: a particle has left the stored domain extent; falling back to a full decomposition\n");}
+        domain_Decomposition(UseAllTimeBins, 0, 1);
+        return;
+    }
+
+    /* we take the closest cost factor */
+    int diff, highest_bin_to_include;
+    if(UseAllParticles) {highest_bin_to_include = All.HighestOccupiedTimeBin;} else {highest_bin_to_include = All.HighestActiveTimeBin;}
+    for(i = 1, TakeLevel = 0, diff = abs(All.LevelToTimeBin[0] - highest_bin_to_include); i < GRAVCOSTLEVELS; i++)
+        {if(diff > abs(All.LevelToTimeBin[i] - highest_bin_to_include)) {TakeLevel = i; diff = abs(All.LevelToTimeBin[i] - highest_bin_to_include);}}
+
+    PRINT_STATUS("Domain decomposition (lightweight)... LevelToTimeBin[TakeLevel=%d]=%d", TakeLevel, All.LevelToTimeBin[TakeLevel]);
+    t0 = my_second();
+
+    /* free force tree but keep domain structures (TopNodes, DomainTask) */
+    force_treefree();
+
+    TreeReconstructFlag = 1;
+    DomainReconstructFlag = 0;
+    TreeDiscardImminent = 0;
+    TreeOpsCount[TREEOPS_DECOMP_LIGHT]++;
+
+    int multipledomains = MULTIPLEDOMAINS;
+
+    /* recompute keys for particles that may have drifted across cell boundaries */
+    Key = PersistentKey; /* reuse persistent key storage directly */
+    for(i = 0; i < NumPart; i++)
+    {
+        Key[i] = domain_peano_key(i, NULL);
+    }
+
+    /* temporarily reconstruct the local topNodes from the persistent TopNodes for domain_sumCost.
+       We need the local_topnode_data format with Daughter/Leaf/StartKey/Size fields. */
+    topNodes = (struct local_topnode_data *) mymalloc("topNodes_light", NTopnodes * sizeof(struct local_topnode_data));
+    for(i = 0; i < NTopnodes; i++)
+    {
+        topNodes[i].StartKey = TopNodes[i].StartKey;
+        topNodes[i].Size = TopNodes[i].Size;
+        topNodes[i].Daughter = TopNodes[i].Daughter;
+        topNodes[i].Leaf = TopNodes[i].Leaf;
+    }
+
+    /* recompute per-particle costs */
+    for(i = 0; i < 6; i++) {NtypeLocal[i] = 0;}
+    particle_total_cost = (float *) mymalloc("particle_total_cost", NumPart * sizeof(float));
+    particle_costfactor = (float *) mymalloc("particle_costfactor", NumPart * sizeof(float));
+    for(i = 0, gravcost = gascost = 0; i < NumPart; i++)
+    {
+        NtypeLocal[P[i].Type]++;
+        double wt_0 = domain_particle_costfactor(i);
+        double wt_mult = domain_particle_cost_multiplier(i);
+        particle_costfactor[i] = (float)wt_0;
+        particle_total_cost[i] = (float)((1 + wt_mult) * wt_0);
+        gravcost += particle_total_cost[i];
+        if(P[i].Type == 0) {if(TimeBinActive[P[i].TimeBin] || UseAllParticles) {gascost += wt_0;}}
+    }
+    sumup_large_ints(6, NtypeLocal, Ntype);
+    for(i = 0, totpartcount = 0; i < 6; i++) {totpartcount += Ntype[i];}
+    MPI_Allreduce(&gravcost, &totgravcost, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    MPI_Allreduce(&gascost, &totgascost, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+
+#if (DOMAIN_TIMEBINS == 1)
+    domain_init_timebin_costs();
+#endif
+
+    /* allocate work/count arrays */
+    domainWork = (float *) mymalloc("domainWork", NTopnodes * sizeof(float));
+    domainWorkGas = (float *) mymalloc("domainWorkGas", NTopnodes * sizeof(float));
+    domainCount = (int *) mymalloc("domainCount", NTopnodes * sizeof(int));
+    domainCountGas = (int *) mymalloc("domainCountGas", NTopnodes * sizeof(int));
+
+    /* recompute costs per top-tree leaf */
+    domain_sumCost();
+
+    /* free cost caches (LIFO: domainCountGas is on top, but we need them for the split below,
+       so free cost arrays first since they sit below domainWork on the stack) */
+    /* Actually cost arrays are above domainWork... let's just keep them all alive until the end. */
+
+    /* allocate list arrays for the split/assignment */
+    toGo = (int *) mymalloc("toGo", NTask * sizeof(int));
+    toGoGas = (int *) mymalloc("toGoGas", NTask * sizeof(int));
+    toGet = (int *) mymalloc("toGet", NTask * sizeof(int));
+    toGetGas = (int *) mymalloc("toGetGas", NTask * sizeof(int));
+    list_NumPart = (int *) mymalloc("list_NumPart", NTask * sizeof(int));
+    list_N_gas = (int *) mymalloc("list_N_gas", NTask * sizeof(int));
+    list_load = (int *) mymalloc("list_load", NTask * sizeof(int));
+    list_loadgas = (int *) mymalloc("list_loadgas", NTask * sizeof(int));
+    list_work = (double *) mymalloc("list_work", NTask * sizeof(double));
+    list_workgas = (double *) mymalloc("list_workgas", NTask * sizeof(double));
+
+    maxLoad = (int) (All.MaxPart * REDUC_FAC_FOR_MEMORY_IN_DOMAIN);
+    maxLoadgas = (int) (All.MaxPartGas * REDUC_FAC_FOR_MEMORY_IN_DOMAIN);
+
+    /* re-split and re-assign */
+    domain_findSplit_work_balanced(multipledomains * NTask, NTopleaves);
+    domain_assign_load_or_work_balanced(1, multipledomains);
+
+    int status = domain_check_memory_bound(multipledomains);
+    if(status != 0)
+    {
+        domain_findSplit_load_balanced(multipledomains * NTask, NTopleaves);
+        domain_assign_load_or_work_balanced(0, multipledomains);
+        status = domain_check_memory_bound(multipledomains);
+        if(status != 0) {if(ThisTask == 0) {printf("Lightweight repartition: memory bound violated.\n");}}
+    }
+
+#if (DOMAIN_TIMEBINS == 1)
+    /* Freed only after the retry above, which calls domain_assign_load_or_work_balanced() a
+       second time and reads these arrays. Freeing before it dereferences NULL -- and the
+       per-timebin scheme expands to whatever PartAllocFactor ceiling it is given, so the memory
+       bound is always violated and the retry always runs. Raising PartAllocFactor moves the
+       wall, it does not avoid it. */
+    if(domainBinGravCost) {free(domainBinGravCost); domainBinGravCost = NULL;}
+    if(domainBinHydroCost) {free(domainBinHydroCost); domainBinHydroCost = NULL;}
+#endif
+
+    /* flag particles that need to move */
+    for(i = 0; i < NumPart; i++)
+    {
+        no = domain_toptree_leaf(Key[i], topNodes);
+        int task = DomainTask[no];
+        if(task != ThisTask) {P[i].Type |= 32;}
+    }
+
+    /* exchange particles */
+    int ret; size_t exchange_limit;
+    do
+    {
+        exchange_limit = FreeBytes - NTask * (24 * sizeof(int) + 16 * sizeof(MPI_Request));
+        if(exchange_limit <= 0) {endrun(1223);}
+        ret = domain_countToGo(exchange_limit);
+        domain_exchange();
+    }
+    while(ret > 0);
+
+    /* free everything in LIFO order */
+    myfree(list_workgas); myfree(list_work); myfree(list_loadgas); myfree(list_load);
+    myfree(list_N_gas); myfree(list_NumPart);
+    myfree(toGetGas); myfree(toGet); myfree(toGoGas); myfree(toGo);
+    myfree(domainCountGas); myfree(domainCount); myfree(domainWorkGas); myfree(domainWork);
+    myfree(particle_costfactor); myfree(particle_total_cost);
+    myfree(topNodes);
+
+    t1 = my_second();
+    PRINT_STATUS(" ..lightweight domain repartition done. (took %g sec)", timediff(t0, t1));
+    CPU_Step[CPU_DOMAIN] += measure_time();
+
+    /* update persistent keys for moved particles */
+    for(i = 0; i < NumPart; i++)
+    {
+        PersistentKey[i] = domain_peano_key(i, NULL);
+    }
+    Key = NULL; /* no longer valid as a mymalloc pointer */
+
+    force_treeallocate((int) (All.TreeAllocFactor * All.MaxPart) + NTopnodes, All.MaxPart);
+    reconstruct_timebins();
 }
 
 
@@ -365,6 +746,57 @@ double domain_particle_costfactor(int i)
 
 
 
+/*! Update the adaptive domain balance weights based on measured imbalance from the
+ *  current decomposition. Weights are shifted toward the metric with the worst imbalance,
+ *  following the GADGET-4 approach. Uses exponential moving average with smoothing factor alpha. */
+void domain_update_adaptive_weights(void)
+{
+    double alpha = 0.3; /* smoothing factor: 0 = keep old weights, 1 = fully replace */
+    double imbal_work = 0, imbal_load = 0, imbal_workgas = 0;
+    double sumwork = 0, sumload = 0, sumworkgas = 0;
+    double maxwork = 0, maxloadd = 0, maxworkgas = 0;
+
+    for(int i = 0; i < NTask; i++) {
+        sumwork += list_work[i];
+        sumload += list_load[i];
+        sumworkgas += list_workgas[i];
+        if(list_work[i] > maxwork) maxwork = list_work[i];
+        if(list_load[i] > maxloadd) maxloadd = list_load[i];
+        if(list_workgas[i] > maxworkgas) maxworkgas = list_workgas[i];
+    }
+
+    /* imbalance = max/avg - 1: 0 = perfect, higher = worse */
+    if(sumwork > 0) imbal_work = maxwork / (sumwork / NTask) - 1.0;
+    if(sumload > 0) imbal_load = maxloadd / (sumload / NTask) - 1.0;
+    if(sumworkgas > 0) imbal_workgas = maxworkgas / (sumworkgas / NTask) - 1.0;
+
+    /* target weights proportional to measured imbalance (shift attention to worst-balanced metric) */
+    double eps = 0.05; /* minimum weight floor to prevent any metric from being totally ignored */
+    double target_work = DMAX(imbal_work, eps);
+    double target_load = DMAX(imbal_load, eps);
+    double target_workgas = (sumworkgas > 0) ? DMAX(imbal_workgas, eps) : 0.0;
+
+    double target_total = target_work + target_load + target_workgas;
+    target_work /= target_total;
+    target_load /= target_total;
+    target_workgas /= target_total;
+
+    /* exponential moving average update */
+    domain_fac_work = (1.0 - alpha) * domain_fac_work + alpha * target_work;
+    domain_fac_load = (1.0 - alpha) * domain_fac_load + alpha * target_load;
+    domain_fac_workgas = (1.0 - alpha) * domain_fac_workgas + alpha * target_workgas;
+
+    /* ensure minimum floor */
+    if(domain_fac_work < eps) domain_fac_work = eps;
+    if(domain_fac_load < eps) domain_fac_load = eps;
+
+    if(ThisTask == 0) {
+        printf("Domain adaptive weights: work=%.3f  load=%.3f  workgas=%.3f  (imbalance: work=%.3f load=%.3f gas=%.3f)\n",
+               domain_fac_work, domain_fac_load, domain_fac_workgas, imbal_work, imbal_load, imbal_workgas);
+    }
+}
+
+
 /*! This function carries out the actual domain decomposition for all
  *  particle types. It will try to balance the work-load for each domain,
  *  as estimated based on the P[i]-GravCost values.  The decomposition will
@@ -380,6 +812,12 @@ int domain_decompose(void)
 
     for(i = 0; i < 6; i++) {NtypeLocal[i] = 0;}
 
+    /* compute and cache per-particle costs once, reused in domain_check_for_local_refine and domain_sumCost.
+       particle_total_cost: unweighted cost used for top-tree refinement (preserves spatial structure).
+       For domain_sumCost, we apply timestep frequency weighting there to balance sub-step work
+       without distorting the tree refinement. */
+    particle_total_cost = (float *) mymalloc("particle_total_cost", NumPart * sizeof(float));
+    particle_costfactor = (float *) mymalloc("particle_costfactor", NumPart * sizeof(float));
     for(i = 0, gravcost = gascost = 0; i < NumPart; i++)
     {
 #ifdef SUBFIND
@@ -388,8 +826,9 @@ int domain_decompose(void)
         NtypeLocal[P[i].Type]++;
         double wt_0 = domain_particle_costfactor(i);
         double wt_mult = domain_particle_cost_multiplier(i);
-        gravcost += (1 + wt_mult) * wt_0;
-        //if(P[i].Type == 0) {if(TimeBinActive[P[i].TimeBin] || UseAllParticles) {gascost += wt_mult;}}
+        particle_costfactor[i] = (float)wt_0;
+        particle_total_cost[i] = (float)((1 + wt_mult) * wt_0);
+        gravcost += particle_total_cost[i];
         if(P[i].Type == 0) {if(TimeBinActive[P[i].TimeBin] || UseAllParticles) {gascost += wt_0;}}
     }
     /* because Ntype[] is of type `long long', we cannot do a simple MPI_Allreduce() to sum the total particle numbers */
@@ -400,9 +839,14 @@ int domain_decompose(void)
     MPI_Allreduce(&gravcost, &totgravcost, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
     MPI_Allreduce(&gascost, &totgascost, 1, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
 
+#if (DOMAIN_TIMEBINS == 1)
+    domain_init_timebin_costs(); /* compute per-timebin normalization before tree building / cost accumulation */
+#endif
+
     /* determine global dimensions of domain grid */
     domain_findExtent();
-    if(domain_determineTopTree()) {return 1;}
+    if(domain_determineTopTree()) {myfree(particle_costfactor); myfree(particle_total_cost); return 1;}
+    myfree(particle_costfactor); myfree(particle_total_cost);
 
     /* find the split of the domain grid */
     domain_findSplit_work_balanced(multipledomains * NTask, NTopleaves);
@@ -420,10 +864,21 @@ int domain_decompose(void)
 
       if(status != 0)
       {
+#if (DOMAIN_TIMEBINS == 1)
+          free(domainBinHydroCost); free(domainBinGravCost);
+          domainBinHydroCost = domainBinGravCost = NULL;
+#endif
           if(ThisTask == 0) {printf("No domain decomposition that stays within memory bounds is possible.\n");}
           endrun(0);
       }
     }
+#if (DOMAIN_TIMEBINS == 1)
+    /* Freed here, after the memory-bound retry above: that retry calls
+       domain_assign_load_or_work_balanced() a second time and reads these arrays. Freeing before
+       it dereferences NULL. Same defect existed in domain_Decomposition_light(). */
+    if(domainBinHydroCost) {free(domainBinHydroCost); domainBinHydroCost = NULL;}
+    if(domainBinGravCost)  {free(domainBinGravCost);  domainBinGravCost  = NULL;}
+#endif
 
     if(ThisTask == 0)
     {
@@ -447,6 +902,12 @@ int domain_decompose(void)
 	     maxwork / (sumwork / NTask), maxload / (((double) sumload) / NTask), maxworkgas / ((sumworkgas + 1.0e-30) / NTask));
     }
 
+    /* update adaptive weights for next decomposition based on current imbalance */
+    if(ThisTask == 0) {domain_update_adaptive_weights();}
+    MPI_Bcast(&domain_fac_work, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&domain_fac_load, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+    MPI_Bcast(&domain_fac_workgas, 1, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+
     /* flag the particles that need to be exported */
 
     for(i = 0; i < NumPart; i++)
@@ -455,9 +916,7 @@ int domain_decompose(void)
       if(GrNr >= 0 && P[i].GrNr != GrNr) {continue;}
 #endif
 
-      no = 0;
-      while(topNodes[no].Daughter >= 0) {no = topNodes[no].Daughter + (Key[i] - topNodes[no].StartKey) / (topNodes[no].Size / 8);}
-      no = topNodes[no].Leaf;
+      no = domain_toptree_leaf(Key[i], topNodes);
       int task = DomainTask[no];
       if(task != ThisTask) {P[i].Type |= 32;}
     }
@@ -636,23 +1095,7 @@ void domain_exchange(void)
 	{
 	  P[n].Type &= 15; /* clear 16 and 32 */
 
-	  no = 0;
-
-      /* new code - not clear if strictly necessary or just optimization */
-      /*
-       peanokey mask = ((peanokey)7) << (3 * (BITS_PER_DIMENSION - 1));
-       int shift     = 3 * (BITS_PER_DIMENSION - 1);
-       while(topNodes[no].Daughter >= 0)
-       {
-       no = topNodes[no].Daughter + (int)((Key[n] & mask) >> shift);
-       mask >>= 3;
-       shift -= 3;
-       }
-       */
-      /* old code */
-	  while(topNodes[no].Daughter >= 0) {no = topNodes[no].Daughter + (Key[n] - topNodes[no].StartKey) / (topNodes[no].Size / 8);}
-
-	  no = topNodes[no].Leaf;
+	  no = domain_toptree_leaf(Key[n], topNodes);
 
 	  target = DomainTask[no];
 
@@ -660,15 +1103,15 @@ void domain_exchange(void)
 	    {
 	      partBuf[offset_gas[target] + count_gas[target]] = P[n];
 	      keyBuf[offset_gas[target] + count_gas[target]] = Key[n];
-#ifdef CHIMES 
+#ifdef CHIMES
 	      for(i = 0; i < ChimesGlobalVars.totalNumberOfSpecies; i++) {gasAbundancesBuf[((offset_gas[target] + count_gas[target]) * ChimesGlobalVars.totalNumberOfSpecies) + i] = ChimesGasVars[n].abundances[i];}
-	      free_gas_abundances_memory(&(ChimesGasVars[n]), &ChimesGlobalVars); 
-	      ChimesGasVars[n].abundances = NULL; 
-	      ChimesGasVars[n].isotropic_photon_density = NULL; 
-	      ChimesGasVars[n].G0_parameter = NULL; 
-	      ChimesGasVars[n].H2_dissocJ = NULL; 
+	      free_gas_abundances_memory(&(ChimesGasVars[n]), &ChimesGlobalVars);
+	      ChimesGasVars[n].abundances = NULL;
+	      ChimesGasVars[n].isotropic_photon_density = NULL;
+	      ChimesGasVars[n].G0_parameter = NULL;
+	      ChimesGasVars[n].H2_dissocJ = NULL;
 	      gasChimesBuf[offset_gas[target] + count_gas[target]] = ChimesGasVars[n];
-#endif 
+#endif
 	      gasBuf[offset_gas[target] + count_gas[target]] = CellP[n];
 	      count_gas[target]++;
 	    }
@@ -686,22 +1129,22 @@ void domain_exchange(void)
 	      CellP[n] = CellP[N_gas - 1];
 	      Key[n] = Key[N_gas - 1];
 
-#ifdef CHIMES 
+#ifdef CHIMES
 	      if (n < N_gas - 1)
 		{
 		  for(abunIndex = 0; abunIndex < ChimesGlobalVars.totalNumberOfSpecies; abunIndex++)
 		    {tempAbundanceArray[abunIndex] = ChimesGasVars[N_gas - 1].abundances[abunIndex];}
-		  free_gas_abundances_memory(&(ChimesGasVars[N_gas - 1]), &ChimesGlobalVars); 
-		  ChimesGasVars[N_gas - 1].abundances = NULL; 
-		  ChimesGasVars[N_gas - 1].isotropic_photon_density = NULL; 
-		  ChimesGasVars[N_gas - 1].G0_parameter = NULL; 
-		  ChimesGasVars[N_gas - 1].H2_dissocJ = NULL; 
-		  ChimesGasVars[n] = ChimesGasVars[N_gas - 1]; 
-		  allocate_gas_abundances_memory(&(ChimesGasVars[n]), &ChimesGlobalVars); 
+		  free_gas_abundances_memory(&(ChimesGasVars[N_gas - 1]), &ChimesGlobalVars);
+		  ChimesGasVars[N_gas - 1].abundances = NULL;
+		  ChimesGasVars[N_gas - 1].isotropic_photon_density = NULL;
+		  ChimesGasVars[N_gas - 1].G0_parameter = NULL;
+		  ChimesGasVars[N_gas - 1].H2_dissocJ = NULL;
+		  ChimesGasVars[n] = ChimesGasVars[N_gas - 1];
+		  allocate_gas_abundances_memory(&(ChimesGasVars[n]), &ChimesGlobalVars);
 		  for (abunIndex = 0; abunIndex < ChimesGlobalVars.totalNumberOfSpecies; abunIndex++)
 		    {ChimesGasVars[n].abundances[abunIndex] = tempAbundanceArray[abunIndex];}
 		}
-#endif 
+#endif
 
 	      P[N_gas - 1] = P[NumPart - 1];
 	      Key[N_gas - 1] = Key[NumPart - 1];
@@ -880,14 +1323,21 @@ void domain_findSplit_work_balanced(int ncpu, int ndomain)
       workgas += domainWorkGas[i];
     }
  
-      /* default to give equal weight to gravitational work-load, gas/fluid work load, and particle load */
-      double fac_work_0=0.67; int nworkterms = 1;
-      if(workgas > 0) {nworkterms+=1;} else {fac_work_0 = 0.5;} // equally-weight work and load here, if desired
-      fac_work_0 /= nworkterms; // divide the work weight equally among the different work terms here
-
-      fac_work = fac_work_0 / work;
-      fac_load = (1.-fac_work_0*nworkterms) / load;
-      if(workgas>0) {fac_workgas = fac_work_0 / workgas;} else {fac_workgas = 0.0;}
+      /* Use adaptive weights that are updated after each decomposition based on measured
+         imbalance (GADGET-4 approach). The static variables domain_fac_work/workgas/load
+         are adjusted in domain_update_adaptive_weights() after each decomposition. */
+      if(workgas <= 0) {
+          /* no gas work: redistribute gas weight to gravity and load */
+          double total = domain_fac_work + domain_fac_load + domain_fac_workgas;
+          fac_work = (domain_fac_work + 0.5 * domain_fac_workgas) / (total * work);
+          fac_load = (domain_fac_load + 0.5 * domain_fac_workgas) / (total * load);
+          fac_workgas = 0.0;
+      } else {
+          double total = domain_fac_work + domain_fac_load + domain_fac_workgas;
+          fac_work = domain_fac_work / (total * work);
+          fac_load = domain_fac_load / (total * load);
+          fac_workgas = domain_fac_workgas / (total * workgas);
+      }
 
   workavg = 1.0 / ncpu;
 
@@ -926,7 +1376,12 @@ static struct domain_segments_data
   double work;
   double load;
   double load_activegas;
+  double load_gas;         /* gas particle count for memory constraint */
   double normalized_load;
+#if (DOMAIN_TIMEBINS == 1)
+  double bin_GravCost[TIMEBINS];   /* per-timebin gravity cost for this segment */
+  double bin_HydroCost[TIMEBINS];  /* per-timebin hydro cost for this segment */
+#endif
 }
  *domainAssign;
 
@@ -945,7 +1400,12 @@ struct tasklist_data
   double work;
   double load;
   double load_activegas;
+  double load_gas;         /* gas particle count for memory constraint */
   int count;
+#if (DOMAIN_TIMEBINS == 1)
+  double bin_GravCost[TIMEBINS];   /* per-timebin gravity cost accumulated on this task */
+  double bin_HydroCost[TIMEBINS];  /* per-timebin hydro cost accumulated on this task */
+#endif
 }
  *tasklist;
 
@@ -967,13 +1427,18 @@ int domain_sort_load(const void *a, const void *b)
 
 void domain_assign_load_or_work_balanced(int mode, int multipledomains)
 {
-  double target_work_balance, target_load_balance, target_load_activegas_balance;
+  double target_work_balance, target_load_balance, target_load_activegas_balance, target_load_gas_balance;
   double value, target_max_balance, best_balance;
-  double tot_work, tot_load, tot_loadactivegas;
+  double tot_work, tot_load, tot_loadactivegas, tot_loadgas;
 
 
   int best_queue, target, next, prev;
   int i, n, q, ta;
+
+  /* memory limits: reject assignments that would push a rank above this fraction of max capacity */
+  double memory_safety_frac = 0.9;
+  double max_load_per_task = memory_safety_frac * maxLoad;
+  double max_gasload_per_task = memory_safety_frac * maxLoadgas;
 
   domainAssign = (struct domain_segments_data *) mymalloc("domainAssign",
 							  multipledomains * NTask *
@@ -986,12 +1451,23 @@ void domain_assign_load_or_work_balanced(int mode, int multipledomains)
       tasklist[ta].work = 0;
       tasklist[ta].load = 0;
       tasklist[ta].load_activegas = 0;
+      tasklist[ta].load_gas = 0;
       tasklist[ta].count = 0;
+#if (DOMAIN_TIMEBINS == 1)
+      for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {tasklist[ta].bin_GravCost[k] = 0; tasklist[ta].bin_HydroCost[k] = 0;}
+#endif
     }
 
   tot_work = 0;
   tot_load = 0;
   tot_loadactivegas = 0;
+  tot_loadgas = 0;
+
+#if (DOMAIN_TIMEBINS == 1)
+  /* Per-timebin cost totals for normalization during imbalance evaluation */
+  double tot_binGravCost[TIMEBINS], tot_binHydroCost[TIMEBINS];
+  for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {tot_binGravCost[k] = 0; tot_binHydroCost[k] = 0;}
+#endif
 
   for(n = 0; n < multipledomains * NTask; n++)
     {
@@ -1000,17 +1476,35 @@ void domain_assign_load_or_work_balanced(int mode, int multipledomains)
       domainAssign[n].work = 0;
       domainAssign[n].load = 0;
       domainAssign[n].load_activegas = 0;
+      domainAssign[n].load_gas = 0;
+#if (DOMAIN_TIMEBINS == 1)
+      for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {domainAssign[n].bin_GravCost[k] = 0; domainAssign[n].bin_HydroCost[k] = 0;}
+#endif
 
       for(i = DomainStartList[n]; i <= DomainEndList[n]; i++)
 	{
 	  domainAssign[n].work += domainWork[i];
 	  domainAssign[n].load += domainCount[i];
 	  domainAssign[n].load_activegas += domainWorkGas[i];
+	  domainAssign[n].load_gas += domainCountGas[i];
+#if (DOMAIN_TIMEBINS == 1)
+	  for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {
+	      domainAssign[n].bin_GravCost[k] += domainBinGravCost[k * NTopleaves + i];
+	      domainAssign[n].bin_HydroCost[k] += domainBinHydroCost[k * NTopleaves + i];
+	  }
+#endif
 	}
 
       tot_work += domainAssign[n].work;
       tot_load += domainAssign[n].load;
       tot_loadactivegas += domainAssign[n].load_activegas;
+      tot_loadgas += domainAssign[n].load_gas;
+#if (DOMAIN_TIMEBINS == 1)
+      for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {
+          tot_binGravCost[k] += domainAssign[n].bin_GravCost[k];
+          tot_binHydroCost[k] += domainAssign[n].bin_HydroCost[k];
+      }
+#endif
     }
 
   for(n = 0; n < multipledomains * NTask; n++)
@@ -1024,7 +1518,7 @@ void domain_assign_load_or_work_balanced(int mode, int multipledomains)
 
   qsort(domainAssign, multipledomains * NTask, sizeof(struct domain_segments_data), domain_sort_load);
 
-  /* initialize three queues */
+  /* initialize queues (4 queues: work, load, active gas, gas memory) */
   for(q = 0; q < N_DOMAINDECOMP_QUEUES; q++)
     {
       queues[q].next = (int *) mymalloc("queues[q].next", NTask * sizeof(int));
@@ -1045,21 +1539,53 @@ void domain_assign_load_or_work_balanced(int mode, int multipledomains)
 
   for(n = 0; n < multipledomains * NTask; n++)
     {
-      /* need to decide, which of the tasks that has the lowest load in one of the three quantities is best */
+      /* need to decide, which of the tasks that has the lowest load in one of the queues is best */
       for(q = 0, best_balance = 1.0e30, best_queue = 0; q < N_DOMAINDECOMP_QUEUES; q++)
 	{
 	  target = queues[q].first;
 
 	  while(tasklist[target].count == multipledomains) {target = queues[q].next[target];}
 
+	  /* check memory hard constraint: skip targets that would exceed memory limits */
+	  if(mode == 1) {
+	      double candidate_load = tasklist[target].load + domainAssign[n].load;
+	      double candidate_gasload = tasklist[target].load_gas + domainAssign[n].load_gas;
+	      if(candidate_load > max_load_per_task || candidate_gasload > max_gasload_per_task) {
+	          /* try next targets in this queue until we find one that fits */
+	          int orig_target = target;
+	          target = queues[q].next[target];
+	          while(target >= 0) {
+	              if(tasklist[target].count < multipledomains) {
+	                  candidate_load = tasklist[target].load + domainAssign[n].load;
+	                  candidate_gasload = tasklist[target].load_gas + domainAssign[n].load_gas;
+	                  if(candidate_load <= max_load_per_task && candidate_gasload <= max_gasload_per_task) break;
+	              }
+	              target = queues[q].next[target];
+	          }
+	          if(target < 0) target = orig_target; /* fallback: accept overload rather than crash */
+	      }
+	  }
+
 	  target_work_balance = (domainAssign[n].work + tasklist[target].work) / (tot_work + 1.0e-30);
 	  target_load_balance = (domainAssign[n].load + tasklist[target].load) / (tot_load + 1.0e-30);
 	  target_load_activegas_balance = (domainAssign[n].load_activegas + tasklist[target].load_activegas) / (tot_loadactivegas + 1.0e-30);
-        
+	  target_load_gas_balance = (domainAssign[n].load_gas + tasklist[target].load_gas) / (tot_loadgas + 1.0e-30);
+
         if(mode==1) {
             target_max_balance = target_work_balance;
             if(target_max_balance < target_load_balance) {target_max_balance = target_load_balance;}
             if(target_max_balance < target_load_activegas_balance) {target_max_balance = target_load_activegas_balance;}
+            if(target_max_balance < target_load_gas_balance) {target_max_balance = target_load_gas_balance;}
+#if (DOMAIN_TIMEBINS == 1)
+            /* Also check per-timebin cost imbalance: the assignment must balance
+               each timebin individually, not just the composite cost */
+            for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {
+                double bg = (domainAssign[n].bin_GravCost[k] + tasklist[target].bin_GravCost[k]) / (tot_binGravCost[k] + 1.0e-30);
+                double bh = (domainAssign[n].bin_HydroCost[k] + tasklist[target].bin_HydroCost[k]) / (tot_binHydroCost[k] + 1.0e-30);
+                if(bg > target_max_balance) {target_max_balance = bg;}
+                if(bh > target_max_balance) {target_max_balance = bh;}
+            }
+#endif
         } else {
             target_max_balance = target_load_balance;
         }
@@ -1076,13 +1602,37 @@ void domain_assign_load_or_work_balanced(int mode, int multipledomains)
 
       while(tasklist[target].count == multipledomains) {target = queues[best_queue].next[target];}
 
+      /* re-check memory constraint for the selected target */
+      if(mode == 1) {
+          double candidate_load = tasklist[target].load + domainAssign[n].load;
+          double candidate_gasload = tasklist[target].load_gas + domainAssign[n].load_gas;
+          if(candidate_load > max_load_per_task || candidate_gasload > max_gasload_per_task) {
+              int next_t = queues[best_queue].next[target];
+              while(next_t >= 0) {
+                  if(tasklist[next_t].count < multipledomains &&
+                     tasklist[next_t].load + domainAssign[n].load <= max_load_per_task &&
+                     tasklist[next_t].load_gas + domainAssign[n].load_gas <= max_gasload_per_task) {
+                      target = next_t; break;
+                  }
+                  next_t = queues[best_queue].next[next_t];
+              }
+          }
+      }
+
       domainAssign[n].task = target;
       tasklist[target].work += domainAssign[n].work;
       tasklist[target].load += domainAssign[n].load;
       tasklist[target].load_activegas += domainAssign[n].load_activegas;
+      tasklist[target].load_gas += domainAssign[n].load_gas;
+#if (DOMAIN_TIMEBINS == 1)
+      for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {
+          tasklist[target].bin_GravCost[k] += domainAssign[n].bin_GravCost[k];
+          tasklist[target].bin_HydroCost[k] += domainAssign[n].bin_HydroCost[k];
+      }
+#endif
       tasklist[target].count++;
 
-      /* now we need to remove the element 'target' from the N_DOMAINDECOMP_QUEUES queue's and reinsert it */
+      /* now we need to remove the element 'target' from the queues and reinsert it */
     for(q = 0; q < N_DOMAINDECOMP_QUEUES; q++)
     {
 	  switch (q)
@@ -1095,6 +1645,9 @@ void domain_assign_load_or_work_balanced(int mode, int multipledomains)
 	      break;
 	    case 2:
 	      value = tasklist[target].load_activegas;
+	      break;
+	    case 3:
+	      value = tasklist[target].load_gas;
 	      break;
 	    default:
 	      value = 0;
@@ -1155,6 +1708,108 @@ void domain_assign_load_or_work_balanced(int mode, int multipledomains)
 	  queues[q].value[target] = value;
 	}
     }
+
+  /* Iterative refinement (GADGET-4 approach): try random swaps of domain segments
+     between tasks and keep swaps that reduce the maximum imbalance across all metrics.
+     This improves the greedy solution, especially for inhomogeneous particle distributions. */
+  if(mode == 1 && multipledomains * NTask > 1)
+  {
+      int nswaps_accepted = 0;
+      int n_segments = multipledomains * NTask;
+      int max_iterations = 200 * n_segments; /* scale attempts with problem size */
+      unsigned int seed = 42 + NTask; /* deterministic seed for reproducibility */
+
+      /* compute current max imbalance */
+      auto compute_max_imbalance = [&]() -> double {
+          double max_frac_work = 0, max_frac_load = 0, max_frac_gas = 0, max_frac_gasload = 0;
+          for(int t = 0; t < NTask; t++) {
+              double fw = tasklist[t].work / (tot_work + 1.0e-30);
+              double fl = tasklist[t].load / (tot_load + 1.0e-30);
+              double fg = tasklist[t].load_activegas / (tot_loadactivegas + 1.0e-30);
+              double fgl = tasklist[t].load_gas / (tot_loadgas + 1.0e-30);
+              if(fw > max_frac_work) max_frac_work = fw;
+              if(fl > max_frac_load) max_frac_load = fl;
+              if(fg > max_frac_gas) max_frac_gas = fg;
+              if(fgl > max_frac_gasload) max_frac_gasload = fgl;
+          }
+          double result = max_frac_work;
+          if(max_frac_load > result) result = max_frac_load;
+          if(max_frac_gas > result) result = max_frac_gas;
+          if(max_frac_gasload > result) result = max_frac_gasload;
+#if (DOMAIN_TIMEBINS == 1)
+          for(int t = 0; t < NTask; t++) {
+              for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {
+                  double bg = tasklist[t].bin_GravCost[k] / (tot_binGravCost[k] + 1.0e-30);
+                  double bh = tasklist[t].bin_HydroCost[k] / (tot_binHydroCost[k] + 1.0e-30);
+                  if(bg > result) result = bg;
+                  if(bh > result) result = bh;
+              }
+          }
+#endif
+          return result;
+      };
+
+      double current_imbalance = compute_max_imbalance();
+
+      for(int iter = 0; iter < max_iterations; iter++)
+      {
+          /* pick two random segments assigned to different tasks */
+          seed = seed * 1103515245 + 12345; int s1 = (seed >> 16) % n_segments;
+          seed = seed * 1103515245 + 12345; int s2 = (seed >> 16) % n_segments;
+          if(s1 == s2) continue;
+          int t1 = domainAssign[s1].task, t2 = domainAssign[s2].task;
+          if(t1 == t2) continue;
+
+          /* trial swap: move s1 to t2 and s2 to t1 */
+          tasklist[t1].work += domainAssign[s2].work - domainAssign[s1].work;
+          tasklist[t1].load += domainAssign[s2].load - domainAssign[s1].load;
+          tasklist[t1].load_activegas += domainAssign[s2].load_activegas - domainAssign[s1].load_activegas;
+          tasklist[t1].load_gas += domainAssign[s2].load_gas - domainAssign[s1].load_gas;
+          tasklist[t2].work += domainAssign[s1].work - domainAssign[s2].work;
+          tasklist[t2].load += domainAssign[s1].load - domainAssign[s2].load;
+          tasklist[t2].load_activegas += domainAssign[s1].load_activegas - domainAssign[s2].load_activegas;
+          tasklist[t2].load_gas += domainAssign[s1].load_gas - domainAssign[s2].load_gas;
+#if (DOMAIN_TIMEBINS == 1)
+          for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {
+              tasklist[t1].bin_GravCost[k] += domainAssign[s2].bin_GravCost[k] - domainAssign[s1].bin_GravCost[k];
+              tasklist[t1].bin_HydroCost[k] += domainAssign[s2].bin_HydroCost[k] - domainAssign[s1].bin_HydroCost[k];
+              tasklist[t2].bin_GravCost[k] += domainAssign[s1].bin_GravCost[k] - domainAssign[s2].bin_GravCost[k];
+              tasklist[t2].bin_HydroCost[k] += domainAssign[s1].bin_HydroCost[k] - domainAssign[s2].bin_HydroCost[k];
+          }
+#endif
+
+          double new_imbalance = compute_max_imbalance();
+
+          if(new_imbalance < current_imbalance) {
+              /* accept swap */
+              domainAssign[s1].task = t2;
+              domainAssign[s2].task = t1;
+              current_imbalance = new_imbalance;
+              nswaps_accepted++;
+          } else {
+              /* revert */
+              tasklist[t1].work -= domainAssign[s2].work - domainAssign[s1].work;
+              tasklist[t1].load -= domainAssign[s2].load - domainAssign[s1].load;
+              tasklist[t1].load_activegas -= domainAssign[s2].load_activegas - domainAssign[s1].load_activegas;
+              tasklist[t1].load_gas -= domainAssign[s2].load_gas - domainAssign[s1].load_gas;
+              tasklist[t2].work -= domainAssign[s1].work - domainAssign[s2].work;
+              tasklist[t2].load -= domainAssign[s1].load - domainAssign[s2].load;
+              tasklist[t2].load_activegas -= domainAssign[s1].load_activegas - domainAssign[s2].load_activegas;
+              tasklist[t2].load_gas -= domainAssign[s1].load_gas - domainAssign[s2].load_gas;
+#if (DOMAIN_TIMEBINS == 1)
+              for(int k = 0; k < NumTimeBinsToBeBalanced; k++) {
+                  tasklist[t1].bin_GravCost[k] -= domainAssign[s2].bin_GravCost[k] - domainAssign[s1].bin_GravCost[k];
+                  tasklist[t1].bin_HydroCost[k] -= domainAssign[s2].bin_HydroCost[k] - domainAssign[s1].bin_HydroCost[k];
+                  tasklist[t2].bin_GravCost[k] -= domainAssign[s1].bin_GravCost[k] - domainAssign[s2].bin_GravCost[k];
+                  tasklist[t2].bin_HydroCost[k] -= domainAssign[s1].bin_HydroCost[k] - domainAssign[s2].bin_HydroCost[k];
+              }
+#endif
+          }
+      }
+      if(ThisTask == 0 && nswaps_accepted > 0) {
+          PRINT_STATUS(" ..domain iterative refinement: %d swaps accepted out of %d attempts", nswaps_accepted, max_iterations);
+      }
+  }
 
   qsort(domainAssign, multipledomains * NTask, sizeof(struct domain_segments_data), domain_sort_task);
 
@@ -1241,10 +1896,8 @@ int domain_countToGo(size_t nlimit)
 #endif
         if(P[n].Type & 32)
         {
-            no = 0;
-            while(topNodes[no].Daughter >= 0) {no = topNodes[no].Daughter + (Key[n] - topNodes[no].StartKey) / (topNodes[no].Size / 8);}
-            no = topNodes[no].Leaf;
-            
+            no = domain_toptree_leaf(Key[n], topNodes);
+
             if(DomainTask[no] != ThisTask)
             {
                 toGo[DomainTask[no]] += 1;
@@ -1399,11 +2052,7 @@ int domain_countToGo(size_t nlimit)
                     {
                         P[n].Type &= (15 + 32);    /* clear 16 */
                         
-                        no = 0;
-                        
-                        while(topNodes[no].Daughter >= 0) {no = topNodes[no].Daughter + (Key[n] - topNodes[no].StartKey) / (topNodes[no].Size / 8);}
-                        
-                        no = topNodes[no].Leaf;
+                        no = domain_toptree_leaf(Key[n], topNodes);
                         target = DomainTask[no];
                         
                         if((P[n].Type & 15) == 0)
@@ -1523,7 +2172,7 @@ int domain_check_for_local_refine(int i, double countlimit, double costlimit)
 			if(j >= 7) {break;}
 		      }
 
-		  topNodes[sub].Cost += (1 + domain_particle_cost_multiplier(mp[p].index)) * domain_particle_costfactor(mp[p].index);
+		  topNodes[sub].Cost += particle_total_cost[mp[p].index];
 		  topNodes[sub].Count++;
 		}
 
@@ -1711,28 +2360,35 @@ int domain_determineTopTree(void)
 
   mp = (struct peano_hilbert_data *) mymalloc("mp", sizeof(struct peano_hilbert_data) * NumPart);
 
+  /* Compute Peano-Hilbert keys for all particles */
+#ifdef SUBFIND
+  /* With SUBFIND, some particles may be skipped, so compute keys in parallel then compact */
+  #ifdef _OPENMP
+  #pragma omp parallel for schedule(static)
+  #endif
+  for(i = 0; i < NumPart; i++)
+    {
+      Key[i] = domain_peano_key(i, NULL);
+    }
   for(i = 0, count = 0; i < NumPart; i++)
     {
-#ifdef SUBFIND
       if(GrNr >= 0 && P[i].GrNr != GrNr) {continue;}
-#endif
-
-        /* new code */
-        peano1D xb = domain_double_to_int(((P[i].Pos[0] - DomainCorner[0]) / DomainLen) + 1.0);
-        peano1D yb = domain_double_to_int(((P[i].Pos[1] - DomainCorner[1]) / DomainLen) + 1.0);
-        peano1D zb = domain_double_to_int(((P[i].Pos[2] - DomainCorner[2]) / DomainLen) + 1.0);
-        mp[count].key = Key[i] = peano_hilbert_key(xb, yb, zb, BITS_PER_DIMENSION);
-        
-      /* old code
-      mp[count].key = Key[i] = peano_hilbert_key((int) ((P[i].Pos[0] - DomainCorner[0]) * DomainFac),
-						 (int) ((P[i].Pos[1] - DomainCorner[1]) * DomainFac),
-						 (int) ((P[i].Pos[2] - DomainCorner[2]) * DomainFac),
-						 BITS_PER_DIMENSION);
-       */
-
+      mp[count].key = Key[i];
       mp[count].index = i;
       count++;
     }
+#else
+  /* Without SUBFIND, count == i always, so the loop is embarrassingly parallel */
+  #ifdef _OPENMP
+  #pragma omp parallel for schedule(static)
+  #endif
+  for(i = 0; i < NumPart; i++)
+    {
+      mp[i].key = Key[i] = domain_peano_key(i, NULL);
+      mp[i].index = i;
+    }
+  count = NumPart;
+#endif
 
 #ifdef SUBFIND
   if(GrNr >= 0 && count != NumPartGroup)
@@ -1896,6 +2552,15 @@ void domain_sumCost(void)
   local_domainCount = (int *) mymalloc("local_domainCount", NTopnodes * sizeof(int));
   local_domainCountGas = (int *) mymalloc("local_domainCountGas", NTopnodes * sizeof(int));
 
+#if (DOMAIN_TIMEBINS == 1)
+  /* Per-timebin cost arrays: use malloc (not mymalloc) because they must persist across
+     mymalloc stack frames until after domain_assign_load_or_work_balanced finishes */
+  int ntb = NumTimeBinsToBeBalanced;
+  if(domainBinGravCost) {free(domainBinGravCost); domainBinGravCost = NULL;}
+  if(domainBinHydroCost) {free(domainBinHydroCost); domainBinHydroCost = NULL;}
+  domainBinGravCost = (float *) calloc(ntb * NTopnodes, sizeof(float));
+  domainBinHydroCost = (float *) calloc(ntb * NTopnodes, sizeof(float));
+#endif
 
   NTopleaves = 0;
   domain_walktoptree(0);
@@ -1907,52 +2572,185 @@ void domain_sumCost(void)
       local_domainCount[i] = 0;
       local_domainCountGas[i] = 0;
     }
+#if (DOMAIN_TIMEBINS == 1)
+  for(i = 0; i < ntb * NTopleaves; i++) {domainBinGravCost[i] = 0; domainBinHydroCost[i] = 0;}
+#endif
 
     PRINT_STATUS(" ..NTopleaves= %d  NTopnodes=%d (space for %d)", NTopleaves, NTopnodes, MaxTopNodes);
 
+  /* Cost accumulation modes controlled by DOMAIN_TIMEBINS:
+     - undefined: unweighted (original GIZMO scheme)
+     - DOMAIN_TIMEBINS=0: frequency-weighted by 2^(HighestBin - particleBin)
+     - DOMAIN_TIMEBINS=1: per-timebin cost accumulation (Gadget-4 scheme),
+       with composite cost for tree splitting and separate per-timebin arrays for assignment */
+
+  /* Macro for the per-particle cost accumulation body, shared between OMP and serial paths */
+#if defined(DOMAIN_TIMEBINS) && (DOMAIN_TIMEBINS == 0)
+  #define DOMAIN_SUMCOST_PARTICLE_BODY(n, no, wk, wkg, cnt, cntg) \
+    { float freq_weight = 1.0f; \
+      if(All.HighestOccupiedTimeBin > P[n].TimeBin) { \
+          int dbin = All.HighestOccupiedTimeBin - P[n].TimeBin; \
+          if(dbin > 20) {dbin = 20;} \
+          freq_weight = (float)(1 << dbin); } \
+      wk[no] += particle_total_cost[n] * freq_weight; \
+      cnt[no] += 1; \
+      if(P[n].Type == 0) { \
+          if(TimeBinActive[P[n].TimeBin] || UseAllParticles) {wkg[no] += particle_costfactor[n] * freq_weight;} \
+          cntg[no] += 1;} }
+#elif defined(DOMAIN_TIMEBINS) && (DOMAIN_TIMEBINS == 1)
+  #define DOMAIN_SUMCOST_PARTICLE_BODY(n, no, wk, wkg, cnt, cntg) \
+    { double gc = (double)particle_total_cost[n]; \
+      if(gc <= 0) gc = 1.0; \
+      float composite_cost = 0; \
+      for(int k_ = 0; k_ < ntb; k_++) { \
+          int bin_ = ListOfTimeBinsToBeBalanced[k_]; \
+          if(bin_ >= P[n].TimeBin) { \
+              float contrib = (float)(GravCostNormFactors[k_] * gc); \
+              composite_cost += contrib; \
+              my_binGravCost[k_ * NTopleaves + no] += contrib; } \
+          if(P[n].Type == 0 && bin_ >= P[n].TimeBin) { \
+              float hcontrib = (float)HydroCostNormFactors[k_]; \
+              composite_cost += hcontrib; \
+              my_binHydroCost[k_ * NTopleaves + no] += hcontrib; } } \
+      wk[no] += composite_cost; \
+      cnt[no] += 1; \
+      if(P[n].Type == 0) { \
+          if(TimeBinActive[P[n].TimeBin] || UseAllParticles) {wkg[no] += particle_costfactor[n];} \
+          cntg[no] += 1;} }
+#else
+  #define DOMAIN_SUMCOST_PARTICLE_BODY(n, no, wk, wkg, cnt, cntg) \
+    { wk[no] += particle_total_cost[n]; \
+      cnt[no] += 1; \
+      if(P[n].Type == 0) { \
+          if(TimeBinActive[P[n].TimeBin] || UseAllParticles) {wkg[no] += particle_costfactor[n];} \
+          cntg[no] += 1;} }
+#endif
+
+#ifdef _OPENMP
+  #pragma omp parallel
+  {
+    float *my_domainWork = (float *) calloc(NTopleaves, sizeof(float));
+    float *my_domainWorkGas = (float *) calloc(NTopleaves, sizeof(float));
+    int *my_domainCount = (int *) calloc(NTopleaves, sizeof(int));
+    int *my_domainCountGas = (int *) calloc(NTopleaves, sizeof(int));
+#if (DOMAIN_TIMEBINS == 1)
+    float *my_binGravCost = (float *) calloc(ntb * NTopleaves, sizeof(float));
+    float *my_binHydroCost = (float *) calloc(ntb * NTopleaves, sizeof(float));
+#endif
+
+    #pragma omp for schedule(static)
+    for(n = 0; n < NumPart; n++)
+      {
+#ifdef SUBFIND
+        if(GrNr >= 0 && P[n].GrNr != GrNr) {continue;}
+#endif
+        no = domain_toptree_leaf(Key[n], topNodes);
+        DOMAIN_SUMCOST_PARTICLE_BODY(n, no, my_domainWork, my_domainWorkGas, my_domainCount, my_domainCountGas)
+      }
+
+    #pragma omp critical
+    {
+      for(i = 0; i < NTopleaves; i++) {
+        local_domainWork[i] += my_domainWork[i];
+        local_domainWorkGas[i] += my_domainWorkGas[i];
+        local_domainCount[i] += my_domainCount[i];
+        local_domainCountGas[i] += my_domainCountGas[i];
+      }
+#if (DOMAIN_TIMEBINS == 1)
+      for(i = 0; i < ntb * NTopleaves; i++) {
+        domainBinGravCost[i] += my_binGravCost[i];
+        domainBinHydroCost[i] += my_binHydroCost[i];
+      }
+#endif
+    }
+    free(my_domainWork); free(my_domainWorkGas);
+    free(my_domainCount); free(my_domainCountGas);
+#if (DOMAIN_TIMEBINS == 1)
+    free(my_binGravCost); free(my_binHydroCost);
+#endif
+  }
+#else
   for(n = 0; n < NumPart; n++)
     {
 #ifdef SUBFIND
       if(GrNr >= 0 && P[n].GrNr != GrNr) {continue;}
 #endif
-
-      no = 0;
-
-        /* new code - doesn't seem to be strictly necessary here */
-        /*
-        peanokey mask = ((peanokey)7) << (3 * (BITS_PER_DIMENSION - 1));
-        int shift     = 3 * (BITS_PER_DIMENSION - 1);
-        while(topNodes[no].Daughter >= 0)
-        {
-            no = topNodes[no].Daughter + (int)((Key[n] & mask) >> shift);
-            mask >>= 3;
-            shift -= 3;
-        }
-        */
-        
-        /* old code */
-        while(topNodes[no].Daughter >= 0) {no = topNodes[no].Daughter + (Key[n] - topNodes[no].StartKey) / (topNodes[no].Size >> 3);}
-        
-      no = topNodes[no].Leaf;
-      double wt_0 = domain_particle_costfactor(n);
-      double wt_mult = domain_particle_cost_multiplier(n);
-      local_domainWork[no] += (1 + wt_mult) * wt_0;
-      local_domainCount[no] += 1;
-      if(P[n].Type == 0) {
-          if(TimeBinActive[P[n].TimeBin] || UseAllParticles) {local_domainWorkGas[no] += wt_0;}
-          local_domainCountGas[no] += 1;}
+      no = domain_toptree_leaf(Key[n], topNodes);
+#if (DOMAIN_TIMEBINS == 1)
+      /* In the serial path, my_binGravCost/my_binHydroCost are just the global arrays */
+      float *my_binGravCost = domainBinGravCost;
+      float *my_binHydroCost = domainBinHydroCost;
+#endif
+      DOMAIN_SUMCOST_PARTICLE_BODY(n, no, local_domainWork, local_domainWorkGas, local_domainCount, local_domainCountGas)
     }
+#endif
+#undef DOMAIN_SUMCOST_PARTICLE_BODY
 
   MPI_Allreduce(local_domainWork, domainWork, NTopleaves, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
   MPI_Allreduce(local_domainWorkGas, domainWorkGas, NTopleaves, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
   MPI_Allreduce(local_domainCount, domainCount, NTopleaves, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
   MPI_Allreduce(local_domainCountGas, domainCountGas, NTopleaves, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+
+#if (DOMAIN_TIMEBINS == 1)
+  /* Allreduce per-timebin cost arrays in-place (they use malloc, not mymalloc) */
+  MPI_Allreduce(MPI_IN_PLACE, domainBinGravCost, ntb * NTopleaves, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+  MPI_Allreduce(MPI_IN_PLACE, domainBinHydroCost, ntb * NTopleaves, MPI_FLOAT, MPI_SUM, MPI_COMM_WORLD);
+#endif
+
   myfree(local_domainCountGas);
   myfree(local_domainCount);
   myfree(local_domainWorkGas);
   myfree(local_domainWork);
 }
 
+
+/*! The single definition of the position -> Peano-Hilbert key mapping. Every caller must go through
+ *  this, because domain decomposition (which task owns a particle) and the treebuild (which top
+ *  node it is inserted under) have to agree bit-for-bit: a particle assigned to one task but
+ *  inserted under a top node owned by another is detached from the tree by
+ *  force_insert_pseudo_particles() and its mass then appears in no rank's multipole moments.
+ *
+ *  Duplicating the expression instead lets -ffast-math compile it differently per translation unit.
+ *  It did: domain.cc defines domain_double_to_int, so the conversion inlined and the whole
+ *  expression contracted to fma(Pos-Corner, 1/DomainLen, 1.0), while forcetree.cc had only the
+ *  declaration, emitted a call, and computed (Pos-Corner)/DomainLen + 1.0. Those round differently,
+ *  and when the difference carried into the high mantissa bits that select the top-node leaf the
+ *  two sides disagreed about ownership.
+ *
+ *  noinline is belt-and-braces: it removes any possibility of the definition being optimised
+ *  differently per call site, which matters because the two callers sit in structurally different
+ *  loops. Measured on GCC 13.3 and AOCC 17, the shared definition alone gives bit-identical keys
+ *  with or without it, so this is insurance rather than a demonstrated requirement; it costs one
+ *  call per particle per treebuild. Pass morton=NULL if the Morton key is not needed. */
+__attribute__((noinline)) peanokey domain_peano_key(int i, peanokey *morton)
+{
+    peano1D xb = domain_double_to_int(((P[i].Pos[0] - DomainCorner[0]) / DomainLen) + 1.0);
+    peano1D yb = domain_double_to_int(((P[i].Pos[1] - DomainCorner[1]) / DomainLen) + 1.0);
+    peano1D zb = domain_double_to_int(((P[i].Pos[2] - DomainCorner[2]) / DomainLen) + 1.0);
+    if(morton) {return peano_and_morton_key(xb, yb, zb, BITS_PER_DIMENSION, morton);}
+    return peano_hilbert_key(xb, yb, zb, BITS_PER_DIMENSION);
+}
+
+
+/*! Returns 1 if any LOCAL particle's current position keys into a top-leaf owned by another task.
+ *  A whole-tree rebuild without a preceding decomposition buckets every particle by position; one
+ *  sitting in a foreign top-leaf lands under a node the pseudo-particle exchange will overwrite
+ *  (u.d aliases u.suns), detaching its subtree -- its mass then enters no rank's moments. Until the
+ *  kokkos retained-attachment machinery (068b4f33) is ported, the only safe answer to an escape is
+ *  to restore ownership, i.e. decompose. Rank-local; callers reduce. Uses the same key mapping the
+ *  decomposition assigned ownership with (domain_peano_key). */
+int domain_any_local_particle_escaped(void)
+{
+    int i;
+    for(i = 0; i < NumPart; i++)
+    {
+        peanokey key = domain_peano_key(i, NULL);
+        int no = 0;
+        while(TopNodes[no].Daughter >= 0) {no = TopNodes[no].Daughter + (int) ((key - TopNodes[no].StartKey) / (TopNodes[no].Size / 8));}
+        if(DomainTask[TopNodes[no].Leaf] != ThisTask) {return 1;}
+    }
+    return 0;
+}
 
 /*! Coordinate conversion to integer. d is coordinate in double precision. returns coordinate in integer of type peano1D. written as part of arepo code dev, from public arepo code by V Springel. */
 peano1D domain_double_to_int(double d)
@@ -2007,19 +2805,103 @@ void domain_findExtent(void)
       DomainCenter[j] = 0.5 * (xmin_glob[j] + xmax_glob[j]);
       DomainCorner[j] = 0.5 * (xmin_glob[j] + xmax_glob[j]) - 0.5 * len;
     }
-#ifdef RANDOMIZE_GRAVTREE // double the size of the root node and pick a random offset for its center, so that forcetree errors get decorrelated each time the tree is rebuilt
-  double dx[3]; 
-  if(ThisTask == 0) { for(j = 0; j < 3; j++) {dx[j] = len * (get_random_number((MyIDType) (All.NumCurrentTiStep) + j) - 0.5);}}
+/* Non-periodic randomization (AREPO, Weinberger+2020 sec 3.1): move and enlarge the root node
+ * so forcetree errors decorrelate between rebuilds. Periodic boxes must NOT use this -- doubling
+ * the root node costs a bit of Peano resolution per dimension and wrecks zoom load balance; they
+ * translate coordinates instead (domain_apply_random_shift), keeping DomainLen == box. */
+#if defined(RANDOMIZE_GRAVTREE) && !defined(RANDOMIZE_GRAVTREE_PERIODIC)
+  double dx[3];
+  if(ThisTask == 0) { for(j = 0; j < 3; j++) {dx[j] = len * (get_random_number((MyIDType)(All.NumCurrentTiStep) * 3 + j) - 0.5); /* *3+j so the three axes draw distinct seeds: with +j alone, step N's y-shift reused step N+1's x-shift */}}
   MPI_Bcast(dx, 3, MPI_DOUBLE, 0, MPI_COMM_WORLD);
   for(j=0; j<3; j++) {
       DomainCenter[j] += dx[j];
       DomainCorner[j] = DomainCenter[j] - len;
   }
   len *= 2;
-#endif  
+#endif
   DomainLen = len;
   DomainFac = 1.0 / len * (((peanokey) 1) << (BITS_PER_DIMENSION));
+#ifdef RANDOMIZE_GRAVTREE /* diagnostic: lets regression tests check the root node is not enlarged */
+  if(ThisTask == 0) {printf("RANDOMIZE_GRAVTREE: DomainLen=%g DomainCorner=(%g,%g,%g) BoxSize=%g\n", DomainLen, DomainCorner[0], DomainCorner[1], DomainCorner[2], All.BoxSize);}
+#endif
 }
+
+
+#ifdef RANDOMIZE_GRAVTREE_PERIODIC
+/*! RANDOMIZE_GRAVTREE, periodic path (AREPO method, Weinberger+2020 sec 3.1): translate all
+ *  coordinates by a fresh random vector mod box each decomposition, decorrelating tree-force
+ *  errors between rebuilds without enlarging the root node, so DomainLen stays == box and
+ *  zoom load balance is preserved. Coordinates live in the shifted frame until the next
+ *  shift; All.RandomShift is subtracted back out on output (fill_write_buffer). Forces and
+ *  velocities are translation-invariant, so the physics is unchanged. Drawn on rank 0 and
+ *  broadcast so all ranks agree; seeding on NumCurrentTiStep keeps it restart-reproducible. */
+void domain_apply_random_shift(void)
+{
+    int i, j;
+    double box[3], delta[3], u[3] = {0,0,0};
+    box[0] = boxSize_X; box[1] = boxSize_Y; box[2] = boxSize_Z;
+    if(ThisTask == 0) {for(j = 0; j < 3; j++) {u[j] = get_random_number((MyIDType)(All.NumCurrentTiStep) * 3 + j);}}
+    MPI_Bcast(u, 3, MPI_DOUBLE, 0, MPI_COMM_WORLD); /* every rank must agree on the frame */
+
+    for(j = 0; j < 3; j++)
+    {
+#if defined(PMGRID) && defined(PM_PLACEHIGHRESREGION)
+        /* Zoom runs: the nested high-res region must stay whole inside the box.
+         * pm_init_regionsize() derives its extent with a plain min/max over the (wrapped)
+         * coordinates, so a region straddling the periodic boundary is measured as box-sized.
+         * On m12i that inflated the extent 6146 -> 66000, hence TotalMeshSize[1] and
+         * Rcut[1] ~10x, ballooning the tree walk (treewalk +57%, treecomm +137%,
+         * treeimbal +257%) and coarsening the nested mesh 6.6 -> 65 so it lost its purpose.
+         * So do not translate freely: place the region's lower corner uniformly in the range
+         * that keeps it entire, [0, box-L]. For a zoom L << box, so almost all of the
+         * randomization range survives. If the bounds are not yet initialized (L<=0) or the
+         * region fills the box (L>=box) there is no safe placement -- skip this step. */
+        double L = All.Xmaxtot[1][j] - All.Xmintot[1][j];
+        if(L > 0 && L < box[j]) {delta[j] = (box[j] - L) * u[j] - All.Xmintot[1][j];}
+        else {delta[j] = 0;}
+#else
+        delta[j] = box[j] * u[j] - All.RandomShift[j]; /* uniform box: translate freely */
+#endif
+    }
+
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic, 256)
+#endif
+    for(i = 0; i < NumPart; i++)
+    {
+        int k; for(k = 0; k < 3; k++) {P[i].Pos[k] += delta[k];}
+#ifdef HERMITE_INTEGRATION
+        /* OldPos is the reference position do_hermite_prediction() rebuilds Pos from every step
+           (P[i].Pos = P[i].OldPos + ...); if a random-frame shift lands between a particle's Hermite
+           seed and its next prediction without also shifting OldPos, that prediction silently snaps
+           Pos back to the pre-shift frame -- correct for every non-Hermite particle (which integrate
+           Pos forward from Vel, not from a saved reference point), but wrong for sinks/stars. */
+        if((1 << P[i].Type) & HERMITE_INTEGRATION) {for(k = 0; k < 3; k++) {P[i].OldPos[k] += delta[k];}}
+#endif
+    }
+
+    /* accumulate the frame offset, kept in [0,box) so it cannot drift off over a long run
+     * (positions are only defined mod box, and the output un-shift is followed by a wrap) */
+    for(j = 0; j < 3; j++)
+    {
+        All.RandomShift[j] += delta[j];
+        while(All.RandomShift[j] < 0) {All.RandomShift[j] += box[j];}
+        while(All.RandomShift[j] >= box[j]) {All.RandomShift[j] -= box[j];}
+    }
+#if defined(PMGRID) && defined(PM_PLACEHIGHRESREGION)
+    /* carry the cached region bounds along, so classification and mesh mapping stay consistent
+     * until the next pm_init_regionsize(); by construction these stay inside [0,box) */
+    for(j = 0; j < 3; j++) {
+        All.Xmintot[1][j] += delta[j]; All.Xmaxtot[1][j] += delta[j];
+        All.Corner[1][j]  += delta[j]; All.UpperCorner[1][j] += delta[j];
+    }
+    if(ThisTask == 0) {printf("RANDOMIZE_GRAVTREE: hi-res region now (%g|%g|%g) -> (%g|%g|%g) box=%g\n",
+        All.Xmintot[1][0], All.Xmintot[1][1], All.Xmintot[1][2],
+        All.Xmaxtot[1][0], All.Xmaxtot[1][1], All.Xmaxtot[1][2], box[0]);}
+#endif
+    do_box_wrapping(); /* fold coordinates back into [0,box) in the new frame */
+}
+#endif
 
 
 
@@ -2125,53 +3007,36 @@ void domain_insertnode(struct local_topnode_data *treeA, struct local_topnode_da
 
 
 
-static void msort_domain_with_tmp(struct peano_hilbert_data *b, size_t n, struct peano_hilbert_data *t)
+static void parallel_sort_phdata_domain(struct peano_hilbert_data *arr, size_t n)
 {
-  struct peano_hilbert_data *tmp;
-  struct peano_hilbert_data *b1, *b2;
-  size_t n1, n2;
-
-  if(n <= 1)
-    {return;}
-
-  n1 = n / 2;
-  n2 = n - n1;
-  b1 = b;
-  b2 = b + n1;
-
-  msort_domain_with_tmp(b1, n1, t);
-  msort_domain_with_tmp(b2, n2, t);
-
-  tmp = t;
-
-  while(n1 > 0 && n2 > 0)
-    {
-      if(b1->key <= b2->key)
-	{
-	  --n1;
-	  *tmp++ = *b1++;
-	}
-      else
-	{
-	  --n2;
-	  *tmp++ = *b2++;
-	}
-    }
-
-  if(n1 > 0)
-    {memcpy(tmp, b1, n1 * sizeof(struct peano_hilbert_data));}
-
-  memcpy(b, t, (n - n2) * sizeof(struct peano_hilbert_data));
+  auto cmp = [](const peano_hilbert_data &a, const peano_hilbert_data &b) { return a.key < b.key; };
+  const size_t CUTOFF = 10000;
+  if(n <= CUTOFF) { std::sort(arr, arr + n, cmp); return; }
+  size_t mid = n / 2;
+#ifdef _OPENMP
+  #pragma omp task shared(arr) if(n > CUTOFF)
+#endif
+  parallel_sort_phdata_domain(arr, mid);
+#ifdef _OPENMP
+  #pragma omp task shared(arr) if(n > CUTOFF)
+#endif
+  parallel_sort_phdata_domain(arr + mid, n - mid);
+#ifdef _OPENMP
+  #pragma omp taskwait
+#endif
+  std::inplace_merge(arr, arr + mid, arr + n, cmp);
 }
 
 void mysort_domain(void *b, size_t n, size_t s)
 {
-  const size_t size = n * s;
-  struct peano_hilbert_data *tmp;
-
-  tmp = (struct peano_hilbert_data *) mymalloc("tmp", size);
-
-  msort_domain_with_tmp((struct peano_hilbert_data *) b, n, tmp);
-
-  myfree(tmp);
+  struct peano_hilbert_data *arr = (struct peano_hilbert_data *)b;
+#ifdef _OPENMP
+  #pragma omp parallel
+  {
+    #pragma omp single
+    parallel_sort_phdata_domain(arr, n);
+  }
+#else
+  parallel_sort_phdata_domain(arr, n);
+#endif
 }

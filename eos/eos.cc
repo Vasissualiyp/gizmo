@@ -21,7 +21,7 @@ double return_user_desired_target_density(int i)
     return 1; // uniform density everywhere -- will try to generate a glass //
     /*
      // this example would initialize a constant-density (density=rho_0) spherical cloud (radius=r_cloud) with a smooth density 'edge' (width=interp_width) surrounded by an ambient medium of density =rho_0/rho_contrast //
-     double dx=P[i].Pos[0]-boxHalf_X, dy=P[i].Pos[1]-boxHalf_Y, dz=P[i].Pos[2]-boxHalf_Z, r=sqrt(dx*dx+dy*dy+dz*dz);
+     double dx=pp[i].Pos[0]-boxHalf_X, dy=pp[i].Pos[1]-boxHalf_Y, dz=pp[i].Pos[2]-boxHalf_Z, r=sqrt(dx*dx+dy*dy+dz*dz);
      double rho_0=1, r_cloud=0.5*boxHalf_X, interp_width=0.1*r_cloud, rho_contrast=10.;
      return rho_0 * ((1.-1./rho_contrast)*0.5*erfc(2.*(r-r_cloud)/interp_width) + 1./rho_contrast);
      */
@@ -32,20 +32,35 @@ double return_user_desired_target_pressure(int i)
     /*
      // this example would initialize a radial pressure gradient corresponding to a self-gravitating, spherically-symmetric, infinite power-law
      //   density profile rho ~ r^(-b) -- note to do this right, you need to actually set that power-law for density, too, in 'return_user_desired_target_density' above
-     double dx=P[i].Pos[0]-boxHalf_X, dy=P[i].Pos[1]-boxHalf_Y, dz=P[i].Pos[2]-boxHalf_Z, r=sqrt(dx*dx+dy*dy+dz*dz);
+     double dx=pp[i].Pos[0]-boxHalf_X, dy=pp[i].Pos[1]-boxHalf_Y, dz=pp[i].Pos[2]-boxHalf_Z, r=sqrt(dx*dx+dy*dy+dz*dz);
      double b = 2.; return 2.*M_PI/fabs((3.-b)*(1.-b)) * pow(return_user_desired_target_density(i),2) * r*r;
      */
 }
 
-/*!
-Simple getter for the Pressure attribute - will calculate it on-the-fly if EOS quantities are not being cached
- */
-double get_pressure(int i) {
-#ifndef EOS_PRECOMPUTE
-    set_eos_pressure(i);
-#endif
-    return CellP[i].Pressure;
+#if defined(EOS_GAMMA_PROBE) && defined(EOS_GENERAL)
+/* Inert diagnostic: after every EOS update, |SoundSpeed^2 rho / (gamma P) - 1| with gamma = gamma_eos_value() at the
+   cell's current state, i.e. whether the sound speed uses the adiabatic index of the temperature just computed. Only
+   meaningful where SoundSpeed is the ideal-gas one (no CR, radiation-pressure or tabulated EOS). */
+static double eos_gamma_probe_max = 0, eos_gamma_probe_gmin = 1e30, eos_gamma_probe_gmax = 0;
+static long long eos_gamma_probe_n = 0, eos_gamma_probe_bad = 0;
+static void eos_gamma_probe_add(double rel, double g)
+{
+#pragma omp critical(eos_gamma_probe)
+    {
+        eos_gamma_probe_n++; if(rel > 1e-12) {eos_gamma_probe_bad++;}
+        if(rel > eos_gamma_probe_max) {eos_gamma_probe_max = rel;}
+        if(g < eos_gamma_probe_gmin) {eos_gamma_probe_gmin = g;}
+        if(g > eos_gamma_probe_gmax) {eos_gamma_probe_gmax = g;}
+    }
 }
+void eos_gamma_probe_report(void) /* collective; rank 0 prints the totals since the previous call */
+{
+    double mx[3] = {eos_gamma_probe_max, -eos_gamma_probe_gmin, eos_gamma_probe_gmax}, mx_g[3]; long long n[2] = {eos_gamma_probe_n, eos_gamma_probe_bad}, n_g[2];
+    MPI_Reduce(mx, mx_g, 3, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD); MPI_Reduce(n, n_g, 2, MPI_LONG_LONG, MPI_SUM, 0, MPI_COMM_WORLD);
+    if(ThisTask == 0 && n_g[0] > 0) {printf("EOS_GAMMA_PROBE t=%.10g updates=%lld above_1e-12=%lld max_rel=%.6e gamma_range=[%.8f, %.8f]\n", All.Time, n_g[0], n_g[1], mx_g[0], -mx_g[1], mx_g[2]);}
+    eos_gamma_probe_max = 0; eos_gamma_probe_gmin = 1e30; eos_gamma_probe_gmax = 0; eos_gamma_probe_n = eos_gamma_probe_bad = 0;
+}
+#endif
 
 /*!
     Updates the thermodynamic quantities determined by the current internal
@@ -55,61 +70,82 @@ double get_pressure(int i) {
     this subroutine needs to set the value of the 'press' variable (pressure), which you can see from the
     templates below can follow an arbitrary equation-of-state. for more general equations-of-state you want to specifically set the soundspeed
     variable as well. */
-void set_eos_pressure(int i)
+void set_eos_pressure(int i, struct particle_data *pp, struct gas_cell_data *cell)
 {
-    double soundspeed, press=0, gamma_eos_index = GAMMA(i); soundspeed=0; /* get effective adiabatic index */
-    press = (gamma_eos_index-1) * CellP[i].InternalEnergyPred * Get_Gas_density_for_energy_i(i); /* ideal gas EOS (will get over-written it more complex EOS assumed) */
+    double soundspeed, press=0, temp=0, mu_meanwt=1, gamma_eos_index = cell[i].gamma_eos_value(); soundspeed=0; /* get effective adiabatic index */
 
-#if (defined(EOS_PRECOMPUTE) && defined(EOS_CARRIES_TEMPERATURE)) || defined(EOS_SUBSTELLAR_ISM) // will do temperature here
-    double ne=1, nh0=0, nHe0, nHepp, nhp, nHeII, temp, mu_meanwt=1, rho=CellP[i].Density*All.cf_a3inv, u0=CellP[i].InternalEnergyPred;
-    temp = ThermalProperties(u0, rho, i, &mu_meanwt, &ne, &nh0, &nhp, &nHe0, &nHeII, &nHepp); // get thermodynamic properties
+#ifdef COOLING
+    double ne=1, nh0=0, nHe0, nHepp, nhp, nHeII, rho_fortemp=cell[i].Density*All.cf_a3inv, u0=cell[i].InternalEnergyPred;
+    temp = ThermalProperties(u0, rho_fortemp, i, &mu_meanwt, &ne, &nh0, &nhp, &nHe0, &nHeII, &nHepp, pp, cell); // get thermodynamic properties
+#else
+    temp = cell[i].InternalEnergyPred * (gamma_eos_index-1.) * PROTONMASS_CGS / (BOLTZMANN_CGS) * UNIT_ENERGY_IN_CGS / UNIT_MASS_IN_CGS; // convert to temperature for caching
 #endif
-#ifdef EOS_PRECOMPUTE
-#ifdef EOS_CARRIES_TEMPERATURE
-    CellP[i].Temperature = temp; // cache the tempature
+    cell[i].Temperature = temp; // cache the temperature; must precede the gamma update below, which reads Temperature under EOS_SUBSTELLAR_ISM
+#ifdef COOLING
+    gamma_eos_index = cell[i].gamma_eos_value(); // the adiabatic index at the temperature just cached: used for everything below, sound speed included
 #endif
-#ifdef EOS_CARRIES_GAMMA
-    CellP[i].Gamma = gamma_eos(i); // cache the adiabatic index; this will reuse the pre-computed CellP[i].Temperature assigned above
-#endif
-#endif
+    cell[i].Gamma = gamma_eos_index;
+    press = (gamma_eos_index-1) * cell[i].InternalEnergyPred * cell[i].density_for_energy(); /* ideal gas EOS (will get over-written it more complex EOS assumed) */
 
 #ifdef EOS_SUBSTELLAR_ISM
-    press = Get_Gas_density_for_energy_i(i) * BOLTZMANN_CGS * temp / UNIT_ENERGY_IN_CGS / (mu_meanwt * PROTONMASS_CGS / UNIT_MASS_IN_CGS);
+    press = cell[i].density_for_energy() * BOLTZMANN_CGS * temp / UNIT_ENERGY_IN_CGS / (mu_meanwt * PROTONMASS_CGS / UNIT_MASS_IN_CGS);
 #endif
     
 #ifdef GALSF_EFFECTIVE_EQS /* modify pressure to 'interpolate' between effective EOS and isothermal, with the Springel & Hernquist 2003 'effective' EOS */
-    if(CellP[i].Density*All.cf_a3inv >= All.PhysDensThresh) {press = All.FactorForSofterEQS * press + (1 - All.FactorForSofterEQS)  * (gamma_eos_index-1) * CellP[i].Density * All.InitGasU;}
+    if(cell[i].Density*All.cf_a3inv >= All.PhysDensThresh) {press = All.FactorForSofterEQS * press + (1 - All.FactorForSofterEQS)  * (gamma_eos_index-1) * cell[i].Density * All.InitGasU;}
 #endif    
     
 #ifdef EOS_HELMHOLTZ /* pass the necessary quantities to wrappers for the Timms EOS */
     struct eos_input eos_in;
     struct eos_output eos_out;
-    eos_in.rho  = CellP[i].Density;
-    eos_in.eps  = CellP[i].InternalEnergyPred;
-    eos_in.Ye   = CellP[i].Ye;
-    eos_in.Abar = CellP[i].Abar;
-    eos_in.temp = CellP[i].Temperature;
+    eos_in.rho  = cell[i].Density;
+    eos_in.eps  = cell[i].InternalEnergyPred;
+    eos_in.Ye   = cell[i].Ye;
+    eos_in.Abar = cell[i].Abar;
+    eos_in.temp = cell[i].Temperature;
     int ierr = eos_compute(&eos_in, &eos_out);
     assert(!ierr);
     press      = eos_out.press;
     soundspeed = eos_out.csound;
-    CellP[i].Temperature = eos_out.temp;
+    cell[i].Temperature = eos_out.temp;
 #endif
     
 #ifdef EOS_TILLOTSON
-    press = calculate_eos_tillotson(i); soundspeed = CellP[i].SoundSpeed; /* done in subroutine, save for below */
+    press = cell[i].calculate_tillotson_eos(); soundspeed = cell[i].SoundSpeed; /* done in subroutine, save for below */
+#endif
+
+#ifdef EOS_ANEOS
+    {
+        int aneos_mat = cell[i].CompositionType;
+        double aneos_rho_cgs = cell[i].Density * UNIT_DENSITY_IN_CGS;
+        double aneos_u_cgs   = cell[i].InternalEnergyPred * UNIT_SPECEGY_IN_CGS;
+        double aneos_T_guess = cell[i].Temperature;
+        double aneos_P, aneos_cs, aneos_S, aneos_cv, aneos_grun;
+        int aneos_phase;
+        aneos_compute(aneos_mat, aneos_rho_cgs, aneos_u_cgs, &aneos_T_guess,
+                      &aneos_P, &aneos_cs, &aneos_S, &aneos_cv, &aneos_grun, &aneos_phase);
+        press      = aneos_P / UNIT_PRESSURE_IN_CGS;
+        soundspeed = aneos_cs / UNIT_VEL_IN_CGS;
+        cell[i].Temperature = aneos_T_guess;
+        cell[i].PhaseID = aneos_phase;
+    }
 #endif
     
-#ifdef EOS_ENFORCE_ADIABAT
-    press = EOS_ENFORCE_ADIABAT * pow(CellP[i].Density, gamma_eos_index);
-#ifdef TURB_DRIVING
-    CellP[i].EgyDiss += (CellP[i].InternalEnergy - press / (CellP[i].Density * (gamma_eos_index-1.))); /* save the change in energy imprinted by this enforced equation of state here */
+#ifdef EOS_MHD_CORE_BAROTROPIC
+    press = 0.04*cell[i].Density*sqrt(1.+pow(cell[i].Density/1.47705e8 ,4./3.)); /* special barotropic EOS for core collapse test (Hopkins 2015) */
 #endif
-    CellP[i].InternalEnergy = CellP[i].InternalEnergyPred = press / (CellP[i].Density * (gamma_eos_index-1.)); /* reset internal energy: particles live -exactly- along this relation */
+#ifdef EOS_ENFORCE_ADIABAT
+    press = EOS_ENFORCE_ADIABAT * pow(cell[i].Density, gamma_eos_index);
+#endif
+#if defined(EOS_ENFORCE_ADIABAT) || defined(EOS_MHD_CORE_BAROTROPIC)
+#ifdef TURB_DRIVING
+    cell[i].EgyDiss += (cell[i].InternalEnergy - press / (cell[i].Density * (gamma_eos_index-1.))); /* save the change in energy imprinted by this enforced equation of state here */
+#endif
+    cell[i].InternalEnergy = cell[i].InternalEnergyPred = press / (cell[i].Density * (gamma_eos_index-1.)); /* reset internal energy: particles live -exactly- along this relation */
 #endif
     
 #ifdef EOS_GMC_BAROTROPIC // barytropic EOS calibrated to Masunaga & Inutsuka 2000, eq. 4 in Federrath 2014 Apj 790. Reasonable over the range of densitites relevant to some small-scale star formation problems
-    gamma_eos_index=7./5.; double rho=Get_Gas_density_for_energy_i(i), nH_cgs=rho*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS;
+    gamma_eos_index=7./5.; double rho=cell[i].density_for_energy(), nH_cgs=rho*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS;
     if(nH_cgs > 2.30181e16) {gamma_eos_index=5./3.;} /* dissociates to atomic if dense enough (hot) */
     if (nH_cgs < 1.49468e8) {press = 6.60677e-16 * nH_cgs;} // isothermal below ~10^8 cm^-3 (adiabatic gamma=5/3 for soundspeed, etc, but this assumes effective eos from cooling, etc
     else if (nH_cgs < 2.30181e11) {press = 1.00585e-16 * pow(nH_cgs, 1.1);} // 'transition' region
@@ -124,203 +160,75 @@ void set_eos_pressure(int i)
 #endif
     press /= UNIT_PRESSURE_IN_CGS;
     /* in this case the EOS is modeling cooling, etc, so -does not- allow shocks or deviations from adiabat, so we reset the internal energy every time this is checked */
-    CellP[i].InternalEnergy = CellP[i].InternalEnergyPred = press / (rho * (gamma_eos_index-1.));
+    cell[i].InternalEnergy = cell[i].InternalEnergyPred = press / (rho * (gamma_eos_index-1.));
 #endif
     
 #ifdef COSMIC_RAY_FLUID /* compute the CR contribution to the total pressure and effective soundspeed here */
-    double soundspeed2 = gamma_eos_index*(gamma_eos_index-1) * CellP[i].InternalEnergyPred;
+    double soundspeed2 = gamma_eos_index*(gamma_eos_index-1) * cell[i].InternalEnergyPred;
     int k_CRegy; for(k_CRegy=0;k_CRegy<N_CR_PARTICLE_BINS;k_CRegy++)
     {
-        press += Get_Gas_CosmicRayPressure(i,k_CRegy);
-        soundspeed2 += GAMMA_COSMICRAY(k_CRegy) * (GAMMA_COSMICRAY(k_CRegy)-1.) * CellP[i].CosmicRayEnergyPred[k_CRegy] / P[i].Mass;
+        press += Get_Gas_CosmicRayPressure(i, k_CRegy, cell);
+        soundspeed2 += GAMMA_COSMICRAY(k_CRegy) * (GAMMA_COSMICRAY(k_CRegy)-1.) * cell[i].CosmicRayEnergyPred[k_CRegy] / cell[i].Mass;
 #ifdef CRFLUID_EVOLVE_SCATTERINGWAVES // using effective gamma of the alfven component = 3/2
-        press += (1.5-1) * CellP[i].Density * (CellP[i].CosmicRayAlfvenEnergy[k_CRegy][0]+CellP[i].CosmicRayAlfvenEnergy[k_CRegy][1]);
-        soundspeed2 += 1.5*(1.5-1)*(CellP[i].CosmicRayAlfvenEnergy[k_CRegy][0]+CellP[i].CosmicRayAlfvenEnergy[k_CRegy][1]) / P[i].Mass;
+        press += (1.5-1) * cell[i].Density * (cell[i].CosmicRayAlfvenEnergy[k_CRegy][0]+cell[i].CosmicRayAlfvenEnergy[k_CRegy][1]);
+        soundspeed2 += 1.5*(1.5-1)*(cell[i].CosmicRayAlfvenEnergy[k_CRegy][0]+cell[i].CosmicRayAlfvenEnergy[k_CRegy][1]) / cell[i].Mass;
 #endif
     }
     soundspeed = sqrt(soundspeed2);
 #endif
     
 #ifdef COSMIC_RAY_SUBGRID_LEBRON
-    soundspeed = sqrt(gamma_eos_index*(gamma_eos_index-1) * CellP[i].InternalEnergyPred + (4./3.)*(1./3.)*CellP[i].SubGrid_CosmicRayEnergyDensity/CellP[i].Density);
-    press += (1./3.) * CellP[i].SubGrid_CosmicRayEnergyDensity;
+    soundspeed = sqrt(gamma_eos_index*(gamma_eos_index-1) * cell[i].InternalEnergyPred + (4./3.)*(1./3.)*cell[i].SubGrid_CosmicRayEnergyDensity/cell[i].Density);
+    press += (1./3.) * cell[i].SubGrid_CosmicRayEnergyDensity;
 #endif
     
 #ifdef RT_RADPRESSURE_IN_HYDRO /* add radiation pressure in the Riemann problem directly */
-    int k_freq; double gamma_rad=4./3., fluxlim=1; double soundspeed2 = gamma_eos_index*(gamma_eos_index-1) * CellP[i].InternalEnergyPred;
-    if(P[i].Mass>0 && CellP[i].Density>0) {for(k_freq=0;k_freq<N_RT_FREQ_BINS;k_freq++)
+    int k_freq; double gamma_rad=4./3., fluxlim=1; double soundspeed2 = gamma_eos_index*(gamma_eos_index-1) * cell[i].InternalEnergyPred;
+    if(cell[i].Mass>0 && cell[i].Density>0) {for(k_freq=0;k_freq<N_RT_FREQ_BINS;k_freq++)
     {
-        press += (gamma_rad-1.) * return_flux_limiter(i,k_freq) * CellP[i].Rad_E_gamma_Pred[k_freq] * CellP[i].Density / P[i].Mass;
-        soundspeed2 += gamma_rad*(gamma_rad-1.) * CellP[i].Rad_E_gamma_Pred[k_freq] / P[i].Mass;
+        press += (gamma_rad-1.) * cell[i].flux_limiter(k_freq) * cell[i].Rad_E_gamma_Pred[k_freq] * cell[i].Density / cell[i].Mass;
+        soundspeed2 += gamma_rad*(gamma_rad-1.) * cell[i].Rad_E_gamma_Pred[k_freq] / cell[i].Mass;
     }}
     soundspeed = sqrt(soundspeed2);
 #endif
     
 #if defined(EOS_TRUELOVE_PRESSURE) || defined(TRUELOVE_CRITERION_PRESSURE)
     /* add an artificial pressure term to suppress fragmentation at/below the explicit resolution scale */
-    double h_eff = DMAX(Get_Particle_Size(i), KERNEL_FAC_FROM_FORCESOFT_TO_PLUMMER*ForceSoftening_KernelRadius(i)); /* need to include latter to account for inter-particle spacing << grav soft cases */
+    double h_eff = DMAX(pp[i].Get_Particle_Size(), KERNEL_FAC_FROM_FORCESOFT_TO_PLUMMER*ForceSoftening_KernelRadius(i)); /* need to include latter to account for inter-particle spacing << grav soft cases */
     /* standard finite-volume formulation of this (note there is some geometric ambiguity about whether there should be a "pi" in the equation below, but this 
         can be completely folded into the (already arbitrary) definition of NJeans, so we just use the latter parameter */
     double NJeans = 4; // set so that resolution = lambda_Jeans/NJeans -- fragmentation with Jeans/Toomre scales below this will be artificially suppressed now
-    double xJeans = (NJeans * NJeans / gamma_eos_index) * All.G * h_eff*h_eff * CellP[i].Density * CellP[i].Density /All.cf_atime;
+    double xJeans = (NJeans * NJeans / gamma_eos_index) * All.G * h_eff*h_eff * cell[i].Density * cell[i].Density /All.cf_atime;
     if(xJeans>press) press=xJeans;
 #endif
     
 #if defined(HYDRO_GENERATE_TARGET_MESH)
-    press = return_user_desired_target_pressure(i) * (CellP[i].Density / return_user_desired_target_density(i)); // define pressure by reference to 'desired' fluid quantities //
-    CellP[i].InternalEnergy = CellP[i].InternalEnergyPred = return_user_desired_target_pressure(i) / ((gamma_eos_index-1) * CellP[i].Density);
+    press = return_user_desired_target_pressure(i) * (cell[i].Density / return_user_desired_target_density(i)); // define pressure by reference to 'desired' fluid quantities //
+    cell[i].InternalEnergy = cell[i].InternalEnergyPred = return_user_desired_target_pressure(i) / ((gamma_eos_index-1) * cell[i].Density);
 #endif
     
 #ifdef EOS_GENERAL /* need to be sure soundspeed variable is set: if not defined above, set it to the default which is given by the effective gamma */
-    if(soundspeed == 0) {CellP[i].SoundSpeed = sqrt(gamma_eos_index * press / Get_Gas_density_for_energy_i(i));} else {CellP[i].SoundSpeed = soundspeed;}
+    if(soundspeed == 0) {cell[i].SoundSpeed = sqrt(gamma_eos_index * press / cell[i].density_for_energy());} else {cell[i].SoundSpeed = soundspeed;}
 #endif
 
     /* Finally, set the pressure as advertised */
-    CellP[i].Pressure = press;
-}
-
-
-/*! this function allows the user to specify an arbitrarily complex adiabatic index. note that for pure adiabatic evolution, one can simply set the pressure to obey some barytropic equation-of-state and use EOS_GENERAL to tell the code to deal with it appropriately.
-      but for more general functionality, we want this index here to be appropriately variable. */
-double gamma_eos(int i)
-{
-#if defined(COOL_MOLECFRAC_NONEQM)
-    if(i >= 0) {
-        if(P[i].Type==0) {
-            double fH = HYDROGEN_MASSFRAC, f = CellP[i].MolecularMassFraction, xe = CellP[i].Ne; // use the variables below to update the EOS as needed
-            double f_mono = fH*(xe + 1.-f) + (1.-fH)/4., f_di = fH*f/2., gamma_mono=5./3., gamma_di=7./5.; // sum e-, H or p, He, which act monotomic, and molecular, by number
-#ifdef EOS_SUBSTELLAR_ISM
-            gamma_di = hydrogen_molecule_gamma(get_temperature(i));
-#endif
-            return 1. + (f_mono + f_di) / (f_mono/(gamma_mono-1.) + f_di/(gamma_di-1.)); // weighted sum by number to compute effective EOS
-        }
-    }
-#endif
-    return GAMMA_DEFAULT; /* default to universal constant here */
-}
-
-#ifdef COOLING
-/* Returns the temperature, either pre-computed or calling the routine to re-compute it*/
-double get_temperature(int i){
-#ifdef CHEMCOOL
-    if(CellP[i].Temp > 0) {return CellP[i].Temp;} /* CHEMCOOL exact T from non-equilibrium abundances */
-#elif defined(EOS_PRECOMPUTE) && defined(EOS_CARRIES_TEMPERATURE)
-    if(All.Time > 0 || CellP[i].Temperature > 0) {return CellP[i].Temperature;}
-#endif
-    return compute_temperature(i);
-}
-
-
-/* Simple wrapper for calling ThermalProperties for temperature only - should only be called by get_temperature() above */
-double compute_temperature(int i) {
-    double ne=1, nh0=0, nHe0, nHepp, nhp, nHeII, temperature, mu_meanwt=1, rho=CellP[i].Density*All.cf_a3inv, u0=CellP[i].InternalEnergyPred;
-    temperature = ThermalProperties(u0, rho, i, &mu_meanwt, &ne, &nh0, &nhp, &nHe0, &nHeII, &nHepp);
-    return temperature;
-}
-#endif
-
-/* trivial function to check if particle falls below the minimum allowed temperature */
-void check_particle_for_temperature_minimum(int i)
-{
-    if(All.MinEgySpec)
-    {
-        if(CellP[i].InternalEnergy < All.MinEgySpec)
-        {
-            CellP[i].InternalEnergy = All.MinEgySpec;
-            CellP[i].DtInternalEnergy = 0;
-        }
-    }
-}
-
-
-
-double INLINE_FUNC Get_Gas_density_for_energy_i(int i)
-{
-#ifdef HYDRO_PRESSURE_SPH
-    return CellP[i].EgyWtDensity;
-#endif
-    return CellP[i].Density;
-}
-
-
-/* calculate the 'total' effective sound speed in a given element [including e.g. cosmic ray pressure and other forms of pressure, if present] */
-double INLINE_FUNC Get_Gas_effective_soundspeed_i(int i)
-{
-#ifdef EOS_GENERAL
-    return CellP[i].SoundSpeed;
-#else
-    /* if nothing above triggers, then we resort to good old-fashioned ideal gas */
-    return sqrt(GAMMA(i) * CellP[i].Pressure / Get_Gas_density_for_energy_i(i));
+    cell[i].Pressure = press;
+#if defined(EOS_GAMMA_PROBE) && defined(EOS_GENERAL)
+    {double g = cell[i].gamma_eos_value(); eos_gamma_probe_add((press > 0) ? fabs(cell[i].SoundSpeed*cell[i].SoundSpeed*cell[i].density_for_energy()/(g*press) - 1.) : 0, g);}
 #endif
 }
 
-
-/* calculate the thermal sound speed (using just the InternalEnergy variable) in a given element */
-double INLINE_FUNC Get_Gas_thermal_soundspeed_i(int i)
-{
-    return sqrt(convert_internalenergy_soundspeed2(i,CellP[i].InternalEnergyPred));
-}
-
-
-/* calculate the Alfven speed in a given element */
-double Get_Gas_Alfven_speed_i(int i)
-{
-#if defined(MAGNETIC)
-    int k; double bmag=0; for(k=0;k<3;k++) {bmag+=Get_Gas_BField(i,k)*All.cf_a2inv * Get_Gas_BField(i,k)*All.cf_a2inv;}
-    if(bmag > 0) {return sqrt(bmag / (MIN_REAL_NUMBER + CellP[i].Density*All.cf_a3inv));}
-#endif
-    return 0;
-}
-
-
-/* calculate the fast MHD wave speed in a given element */
-double Get_Gas_Fast_MHD_wavespeed_i(int i)
-{
-    double cs = Get_Gas_thermal_soundspeed_i(i), vA = Get_Gas_Alfven_speed_i(i);
-    return sqrt(cs*cs + vA*vA);    
-}
-
-
-/* calculate and return the actual B Field of a cell (in comoving units, so multiply by All.cf_a2inv to get physical) */
-double INLINE_FUNC Get_Gas_BField(int i_particle_id, int k_vector_component)
-{
-#if defined(MAGNETIC)
-    return CellP[i_particle_id].BPred[k_vector_component] * CellP[i_particle_id].Density / P[i_particle_id].Mass;
-#endif
-    return 0;
-}
-
-
-/* handy function that just returns the B-field magnitude in microGauss, physical units. purely here to save us time re-writing this */
-double get_cell_Bfield_in_microGauss(int i)
-{
-    double Bmag=0;
-#ifdef MAGNETIC
-    int k; for(k=0;k<3;k++) {double B=Get_Gas_BField(i,k)*All.cf_a2inv; Bmag+=B*B;} // actual B-field in code units
-#else
-    Bmag=2.*CellP[i].Pressure*All.cf_a3inv; // assume equipartition
-#endif
-    return UNIT_B_IN_GAUSS * sqrt(DMAX(Bmag,0)) * 1.e6; // return B in microGauss
-}
-
-
-/* returns the conversion factor to go -approximately- (for really quick estimation) in code units, from internal energy to soundspeed */
-double INLINE_FUNC convert_internalenergy_soundspeed2(int i, double u)
-{
-    double gamma_eos_touse = GAMMA(i);
-    return gamma_eos_touse * (gamma_eos_touse-1) * u;
-}
 
 
 /* returns the ionized fraction of gas, meant as a reference for runs outside of the cooling routine which include cooling+other physics */
-double Get_Gas_Ionized_Fraction(int i)
+double Get_Gas_Ionized_Fraction(int i, struct particle_data *pp, struct gas_cell_data *cell)
 {
 #ifdef COOLING
-#ifdef CHIMES 
-  return (double) ChimesGasVars[i].abundances[ChimesGlobalVars.speciesIndices[sp_HII]]; 
-#else 
-    double ne=1, nh0=0, nHe0, nHepp, nhp, nHeII, temperature, mu_meanwt=1, rho=CellP[i].Density*All.cf_a3inv, u0=CellP[i].InternalEnergyPred;
-    temperature = ThermalProperties(u0, rho, i, &mu_meanwt, &ne, &nh0, &nhp, &nHe0, &nHeII, &nHepp); // get thermodynamic properties
+#ifdef CHIMES
+  return (double) ChimesGasVars[i].abundances[ChimesGlobalVars.speciesIndices[sp_HII]];
+#else
+    double ne=1, nh0=0, nHe0, nHepp, nhp, nHeII, temperature, mu_meanwt=1, rho=cell[i].Density*All.cf_a3inv, u0=cell[i].InternalEnergyPred;
+    temperature = ThermalProperties(u0, rho, i, &mu_meanwt, &ne, &nh0, &nhp, &nHe0, &nHeII, &nHepp, pp, cell); // get thermodynamic properties
     double f_ion = DMIN(DMAX(DMAX(DMAX(1-nh0, nhp), ne/1.2), 1.e-8), 1.); // account for different measures above (assuming primordial composition)
     if((!isfinite(f_ion)) || (f_ion<0)) {f_ion=0;}
     return f_ion;
@@ -335,36 +243,50 @@ double Get_Gas_Ionized_Fraction(int i)
  T_dust_manual_override here designates whether we want to pass a specific dust temp or allow the code to call one itself here, to avoid creating circular dependencies and to
     allow for self-consistent coupling to various other dust dynamics/formation/chemistry modules. if you just want 'default' behavior and aren't worried about this, call with this parameter set to 0
  */
-double return_dust_to_metals_ratio_vs_solar(int i, double T_dust_manual_override)
+double return_dust_to_metals_ratio_vs_solar(int i, double T_dust_manual_override, struct particle_data *pp, struct gas_cell_data *cell)
 {
-    if(i<0 || P[i].Type!=0) {return 1;}
+    if(i<0 || pp[i].Type!=0) {return 1;}
 #if defined(RT_OPACITY_FROM_EXPLICIT_GRAINS) /* note since the applications of this module really want a -surface area per unit mass- ratio to scale off of, we actually want to scale this by the geometric opacity, relative to what 'typical' solar conditions would give */
-    double kappa_interp_geo_cgs = CellP[i].InterpolatedGeometricDustCrossSection / UNIT_SURFDEN_IN_CGS; // this should be in cgs, in cm^2/g
+    double kappa_interp_geo_cgs = cell[i].InterpolatedGeometricDustCrossSection / UNIT_SURFDEN_IN_CGS; // this should be in cgs, in cm^2/g
     double kappa_solar_geo_cgs = 3300.; // this is a rough estimate of what one would get as a 'reference' opacity if one assumed a maximum grain size of 0.1 micron, grain density of 2.25 g/cm^3, as in e.g. Weingartner & Draine 2001 (roughly what their models would give, for the size range we usually model, to compare)
-    double Z_scaled = P[i].Metallicity[0]/All.SolarAbundances[0]; // metallicity of the particle in solar
+    double Z_scaled = pp[i].Metallicity[0]/All.SolarAbundances[0]; // metallicity of the particle in solar
     return (kappa_interp_geo_cgs / kappa_solar_geo_cgs) / (Z_scaled); // will be multiplied by metallicity to convert later
 #endif
 #if defined(GALSF_ISMDUSTCHEM_MODEL)
-    if(P[i].Metallicity[0]>0) {return (CellP[i].ISMDustChem_Dust_Metal[0]/P[i].Metallicity[0])/0.5;} else {return 0;} // use total amount of dust from 'live' dust evolution models
+    if(pp[i].Metallicity[0]>0) {return (cell[i].ISMDustChem_Dust_Metal[0]/pp[i].Metallicity[0])/0.5;} else {return 0;} // use total amount of dust from 'live' dust evolution models
 #endif
 #if defined(RT_INFRARED)
-    double T_evap = 1500.; // 2e3 * pow(CellP[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS, 0.0195); // latter function from Kuiper 2010 eqs 21-22; sublimation temperature from Isella & Natta 2005, fit to Pollack 1994. works for protostellar environments, but extrapolates poorly to diffuse ISM and/or stellar/AGN atmosphere environments, so for now use a simpler 1500 K which is a rough median between these, with more sophisticated dust modules required to fit all different parameter regimes.
-    double T_dust = T_dust_manual_override; if(T_dust == 0) {T_dust = CellP[i].Dust_Temperature;} // use this iff the dust temp sent is nil
+    double T_evap = 1500.; // 2e3 * pow(cell[i].Density * All.cf_a3inv * UNIT_DENSITY_IN_CGS, 0.0195); // latter function from Kuiper 2010 eqs 21-22; sublimation temperature from Isella & Natta 2005, fit to Pollack 1994. works for protostellar environments, but extrapolates poorly to diffuse ISM and/or stellar/AGN atmosphere environments, so for now use a simpler 1500 K which is a rough median between these, with more sophisticated dust modules required to fit all different parameter regimes.
+    double T_dust = T_dust_manual_override; if(T_dust == 0) {T_dust = cell[i].Dust_Temperature;} // use this iff the dust temp sent is nil
     double Tdust_Tsub = T_dust / T_evap; // ratio for below
     double fdust = sigmoid_sqrt(9.*(1.-Tdust_Tsub)) * exp(-DMIN(40.,Tdust_Tsub*Tdust_Tsub/9.)); // crudely don't bother accounting for size spectrum, just adopt an exponential cutoff above the sublimation temperature
-    //if(CellP[i].Dust_Temperature >= MAX_DUST_TEMP) {return 1.e-22;} // since using this upper limit as a value to represent where things are basically all sublimated, use a (intentionally very low compared to the slower formula below) low floor value in this case */
+    //if(cell[i].Dust_Temperature >= MAX_DUST_TEMP) {return 1.e-22;} // since using this upper limit as a value to represent where things are basically all sublimated, use a (intentionally very low compared to the slower formula below) low floor value in this case */
     return DMAX(fdust, 1.e-25); // floor at value too small to influence physical dust processes, just so dust temp root-finders have something finite and continuous to work with
 #endif
 #if defined(COOL_LOW_TEMPERATURES) && !defined(SINGLE_STAR_SINK_DYNAMICS) // skip this and assume fdust=1 if SINGLE_STAR_SINK_DYNAMICS on because it uses the fancy dust temp solver whose result depends implicitly on the dust fraction - if sublimation is important then we should be running full RT anyway
-    double Tdust = T_dust_manual_override; if(Tdust == 0) {Tdust = get_equilibrium_dust_temperature_estimate(i,0,0);} // call this iff the dust temp sent is nil
+    double Tdust = T_dust_manual_override; if(Tdust == 0) {Tdust = get_equilibrium_dust_temperature_estimate(i,0,0, pp, cell);} // call this iff the dust temp sent is nil
     if(Tdust >= 2000.) {return 1.e-4;} else {return exp(-pow(Tdust/1000.,3));} // this hit the maximum allowed temperature in the routine if it gets >2000; for lower temps, let it smoothly cut off
 #endif
     return 1; // default behavior
 }
 
 
+/* Calculates the coefficient for gas-dust collisional heat transfer, such that LambdaDust = gas_dust_heating_coeff * (T-Tdust) in erg cm^3 s^-1.
+    Lives here rather than in cooling.cc, whose contents are entirely inside #ifdef COOLING: RT_INFRARED calls this from rt_utilities.cc under no
+    such guard, so an RT_INFRARED build without COOLING failed to link. It is a closed-form fit needing only the dust-to-metals ratio above. */
+double gas_dust_heating_coeff(int i, double T, double Tdust, struct particle_data *pp, struct gas_cell_data *cell)
+{
+    double Z_sol=1;
+#ifdef METALS
+    if(i>=0) {Z_sol = pp[i].Metallicity[0]/All.SolarAbundances[0];}
+#endif
+    double fdust = return_dust_to_metals_ratio_vs_solar(i,Tdust, pp, cell); // accounting for dust destruction; we avoid calling the function for this because it can create a circular dependency
+    return 1.116e-32 * sqrt(T)*(1.-0.8*exp(-75./T)) * Z_sol * fdust;  // Meijerink & Spaans 2005; Hollenbach & McKee 1979,1989. Assumes 10 Angstrom minimum grain size.
+}
+
+
 /* return an estimate of the Hydrogen molecular fraction of gas, intended for simulations of e.g. molecular clouds, galaxies, and star formation */
-double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral_fraction, double free_electron_ratio, double urad_from_uvb_in_G0)
+double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral_fraction, double free_electron_ratio, double urad_from_uvb_in_G0, struct particle_data *pp, struct gas_cell_data *cell)
 {
     /* if tracking chemistry explicitly, return the explicitly-evolved H2 fraction */
 #ifdef CHIMES // use the CHIMES molecular network for H2
@@ -372,15 +294,15 @@ double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral
 #endif
     
 #if (COOL_GRACKLE_CHEMISTRY >= 2) // Use GRACKLE explicitly-tracked H2 [using the molecular network if this is valid]
-    return DMIN(1,DMAX(0, CellP[i].grH2I + CellP[i].grH2II)); // include both states of H2 tracked
+    return DMIN(1,DMAX(0, cell[i].grH2I + cell[i].grH2II)); // include both states of H2 tracked
 #endif
     
 #if defined(COOL_MOLECFRAC_NONEQM) // use our simple 1-species network for explicitly-evolved H2 fraction
-    return DMIN(1, DMAX(0, CellP[i].MolecularMassFraction));
+    return DMIN(1, DMAX(0, cell[i].MolecularMassFraction));
 #endif
 
 #if defined(GALSF_FB_FIRE_RT_HIIHEATING)
-    if(CellP[i].DelayTimeHII > 0) {return 0;} // force gas flagged as in HII regions to have zero molecular fraction
+    if(cell[i].DelayTimeHII > 0) {return 0;} // force gas flagged as in HII regions to have zero molecular fraction
 #endif
 
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2) && !defined(COOL_MOLECFRAC_NONEQM) && !defined(COOL_MOLECFRAC) && defined(COOLING) /* set default module we will use here */
@@ -392,21 +314,21 @@ double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral
     if(temperature > 3.e5) {return 0;} else {T=temperature;} // approximations below not designed for high temperatures, should simply give null
     xH0 = DMIN(DMAX(neutral_fraction,0.),1.); // get neutral fraction [given by call to this program]
     x_e = DMIN(DMAX(free_electron_ratio,0.),2.); // get free electron ratio [number per H nucleon]
-    nH_cgs = CellP[i].Density*All.cf_a3inv * UNIT_DENSITY_IN_NHCGS; // get nH defined as number of nucleons per cm^3
+    nH_cgs = cell[i].Density*All.cf_a3inv * UNIT_DENSITY_IN_NHCGS; // get nH defined as number of nucleons per cm^3
     Z_Zsol=1; urad_G0=1; // initialize metal and radiation fields. will assume solar-Z and spatially-uniform Habing field for incident FUV radiation unless reset below.
 #ifdef METALS
-    Z_Zsol = P[i].Metallicity[0]/All.SolarAbundances[0]; // metallicity in solar units [scale to total Z, since this mixes dust and C opacity], and enforce a low-Z floor to prevent totally unphysical behaviors at super-low Z [where there is still finite opacity in reality; e.g. Kramer's type and other opacities enforce floor around ~1e-3]
+    Z_Zsol = pp[i].Metallicity[0]/All.SolarAbundances[0]; // metallicity in solar units [scale to total Z, since this mixes dust and C opacity], and enforce a low-Z floor to prevent totally unphysical behaviors at super-low Z [where there is still finite opacity in reality; e.g. Kramer's type and other opacities enforce floor around ~1e-3]
 #endif
     /* get incident radiation field from whatever module we are using to track it */
 #ifdef GALSF_FB_FIRE_RT_LONGRANGE
-    urad_G0 = DMAX(CellP[i].Rad_Flux_UV, 1.e-10); // note this is ALREADY self-shielded, so we need to be careful about 2x-counting the self-shielding approximation below; hence limit this to a rather sizeable value  //
+    urad_G0 = DMAX(cell[i].Rad_Flux_UV, 1.e-10); // note this is ALREADY self-shielded, so we need to be careful about 2x-counting the self-shielding approximation below; hence limit this to a rather sizeable value  //
 #endif
 #if defined(RT_PHOTOELECTRIC) || defined(RT_LYMAN_WERNER)
     int whichbin = RT_FREQ_BIN_LYMAN_WERNER;
 #if !defined(RT_LYMAN_WERNER)
     whichbin = RT_FREQ_BIN_PHOTOELECTRIC; // use photo-electric bin as proxy (very close) if don't evolve LW explicitly
 #endif
-    urad_G0 = CellP[i].Rad_E_gamma[whichbin] * (CellP[i].Density*All.cf_a3inv/P[i].Mass) * UNIT_PRESSURE_IN_CGS / 3.9e-14; // convert to Habing field //
+    urad_G0 = cell[i].Rad_E_gamma[whichbin] * (cell[i].Density*All.cf_a3inv/pp[i].Mass) * UNIT_PRESSURE_IN_CGS / 3.9e-14; // convert to Habing field //
 #endif
     urad_G0 += urad_from_uvb_in_G0; // include whatever is contributed from the meta-galactic background, fed into this routine
     urad_G0 = DMIN(DMAX( urad_G0 , 1.e-10 ) , 1.e10 ); // limit values, because otherwise exponential self-shielding approximation easily artificially gives 0 incident field
@@ -420,10 +342,10 @@ double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral
     /* take eqm of dot[nH2] = a_H2*rho_dust*nHI [dust formation] + a_GP*nHI*ne [gas-phase formation] + b_3B*nHI*nHI*(nHI+nH2/8) [3-body collisional form] - b_H2HI*nHI*nH2 [collisional dissociation]
         - b_H2H2*nH2*nH2 [collisional mol-mol dissociation] - Gamma_H2^LW * nH2 [photodissociation] - Gamma_H2^+ [photoionization] - xi_H2*nH2 [CR ionization/dissociation] */
     double fH2=0, sqrt_T=sqrt(T), nH0=xH0*nH_cgs, n_e=x_e*nH_cgs, EXPmax=40., clumping_factor=1; // define some variables for below, including neutral H number density, free electron number, etc.
-    double f_dustgas_solar = 0.5*Z_Zsol*return_dust_to_metals_ratio_vs_solar(i,0); // dust-to-gas ratio locally
+    double f_dustgas_solar = 0.5*Z_Zsol*return_dust_to_metals_ratio_vs_solar(i,0, pp, cell); // dust-to-gas ratio locally
     double Tdust = 30.; // need to assume something about dust temperature for reaction rates below for dust-phase formation
 #if (GALSF_FB_FIRE_STELLAREVOLUTION > 2) || defined(SINGLE_STAR_SINK_DYNAMICS)
-    Tdust = get_equilibrium_dust_temperature_estimate(i, 1, T);
+    Tdust = get_equilibrium_dust_temperature_estimate(i, 1, T, pp, cell);
 #endif
     double a_Z = 3.e-18*sqrt_T / ((1. +4.e-2*sqrt(T+Tdust) +2.e-3*T +8.e-6*T*T )*(1. +1.e4/exp(DMIN(EXPmax,600./Tdust)))) * f_dustgas_solar * nH_cgs * nH0 * clumping_factor; // dust surface formation (assuming dust-to-metals ratio is 0.5*(Z/solar)*dust-to-gas-relative-to-solar in all regions where this is significant), from Glover & Jappsen 2007
     //double a_GP = (1.833e-21 * pow(T,0.88)) * nH0 * n_e; // gas-phase formation [old form, from Nickerson et al., appears to be a significant typo in their expression compared to the sources from which they extracted it]
@@ -447,11 +369,11 @@ double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral
     {
         double fH2_min = fH2; // we have just calculated fH2 with -no- molecular self-shielding, so this number can only go up from here
         // calculate a bundle of variables we will need below, to account for the velocity-gradient Sobolev approximation and slab attenuation of G0 //
-        double dx_cell = Get_Particle_Size(i) * All.cf_atime; // cell size
+        double dx_cell = pp[i].Get_Particle_Size() * All.cf_atime; // cell size
         double surface_density_H2_0 = 5.e14 * PROTONMASS_CGS, x_exp_fac=0.00085, w0=0.2; // characteristic cgs column for -molecular line- self-shielding
-        double surface_density_local = xH0 * CellP[i].Density * All.cf_a3inv * dx_cell * UNIT_SURFDEN_IN_CGS; // this is -just- the [neutral] depth through the local cell/slab. that's closer to what we want here, since G0 is -already- attenuated in the pre-processing step!
+        double surface_density_local = xH0 * cell[i].Density * All.cf_a3inv * dx_cell * UNIT_SURFDEN_IN_CGS; // this is -just- the [neutral] depth through the local cell/slab. that's closer to what we want here, since G0 is -already- attenuated in the pre-processing step!
         double v_thermal_rms = 0.111*sqrt(T); // sqrt(3*kB*T/2*mp), since want rms thermal speed of -molecular H2- in kms
-        double gradv=velocity_gradient_norm(i);
+        double gradv=cell[i].velocity_gradient_norm();
         double dv_turb=gradv*dx_cell*UNIT_VEL_IN_KMS; // delta-velocity across cell
         double x00 = surface_density_local / surface_density_H2_0, x01 = x00 / (sqrt(1. + 3.*dv_turb*dv_turb/(v_thermal_rms*v_thermal_rms)) * sqrt(2.)*v_thermal_rms), y_ss, x_ss_1, x_ss_sqrt, fH2_tmp, fH2_max, Qmax, Qmin; // variable needed below. note the x01 term corrects following Gnedin+Draine 2014 for the velocity gradient at the sonic scale, assuming a Burgers-type spectrum [their Eq. 3]
 
@@ -502,9 +424,9 @@ double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral
     /* use the simpler Kumholz, McKee, & Tumlinson 2009 sub-grid model for molecular fractions in equilibrium, which is a function modeling spherical clouds
         of internally uniform properties exposed to incident radiation. Depends on column density, metallicity, and incident FUV field. */
     /* get estimate of mass column density integrated away from this location for self-shielding */
-    double surface_density_Msun_pc2_infty = 0.05 * evaluate_NH_from_GradRho(P[i].GradRho,P[i].KernelRadius,CellP[i].Density,P[i].NumNgb,1,i) * UNIT_SURFDEN_IN_CGS / 0.000208854; // approximate column density with Sobolev or Treecol methods as appropriate; converts to M_solar/pc^2
+    double surface_density_Msun_pc2_infty = 0.05 * evaluate_NH_from_GradRho(pp[i].GradRho,pp[i].KernelRadius,cell[i].Density,pp[i].NumNgb,1,i,pp) * UNIT_SURFDEN_IN_CGS / 0.000208854; // approximate column density with Sobolev or Treecol methods as appropriate; converts to M_solar/pc^2
     /* 0.05 above is in testing, based on calculations by Laura Keating: represents a plausible re-scaling of the shielding length for sub-grid clumping */
-    double surface_density_Msun_pc2_local = CellP[i].Density * Get_Particle_Size(i) * All.cf_a2inv * UNIT_SURFDEN_IN_CGS / 0.000208854; // this is -just- the depth through the local cell/slab. that's closer to what we want here, since G0 is -already- attenuated in the pre-processing step!
+    double surface_density_Msun_pc2_local = cell[i].Density * pp[i].Get_Particle_Size() * All.cf_a2inv * UNIT_SURFDEN_IN_CGS / 0.000208854; // this is -just- the depth through the local cell/slab. that's closer to what we want here, since G0 is -already- attenuated in the pre-processing step!
     double surface_density_Msun_pc2 = DMIN( surface_density_Msun_pc2_local, surface_density_Msun_pc2_infty);
     //double surface_density_Msun_pc2 = surface_density_Msun_pc2_local;
     /* now actually do the relevant calculation with the KMT fitting functions */
@@ -525,7 +447,7 @@ double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral
 #if (COOL_MOLECFRAC == 3)
     /* use the sub-grid final expression calibrated to ~60pc resolution simulations with equilibrium molecular chemistry and post-processing radiative
         transfer from Gnedin & Draine 2014 (Eqs. 5-7) */
-    double S_slab = Get_Particle_Size(i) * All.cf_atime * UNIT_LENGTH_IN_PC / 100.; // slab size in units of 100 pc
+    double S_slab = pp[i].Get_Particle_Size() * All.cf_atime * UNIT_LENGTH_IN_PC / 100.; // slab size in units of 100 pc
     double D_star = 0.17 * (2. + S_slab*S_slab*S_slab*S_slab*S_slab) / (1. + S_slab*S_slab*S_slab*S_slab*S_slab); // intermediate variable
     double U_star = 9. * D_star / S_slab, n_star = 14. * sqrt(D_star) / S_slab; // intermediate variables
     double g_eff = sqrt(D_star*D_star + Z_Zsol*Z_Zsol); // intermediate variable parameterizing the dust-to-gas ratio here [assuming the dust-to-gas ratio relative to solar scales linearly with metallicity, giving Z_Zsol = their D_MW parameter]
@@ -539,15 +461,15 @@ double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral
     
     
 #if (SINGLE_STAR_SINK_FORMATION & 256) || (COOL_MOLECFRAC == 2) /* estimate f_H2 with Krumholz & Gnedin 2010 fitting function, assuming simple scalings of radiation field, clumping, and other factors with basic gas properties so function only of surface density and metallicity, truncated at low values (or else it gives non-sensical answers) */
-    double clumping_factor=1, fH2_kg=0, tau_fmol = (0.1 + P[i].Metallicity[0]/All.SolarAbundances[0]) * evaluate_NH_from_GradRho(P[i].GradRho,P[i].KernelRadius,CellP[i].Density,P[i].NumNgb,1,i) * 434.78 * UNIT_SURFDEN_IN_CGS; // convert units for surface density. also limit to Z>=0.1, where their fits were actually good, or else get unphysically low molecular fractions
-    if(tau_fmol>0) {double y = 0.756 * (1 + 3.1*pow(P[i].Metallicity[0]/All.SolarAbundances[0],0.365)) / clumping_factor; // this assumes all the equilibrium scalings of radiation field, density, SFR, etc, to get a trivial expression
+    double clumping_factor=1, fH2_kg=0, tau_fmol = (0.1 + pp[i].Metallicity[0]/All.SolarAbundances[0]) * evaluate_NH_from_GradRho(pp[i].GradRho,pp[i].KernelRadius,cell[i].Density,pp[i].NumNgb,1,i,pp) * 434.78 * UNIT_SURFDEN_IN_CGS; // convert units for surface density. also limit to Z>=0.1, where their fits were actually good, or else get unphysically low molecular fractions
+    if(tau_fmol>0) {double y = 0.756 * (1 + 3.1*pow(pp[i].Metallicity[0]/All.SolarAbundances[0],0.365)) / clumping_factor; // this assumes all the equilibrium scalings of radiation field, density, SFR, etc, to get a trivial expression
         y = log(1 + 0.6*y + 0.01*y*y) / (0.6*tau_fmol); y = 1 - 0.75*y/(1 + 0.25*y); fH2_kg=DMIN(1,DMAX(0,y));}
     return fH2_kg * neutral_fraction;
 #endif
     
     
 #if defined(COOLING) || (COOL_MOLECFRAC == 1) /* if none of the above is set, default to a wildly-oversimplified scaling set by fits to the temperature below which gas at a given density becomes molecular from cloud simulations in Glover+Clark 2012 */
-    double T_mol = DMAX(1.,DMIN(8000., CellP[i].Density*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS));
+    double T_mol = DMAX(1.,DMIN(8000., cell[i].Density*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS));
     return neutral_fraction / (1. + temperature*temperature/(T_mol*T_mol));
 #endif
     
@@ -556,10 +478,10 @@ double Get_Gas_Molecular_Mass_Fraction(int i, double temperature, double neutral
 
 
 /* return helium -number- fraction, not mass fraction */
-double yhelium(int target)
+double INLINE_FUNC yhelium(int target, struct particle_data *pp)
 {
 #ifdef COOL_METAL_LINES_BY_SPECIES
-    if(target >= 0) {double ytmp=DMIN(0.5,P[target].Metallicity[1]); return 0.25*ytmp/(1.-ytmp);} else {return ((1.-HYDROGEN_MASSFRAC)/(4.*HYDROGEN_MASSFRAC));}
+    if(target >= 0) {double ytmp=DMIN(0.5,pp[target].Metallicity[1]); return 0.25*ytmp/(1.-ytmp);} else {return ((1.-HYDROGEN_MASSFRAC)/(4.*HYDROGEN_MASSFRAC));}
 #else
     return ((1.-HYDROGEN_MASSFRAC)/(4.*HYDROGEN_MASSFRAC)); // assume uniform H-He gas
 #endif
@@ -567,7 +489,7 @@ double yhelium(int target)
 
 
 /* return mean molecular weight, appropriate for the approximations of the user-selected chemical network[s] */
-double Get_Gas_Mean_Molecular_Weight_mu(double T_guess, double rho, double *xH0, double *ne_guess, double urad_from_uvb_in_G0, int target)
+double Get_Gas_Mean_Molecular_Weight_mu(double T_guess, double rho, double *xH0, double *ne_guess, double urad_from_uvb_in_G0, int target, struct particle_data *pp, struct gas_cell_data *cell)
 {
 #if defined(CHIMES)
     return calculate_mean_molecular_weight(&(ChimesGasVars[target]), &ChimesGlobalVars);
@@ -576,11 +498,11 @@ double Get_Gas_Mean_Molecular_Weight_mu(double T_guess, double rho, double *xH0,
 #ifdef METALS
     if(target >= 0)
     {
-        Z = DMIN(0.25,P[target].Metallicity[0]); if(NUM_METAL_SPECIES>=10) {Y = DMIN(0.35,P[target].Metallicity[1]);}
+        Z = DMIN(0.25,pp[target].Metallicity[0]); if(NUM_METAL_SPECIES>=10) {Y = DMIN(0.35,pp[target].Metallicity[1]);}
         X = 1. - (Y+Z);
     }
 #endif
-    fmol = Get_Gas_Molecular_Mass_Fraction(target, T_guess, *xH0, *ne_guess, urad_from_uvb_in_G0); /* use our simple subroutine to estimate this, ignoring UVB and with clumping factor=1 */
+    fmol = Get_Gas_Molecular_Mass_Fraction(target, T_guess, *xH0, *ne_guess, urad_from_uvb_in_G0, pp, cell); /* use our simple subroutine to estimate this, ignoring UVB and with clumping factor=1 */
     return 1. / ( X*(1-0.5*fmol) + Y/4. + *ne_guess*HYDROGEN_MASSFRAC + Z/(16.+12.*fmol) ); // since our ne is defined in some routines with He, should multiply by universal
 #else
     return 4./(3.+5.*HYDROGEN_MASSFRAC); // fully-ionized H-He plasma
@@ -590,30 +512,30 @@ double Get_Gas_Mean_Molecular_Weight_mu(double T_guess, double rho, double *xH0,
 
 
 /* subroutine to calculate the conductivities and assign the various non-ideal MHD coefficients (Ohmic, Hall, Ambipolar). can modify or expand chemistry or assumptions about grains herein. */
-void calculate_and_assign_nonideal_mhd_coefficients(int i)
+void calculate_and_assign_nonideal_mhd_coefficients(int i, struct particle_data *pp, struct gas_cell_data *cell)
 {
 #ifdef MHD_NON_IDEAL
 #ifdef COOLING // only try to get self-consistent resistivities after the first timestep, when we have calculated the self-consistent ionization state - on the first timestep default to 0 (=ideal MHD)
-    if(All.Time <= All.TimeBegin) {CellP[i].Eta_MHD_OhmicResistivity_Coeff = CellP[i].Eta_MHD_HallEffect_Coeff = CellP[i].Eta_MHD_AmbiPolarDiffusion_Coeff = 0; return;} // =0 on the first timestep, since we don't know the ionization yet
+    if(All.Time <= All.TimeBegin) {cell[i].Eta_MHD_OhmicResistivity_Coeff = cell[i].Eta_MHD_HallEffect_Coeff = cell[i].Eta_MHD_AmbiPolarDiffusion_Coeff = 0; return;} // =0 on the first timestep, since we don't know the ionization yet
 #endif
     /* calculations below follow Wardle 2007 and Keith & Wardle 2014, for the equation sets */
     double mean_molecular_weight = 2.38; // molecular H2, +He with solar mass fractions and metals
     double a_grain_micron = 0.1, f_dustgas = 0.01; // effective size of grains that matter at these densities
     double m_ion = 24.3; // Mg dominates ions in dense gas [where this is relevant]; this is ion mass in units of proton mass
-    double zeta_cr = Get_CosmicRayIonizationRate_cgs(i); // cosmic ray ionization rate (fixed as constant for non-CR runs)
+    double zeta_cr = Get_CosmicRayIonizationRate_cgs(i, pp, cell); // cosmic ray ionization rate (fixed as constant for non-CR runs)
 #ifdef COOLING
-    double T_eff_atomic = 1.23 * (5./3.-1.) * U_TO_TEMP_UNITS * CellP[i].InternalEnergyPred; /* we'll use this to make a quick approximation to the actual mean molecular weight here */
-    double nH_cgs = CellP[i].Density*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS, T_transition=DMIN(8000.,nH_cgs), f_mol=1./(1. + T_eff_atomic*T_eff_atomic/(T_transition*T_transition));
-    mean_molecular_weight = 4. / (1. + (3. + 4.*CellP[i].Ne - 2.*f_mol) * HYDROGEN_MASSFRAC);
+    double T_eff_atomic = 1.23 * (5./3.-1.) * U_TO_TEMP_UNITS * cell[i].InternalEnergyPred; /* we'll use this to make a quick approximation to the actual mean molecular weight here */
+    double nH_cgs = cell[i].Density*All.cf_a3inv*UNIT_DENSITY_IN_NHCGS, T_transition=DMIN(8000.,nH_cgs), f_mol=1./(1. + T_eff_atomic*T_eff_atomic/(T_transition*T_transition));
+    mean_molecular_weight = 4. / (1. + (3. + 4.*cell[i].Ne - 2.*f_mol) * HYDROGEN_MASSFRAC);
 #endif
 #ifdef METALS
-    f_dustgas = 0.5 * P[i].Metallicity[0] * return_dust_to_metals_ratio_vs_solar(i,0); // appropriate dust-to-metals ratio
+    f_dustgas = 0.5 * pp[i].Metallicity[0] * return_dust_to_metals_ratio_vs_solar(i,0, pp, cell); // appropriate dust-to-metals ratio
 #endif
-    double temperature = mean_molecular_weight * (GAMMA(i)-1.) * U_TO_TEMP_UNITS * CellP[i].InternalEnergyPred; // will use appropriate EOS to estimate temperature
+    double temperature = mean_molecular_weight * (cell[i].gamma_eos_value()-1.) * U_TO_TEMP_UNITS * cell[i].InternalEnergyPred; // will use appropriate EOS to estimate temperature
     // now everything should be fully-determined (given the inputs above and the known properties of the gas) //
     double m_neutral = mean_molecular_weight; // in units of the proton mass
     double ag01 = a_grain_micron/0.1, m_grain = 7.51e9 * ag01*ag01*ag01; // grain mass [internal density =3 g/cm^3]
-    double rho = CellP[i].Density*All.cf_a3inv * UNIT_DENSITY_IN_CGS, n_eff = rho / PROTONMASS_CGS; // density in cgs
+    double rho = cell[i].Density*All.cf_a3inv * UNIT_DENSITY_IN_CGS, n_eff = rho / PROTONMASS_CGS; // density in cgs
     // calculate ionization fraction in dense gas; use rate coefficients k to estimate grain charge
     double k0 = 1.95e-4 * ag01*ag01 * sqrt(temperature); // prefactor for rate coefficient for electron-grain collisions
     double ngr_ngas = (m_neutral/m_grain) * f_dustgas; // number of grains per neutral
@@ -630,13 +552,13 @@ void calculate_and_assign_nonideal_mhd_coefficients(int i)
     double n_ion = zeta_cr / (ngr_ngas * k_i); // ion number density
     double Z_grain = psi / psi_prefac; // mean grain charge (note this is signed, will be negative)
 #ifdef COOLING
-    double mu_eff=2.38, x_elec=DMAX(1.e-18, CellP[i].Ne*HYDROGEN_MASSFRAC*mu_eff), R=x_elec*psi_prefac/ngr_ngas; psi_0=-3.787124454911839; n_elec=x_elec*n_eff/mu_eff; // R is essentially the ratio of negative charge in e- to dust: determines which regime we're in to set quantities below
+    double mu_eff=2.38, x_elec=DMAX(1.e-18, cell[i].Ne*HYDROGEN_MASSFRAC*mu_eff), R=x_elec*psi_prefac/ngr_ngas; psi_0=-3.787124454911839; n_elec=x_elec*n_eff/mu_eff; // R is essentially the ratio of negative charge in e- to dust: determines which regime we're in to set quantities below
     if(R > 100.) {psi=psi_0;} else if(R < 0.002) {psi=R*(1.-y)/(1.+2.*y*R);} else {psi=psi_0/(1.+pow(R/0.18967,-0.5646));} // simple set of functions to solve for psi, given R above, using the same equations used to determine low-temp ion fractions
     n_ion = n_elec * y * exp(psi)/(1.-psi); Z_grain = psi / psi_prefac; // we can immediately now calculate these from the above
 #endif
     // now define more variables we will need below //
     double gizmo2gauss = UNIT_B_IN_GAUSS; // convert to B-field to gauss (units)
-    double B_Gauss = 0; int k; for(k=0;k<3;k++) {B_Gauss += Get_Gas_BField(i,k)*Get_Gas_BField(i,k);} // get magnitude of B //
+    double B_Gauss = cell[i].Bfield().norm_sq(); // get magnitude of B //
     if(B_Gauss<=0) {B_Gauss=0;} else {B_Gauss = sqrt(B_Gauss) * All.cf_a2inv * gizmo2gauss;} // B-field magnitude in Gauss
     double xe = n_elec / n_eff;
     double xi = n_ion / n_eff;
@@ -673,7 +595,7 @@ void calculate_and_assign_nonideal_mhd_coefficients(int i)
     double eta_ohmic = eta_O*units_cgs_to_code, eta_hall = eta_H*units_cgs_to_code, eta_ad = x_neutral * eta_A*units_cgs_to_code;
 #ifdef MHD_NON_IDEAL_CORRECTIONTERMS /* account for unphysical or not internally self-consistent drift/slip speeds (PFH+Squire 24; arXiv:2405.06026) */
     double gradbmag2=0,gradbmag=0,btmp=0,L_B=MAX_REAL_NUMBER;
-    int j; for(k=0;k<3;k++) {for(j=0;j<3;j++) {btmp=CellP[i].Gradients.B[k][j]; gradbmag2+=btmp*btmp;}} // need to get magnitude of B gradient for below
+    gradbmag2 = cell[i].Gradients.B.frobenius_norm_sq(); // need to get magnitude of B gradient for below
     if(gradbmag2>0) {gradbmag=sqrt(gradbmag2)*(All.cf_a2inv/All.cf_atime)*gizmo2gauss; L_B=(B_Gauss/gradbmag)*UNIT_LENGTH_IN_CGS;} // L_B is gradient length in cgs
     double xi_AbsZi_eff = (xe*beta_e + (xi+1.e-25)*beta_i + xg*fabs(Z_grain)*beta_g) / (beta_e + beta_i + beta_g); // weighted mean xi_qi to use
     double psi_n = (xe/(1.+beta_e) + xi/(1.+beta_i) + xg*fabs(Z_grain)/(1.+beta_g)) / (xe+xi+xg*fabs(Z_grain) + 1.e-20); // coupling parameter for weight of neutrals in effective speed
@@ -699,94 +621,93 @@ void calculate_and_assign_nonideal_mhd_coefficients(int i)
     double etacor = 1.; if(etamag > etamax) {etacor = etamax/etamag;} // suppression factor
     eta_ohmic *= etacor; eta_hall *= etacor; eta_ad *= etacor; // applied
 
-    CellP[i].Eta_MHD_OhmicResistivity_Coeff = eta_ohmic;     /*!< Ohmic resistivity coefficient [physical units of L^2/t] */
-    CellP[i].Eta_MHD_HallEffect_Coeff = eta_hall;            /*!< Hall effect coefficient [physical units of L^2/t] */
-    CellP[i].Eta_MHD_AmbiPolarDiffusion_Coeff = eta_ad;      /*!< Hall effect coefficient [physical units of L^2/t] */
+    cell[i].Eta_MHD_OhmicResistivity_Coeff = eta_ohmic;     /*!< Ohmic resistivity coefficient [physical units of L^2/t] */
+    cell[i].Eta_MHD_HallEffect_Coeff = eta_hall;            /*!< Hall effect coefficient [physical units of L^2/t] */
+    cell[i].Eta_MHD_AmbiPolarDiffusion_Coeff = eta_ad;      /*!< Hall effect coefficient [physical units of L^2/t] */
 #endif
 }
 
 
 /* subroutine to calculate and assign the Spitzer-Braginskii conduction and viscosity coefficients, with appropriate limiters for high-beta plasmas, saturated behaviors, and optional practical numerical limiters when in extreme regimes */
-void calculate_and_assign_conduction_and_viscosity_coefficients(int i)
+void calculate_and_assign_conduction_and_viscosity_coefficients(int i, struct particle_data *pp, struct gas_cell_data *cell)
 {
 #if defined(CONDUCTION) || defined(VISCOSITY)
     
 #if (defined(CONDUCTION_SPITZER) || defined(VISCOSITY_BRAGINSKII))
-    double ion_frac, beta_i; int k; k=0; ion_frac=1; beta_i=1.e20; double rho=CellP[i].Density*All.cf_a3inv, u_int=CellP[i].InternalEnergyPred;
+    double ion_frac, beta_i; int k; k=0; ion_frac=1; beta_i=1.e20; double rho=cell[i].Density*All.cf_a3inv, u_int=cell[i].InternalEnergyPred;
 #if defined(COOLING) /* get the ionized fraction. NOTE we CANNOT call 'ThermalProperties' or functions like 'Get_Ionized_Fraction' here in gradients.c, as we have not done self-shielding steps yet and most modules will yield unphysical answers! */
-    ion_frac = CellP[i].Ne / (1. + 2.*yhelium(i)); /* quick estimator. this is actually what we need for conduction since its the free electrons conducting, and we want number relative to fully-ionized gas */
+    ion_frac = cell[i].Ne / (1. + 2.*yhelium(i, pp)); /* quick estimator. this is actually what we need for conduction since its the free electrons conducting, and we want number relative to fully-ionized gas */
 #endif
-    double vf_lim,cs,cs_therm; cs=Get_Gas_effective_soundspeed_i(i); cs_therm=Get_Gas_thermal_soundspeed_i(i); vf_lim = cs;
+    double vf_lim,cs,cs_therm; cs=cell[i].effective_soundspeed(); cs_therm=cell[i].thermal_soundspeed(); vf_lim = cs;
 #ifdef MAGNETIC
-    double bhat[3]={0},bmag=0,double_dot_dv=0; for(k=0;k<3;k++) {bhat[k]=Get_Gas_BField(i,k); bmag+=bhat[k]*bhat[k];}
-    if(bmag>0) {bmag = sqrt(bmag); for(k=0;k<3;k++) {bhat[k]/=bmag;}}
+    Vec3<double> bhat = cell[i].Bfield(); double bmag=0,double_dot_dv=0;
+    bmag=bhat.norm_sq(); if(bmag>0) {bmag = sqrt(bmag); bhat/=bmag;}
     beta_i = bmag*bmag  * All.cf_a3inv / (All.cf_atime * rho * cs_therm * cs_therm);
     vf_lim *= DMIN(1.e4 , sqrt(1.+beta_i));
 #endif
 #endif
     
 #ifdef CONDUCTION
-    CellP[i].Kappa_Conduction = All.ConductionCoeff;
+    cell[i].Kappa_Conduction = All.ConductionCoeff;
 #ifdef CONDUCTION_SPITZER
     /* calculate the thermal conductivities: use the Spitzer formula */
-    CellP[i].Kappa_Conduction *= ion_frac * pow(u_int, 2.5);
+    cell[i].Kappa_Conduction *= ion_frac * pow(u_int, 2.5);
     /* account for saturation (when the mean free path of electrons is large): estimate whether we're in that limit with the gradients */
     double electron_free_path = All.ElectronFreePathFactor * u_int * u_int / rho;
-    double du_conduction=0; for(k=0;k<3;k++) {du_conduction += CellP[i].Gradients.InternalEnergy[k] * CellP[i].Gradients.InternalEnergy[k];}
-    double temp_scale_length = u_int / sqrt(du_conduction) * All.cf_atime;
+    double temp_scale_length = u_int / cell[i].Gradients.InternalEnergy.norm() * All.cf_atime;
     /* also the Whistler instability limits the heat flux at high-beta; Komarov et al., arXiv:1711.11462 (2017) */
-    CellP[i].Kappa_Conduction /= (1 + (4.2 + 1./(3.*beta_i)) * electron_free_path / temp_scale_length); /* should be in physical units */
+    cell[i].Kappa_Conduction /= (1 + (4.2 + 1./(3.*beta_i)) * electron_free_path / temp_scale_length); /* should be in physical units */
 #ifdef DIFFUSION_OPTIMIZERS
-    CellP[i].Kappa_Conduction = DMIN(CellP[i].Kappa_Conduction , 42.85 * rho * vf_lim * DMIN(20.*Get_Particle_Size(i)*All.cf_atime , temp_scale_length));
+    cell[i].Kappa_Conduction = DMIN(cell[i].Kappa_Conduction , 42.85 * rho * vf_lim * DMIN(20.*pp[i].Get_Particle_Size()*All.cf_atime , temp_scale_length));
 #endif
 #endif
 #endif
     
 #ifdef VISCOSITY
-    CellP[i].Eta_ShearViscosity = All.ShearViscosityCoeff; CellP[i].Zeta_BulkViscosity = All.BulkViscosityCoeff;
+    cell[i].Eta_ShearViscosity = All.ShearViscosityCoeff; cell[i].Zeta_BulkViscosity = All.BulkViscosityCoeff;
 #ifdef VISCOSITY_BRAGINSKII
     /* calculate the viscosity coefficients: use the Braginskii shear tensor formulation expanded to first order */
-    CellP[i].Eta_ShearViscosity *= ion_frac * pow(u_int, 2.5); CellP[i].Zeta_BulkViscosity = 0;
+    cell[i].Eta_ShearViscosity *= ion_frac * pow(u_int, 2.5); cell[i].Zeta_BulkViscosity = 0;
     /* again need to account for possible saturation (when the mean free path of ions is large): estimate whether we're in that limit with the gradients */
-    double ion_free_path = All.ElectronFreePathFactor * u_int * u_int / rho; double dv_magnitude=0, v_magnitude=0;
+    double ion_free_path = All.ElectronFreePathFactor * u_int * u_int / rho; double dv_magnitude=0, v_magnitude=1.0e-33;
     /* need an estimate of the internal energy gradient scale length, which we get by d(P/rho) = P/rho * (dP/P - drho/rho) */
     for(k=0;k<3;k++) {int k1;
         for(k1=0;k1<3;k1++) {
-            dv_magnitude += CellP[i].Gradients.Velocity[k][k1]*CellP[i].Gradients.Velocity[k][k1];
+            dv_magnitude += cell[i].Gradients.Velocity[k][k1]*cell[i].Gradients.Velocity[k][k1];
 #ifdef MAGNETIC
-            double_dot_dv += CellP[i].Gradients.Velocity[k][k1] * bhat[k]*bhat[k1] * All.cf_a2inv; // physical units
+            double_dot_dv += cell[i].Gradients.Velocity[k][k1] * bhat[k]*bhat[k1] * All.cf_a2inv; // physical units
 #endif
         }
-        v_magnitude += CellP[i].VelPred[k]*CellP[i].VelPred[k];
+        v_magnitude += cell[i].VelPred[k]*cell[i].VelPred[k];
     }
     double vel_scale_length = sqrt( v_magnitude / dv_magnitude ) * All.cf_atime;
     /* also limit to saturation magnitude ~ signal_speed / lambda_MFP^2 */
-    CellP[i].Eta_ShearViscosity /= (1 + 4.2 * ion_free_path / vel_scale_length); /* should be in physical units */
+    cell[i].Eta_ShearViscosity /= (1 + 4.2 * ion_free_path / vel_scale_length); /* should be in physical units */
 #ifdef MAGNETIC
     // following Jono Squire's notes, the mirror and firehose instabilities limit pressure anisotropies [which scale as the viscous term inside the gradient: nu_braginskii*(bhat.bhat:grad.v)] to >-2*P_magnetic and <1*P_magnetic
-    double P_effective_visc = CellP[i].Eta_ShearViscosity * double_dot_dv;
+    double P_effective_visc = cell[i].Eta_ShearViscosity * double_dot_dv;
     double P_magnetic = 0.5 * (bmag*All.cf_a2inv) * (bmag*All.cf_a2inv);
-    if(P_effective_visc < -2.*P_magnetic) {CellP[i].Eta_ShearViscosity = 2.*P_magnetic / fabs(double_dot_dv);}
-    if(P_effective_visc > P_magnetic) {CellP[i].Eta_ShearViscosity = P_magnetic / fabs(double_dot_dv);}
+    if(P_effective_visc < -2.*P_magnetic) {cell[i].Eta_ShearViscosity = 2.*P_magnetic / fabs(double_dot_dv);}
+    if(P_effective_visc > P_magnetic) {cell[i].Eta_ShearViscosity = P_magnetic / fabs(double_dot_dv);}
 #endif
 #ifdef DIFFUSION_OPTIMIZERS
     double eta_sat = rho * vf_lim / (ion_free_path * (1 + 4.2 * ion_free_path / vel_scale_length));
-    if(eta_sat <= 0) {CellP[i].Eta_ShearViscosity=0;}
-    if(CellP[i].Eta_ShearViscosity>0) {CellP[i].Eta_ShearViscosity = 1. / (1./CellP[i].Eta_ShearViscosity + 1./eta_sat);} // again, all physical units //
+    if(eta_sat <= 0) {cell[i].Eta_ShearViscosity=0;}
+    if(cell[i].Eta_ShearViscosity>0) {cell[i].Eta_ShearViscosity = 1. / (1./cell[i].Eta_ShearViscosity + 1./eta_sat);} // again, all physical units //
 #endif
 #endif
 #endif
-    
+
 #endif
 }
 
 
 #ifdef TURB_DIFFUSION
-void calculate_and_assign_turbulent_diffusion_coefficients(int i)
+void calculate_and_assign_turbulent_diffusion_coefficients(int i, struct particle_data *pp, struct gas_cell_data *cell)
 {
     /* estimate local turbulent diffusion coefficient from velocity gradients using Smagorinsky mixing model:
      we do this after slope-limiting to prevent the estimated velocity gradients from being unphysically large */
-    double h_turb = Get_Particle_Size(i) * All.cf_atime; // physical
+    double h_turb = pp[i].Get_Particle_Size() * All.cf_atime; // physical
     if(h_turb > 0)
     {
         // overall normalization //
@@ -795,54 +716,54 @@ void calculate_and_assign_turbulent_diffusion_coefficients(int i)
         // then scale with inter-particle spacing //
         turb_prefactor *= h_turb*h_turb;
         // calculate frobenius norm of symmetric shear velocity gradient tensor //
-        double shear_factor = sqrt((1./2.)*((CellP[i].Gradients.Velocity[1][0]+CellP[i].Gradients.Velocity[0][1]) *
-                                            (CellP[i].Gradients.Velocity[1][0]+CellP[i].Gradients.Velocity[0][1]) +
-                                            (CellP[i].Gradients.Velocity[2][0]+CellP[i].Gradients.Velocity[0][2]) *
-                                            (CellP[i].Gradients.Velocity[2][0]+CellP[i].Gradients.Velocity[0][2]) +
-                                            (CellP[i].Gradients.Velocity[2][1]+CellP[i].Gradients.Velocity[1][2]) *
-                                            (CellP[i].Gradients.Velocity[2][1]+CellP[i].Gradients.Velocity[1][2])) +
-                                   (2./3.)*((CellP[i].Gradients.Velocity[0][0]*CellP[i].Gradients.Velocity[0][0] +
-                                             CellP[i].Gradients.Velocity[1][1]*CellP[i].Gradients.Velocity[1][1] +
-                                             CellP[i].Gradients.Velocity[2][2]*CellP[i].Gradients.Velocity[2][2]) -
-                                            (CellP[i].Gradients.Velocity[1][1]*CellP[i].Gradients.Velocity[2][2] +
-                                             CellP[i].Gradients.Velocity[0][0]*CellP[i].Gradients.Velocity[1][1] +
-                                             CellP[i].Gradients.Velocity[0][0]*CellP[i].Gradients.Velocity[2][2])));
+        double shear_factor = sqrt((1./2.)*((cell[i].Gradients.Velocity[1][0]+cell[i].Gradients.Velocity[0][1]) *
+                                            (cell[i].Gradients.Velocity[1][0]+cell[i].Gradients.Velocity[0][1]) +
+                                            (cell[i].Gradients.Velocity[2][0]+cell[i].Gradients.Velocity[0][2]) *
+                                            (cell[i].Gradients.Velocity[2][0]+cell[i].Gradients.Velocity[0][2]) +
+                                            (cell[i].Gradients.Velocity[2][1]+cell[i].Gradients.Velocity[1][2]) *
+                                            (cell[i].Gradients.Velocity[2][1]+cell[i].Gradients.Velocity[1][2])) +
+                                   (2./3.)*((cell[i].Gradients.Velocity[0][0]*cell[i].Gradients.Velocity[0][0] +
+                                             cell[i].Gradients.Velocity[1][1]*cell[i].Gradients.Velocity[1][1] +
+                                             cell[i].Gradients.Velocity[2][2]*cell[i].Gradients.Velocity[2][2]) -
+                                            (cell[i].Gradients.Velocity[1][1]*cell[i].Gradients.Velocity[2][2] +
+                                             cell[i].Gradients.Velocity[0][0]*cell[i].Gradients.Velocity[1][1] +
+                                             cell[i].Gradients.Velocity[0][0]*cell[i].Gradients.Velocity[2][2])));
         // slope-limit and convert to physical units //
-        double shearfac_max = 0.5 * sqrt(CellP[i].VelPred[0]*CellP[i].VelPred[0]+CellP[i].VelPred[1]*CellP[i].VelPred[1]+CellP[i].VelPred[2]*CellP[i].VelPred[2]) / h_turb;
+        double shearfac_max = 0.5 * sqrt(cell[i].VelPred[0]*cell[i].VelPred[0]+cell[i].VelPred[1]*cell[i].VelPred[1]+cell[i].VelPred[2]*cell[i].VelPred[2]) / h_turb;
         shear_factor = DMIN(shear_factor , shearfac_max * All.cf_atime) * All.cf_a2inv; // physical
 #ifdef TURB_DIFF_DYNAMIC
         int u, v; double trace = 0;
-        shearfac_max = 0.5 * sqrt(CellP[i].Velocity_bar[0] * CellP[i].Velocity_bar[0] + CellP[i].Velocity_bar[1] * CellP[i].Velocity_bar[1]+CellP[i].Velocity_bar[2] * CellP[i].Velocity_bar[2]) * All.cf_atime / h_turb;
+        shearfac_max = 0.5 * sqrt(cell[i].Velocity_bar[0] * cell[i].Velocity_bar[0] + cell[i].Velocity_bar[1] * cell[i].Velocity_bar[1]+cell[i].Velocity_bar[2] * cell[i].Velocity_bar[2]) * All.cf_atime / h_turb;
         for (u = 0; u < 3; u++) {
             for (v = 0; v < 3; v++) {
-                if (CellP[i].VelShear_bar[u][v] < 0) {CellP[i].VelShear_bar[u][v] = DMAX(CellP[i].VelShear_bar[u][v], -shearfac_max);}
-                else {CellP[i].VelShear_bar[u][v] = DMIN(CellP[i].VelShear_bar[u][v], shearfac_max);}
-                if (u == v) {trace += CellP[i].VelShear_bar[u][u];}}}
+                if (cell[i].VelShear_bar[u][v] < 0) {cell[i].VelShear_bar[u][v] = DMAX(cell[i].VelShear_bar[u][v], -shearfac_max);}
+                else {cell[i].VelShear_bar[u][v] = DMIN(cell[i].VelShear_bar[u][v], shearfac_max);}
+                if (u == v) {trace += cell[i].VelShear_bar[u][u];}}}
         /* If it was already trace-free, don't zero out the diagonal components */
-        if (trace != 0 && NUMDIMS > 1) {for (u = 0; u < NUMDIMS; u++) {CellP[i].VelShear_bar[u][u] -= 1.0 / NUMDIMS * trace;}}
+        if (trace != 0 && NUMDIMS > 1) {for (u = 0; u < NUMDIMS; u++) {cell[i].VelShear_bar[u][u] -= 1.0 / NUMDIMS * trace;}}
         for (u = 0; u < 3; u++) { /* Don't want to recalculate these a bunch later on, so save them */
-            CellP[i].Velocity_hat[u] *= All.TurbDynamicDiffSmoothing;
-            for (v = 0; v < 3; v++) {CellP[i].MagShear_bar += CellP[i].VelShear_bar[u][v] * CellP[i].VelShear_bar[u][v];}}
-        CellP[i].MagShear = sqrt(2.0) * shear_factor / All.cf_a2inv; // Don't want this physical
-        CellP[i].MagShear_bar = DMIN(sqrt(2.0 * CellP[i].MagShear_bar), shearfac_max); turb_prefactor /= 0.25;
+            cell[i].Velocity_hat[u] *= All.TurbDynamicDiffSmoothing;
+            for (v = 0; v < 3; v++) {cell[i].MagShear_bar += cell[i].VelShear_bar[u][v] * cell[i].VelShear_bar[u][v];}}
+        cell[i].MagShear = sqrt(2.0) * shear_factor / All.cf_a2inv; // Don't want this physical
+        cell[i].MagShear_bar = DMIN(sqrt(2.0 * cell[i].MagShear_bar), shearfac_max); turb_prefactor /= 0.25;
 #endif
         // ok, combine to get the diffusion coefficient //
-        CellP[i].TD_DiffCoeff = turb_prefactor * shear_factor; // physical
+        cell[i].TD_DiffCoeff = turb_prefactor * shear_factor; // physical
     } else {
-        CellP[i].TD_DiffCoeff = 0;
+        cell[i].TD_DiffCoeff = 0;
     }
 #ifdef TURB_DIFF_ENERGY
 #if !defined(CONDUCTION_SPITZER)
-    CellP[i].Kappa_Conduction = 0;
+    cell[i].Kappa_Conduction = 0;
 #endif
-    CellP[i].Kappa_Conduction += All.ConductionCoeff * CellP[i].TD_DiffCoeff * CellP[i].Density * All.cf_a3inv; // physical
+    cell[i].Kappa_Conduction += All.ConductionCoeff * cell[i].TD_DiffCoeff * cell[i].Density * All.cf_a3inv; // physical
 #endif
 #ifdef TURB_DIFF_VELOCITY
 #if !defined(VISCOSITY_BRAGINSKII)
-    CellP[i].Eta_ShearViscosity = 0; CellP[i].Zeta_BulkViscosity = 0;
+    cell[i].Eta_ShearViscosity = 0; cell[i].Zeta_BulkViscosity = 0;
 #endif
-    CellP[i].Eta_ShearViscosity += All.ShearViscosityCoeff * CellP[i].TD_DiffCoeff * CellP[i].Density * All.cf_a3inv; // physical
-    CellP[i].Zeta_BulkViscosity += All.BulkViscosityCoeff * CellP[i].TD_DiffCoeff * CellP[i].Density * All.cf_a3inv; // physical
+    cell[i].Eta_ShearViscosity += All.ShearViscosityCoeff * cell[i].TD_DiffCoeff * cell[i].Density * All.cf_a3inv; // physical
+    cell[i].Zeta_BulkViscosity += All.BulkViscosityCoeff * cell[i].TD_DiffCoeff * cell[i].Density * All.cf_a3inv; // physical
 #endif
 }
 #endif

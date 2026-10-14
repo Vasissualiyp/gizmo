@@ -79,13 +79,13 @@ int ags_gravity_kernel_shared_BITFLAG(short int particle_type_primary)
 
 struct kernel_density 
 {
-    double dp[3],dv[3],r, wk, dwk, hinv, hinv3, hinv4; /*! Structure for communication during the density computation. Holds data that is sent to other processors */
+    Vec3<double> dp,dv; double r, wk, dwk, hinv, hinv3, hinv4; /*! Structure for communication during the density computation. Holds data that is sent to other processors */
 };
 
 static struct INPUT_STRUCT_NAME
 {
-  MyDouble Pos[3];
-  MyFloat Vel[3];
+  Vec3<MyDouble> Pos;
+  Vec3<MyFloat> Vel;
   MyFloat AGS_KernelRadius;
   int NodeList[NODELISTLENGTH];
   int Type;
@@ -95,7 +95,7 @@ static struct INPUT_STRUCT_NAME
 void ags_particle2in_density(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration);
 void ags_particle2in_density(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
 {
-    int k; for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k]; in->Vel[k]=P[i].Vel[k];}
+    in->Pos=P[i].Pos; in->Vel=P[i].Vel;
     in->AGS_KernelRadius = P[i].AGS_KernelRadius;
     in->Type = P[i].Type;
 }
@@ -176,11 +176,9 @@ int ags_density_evaluate(int target, int mode, int *exportflag, int *exportnodec
                 j = ngblist[n]; /* since we use the -threaded- version above of ngb-finding, its super-important this is the lower-case ngblist here! */
                 if(P[j].Mass <= 0) continue;
                 
-                kernel.dp[0] = local.Pos[0] - P[j].Pos[0];
-                kernel.dp[1] = local.Pos[1] - P[j].Pos[1];
-                kernel.dp[2] = local.Pos[2] - P[j].Pos[2];
-                NEAREST_XYZ(kernel.dp[0],kernel.dp[1],kernel.dp[2],1); // find the closest image in the given box size
-                r2 = kernel.dp[0] * kernel.dp[0] + kernel.dp[1] * kernel.dp[1] + kernel.dp[2] * kernel.dp[2];
+                kernel.dp = local.Pos - P[j].Pos;
+                nearest_xyz(kernel.dp); // find the closest image in the given box size
+                r2 = kernel.dp.norm_sq();
                 if(r2 < h2)
                 {
                     kernel.r = sqrt(r2);
@@ -193,18 +191,10 @@ int ags_density_evaluate(int target, int mode, int *exportflag, int *exportnodec
 
                     if(kernel.r > 0)
                     {
-                        if(P[j].Type==0)
-                        {
-                            kernel.dv[0] = local.Vel[0] - CellP[j].VelPred[0];
-                            kernel.dv[1] = local.Vel[1] - CellP[j].VelPred[1];
-                            kernel.dv[2] = local.Vel[2] - CellP[j].VelPred[2];
-                        } else {
-                            kernel.dv[0] = local.Vel[0] - P[j].Vel[0];
-                            kernel.dv[1] = local.Vel[1] - P[j].Vel[1];
-                            kernel.dv[2] = local.Vel[2] - P[j].Vel[2];
-                        }
+                        if(P[j].Type==0) {kernel.dv = local.Vel - CellP[j].VelPred;}
+                        else {kernel.dv = local.Vel - P[j].Vel;}
                         NGB_SHEARBOX_BOUNDARY_VELCORR_(local.Pos,P[j].Pos,kernel.dv,1); /* wrap velocities for shearing boxes if needed */
-                        double v_dot_r = kernel.dp[0] * kernel.dv[0] + kernel.dp[1] * kernel.dv[1] + kernel.dp[2] * kernel.dv[2];
+                        double v_dot_r = dot(kernel.dp, kernel.dv);
                         if(v_dot_r > 0) {v_dot_r *= 0.333333;} // receding elements don't signal strong change in forces in the same manner as approaching/converging particles
                         double vsig = 0.5 * fabs( fac_mu * v_dot_r / kernel.r );
                         short int TimeBin_j = P[j].TimeBin; if(TimeBin_j < 0) {TimeBin_j = -TimeBin_j - 1;} // need to make sure we correct for the fact that TimeBin is used as a 'switch' here to determine if a particle is active for iteration, otherwise this gives nonsense!
@@ -223,7 +213,7 @@ int ags_density_evaluate(int target, int mode, int *exportflag, int *exportnodec
                                 NeedToWakeupParticles_local = 1;
                         }
 #endif
-                        out.Particle_DivVel -= kernel.dwk * (kernel.dp[0] * kernel.dv[0] + kernel.dp[1] * kernel.dv[1] + kernel.dp[2] * kernel.dv[2]) / kernel.r;
+                        out.Particle_DivVel -= kernel.dwk * dot(kernel.dp, kernel.dv) / kernel.r;
                         /* this is the -particle- divv estimator, which determines how KernelRadius will evolve */
                         
 #if defined(AGS_FACE_CALCULATION_IS_ACTIVE)
@@ -264,7 +254,7 @@ void ags_density(void)
     Left = (MyFloat *) mymalloc("Left", NumPart * sizeof(MyFloat));
     Right = (MyFloat *) mymalloc("Right", NumPart * sizeof(MyFloat));
     /* initialize anything we need to about the active particles before their loop */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+    for (int i : ActiveParticleList) {
         if(ags_density_isactive(i)) {
             Left[i] = Right[i] = 0; AGS_Prev[i] = P[i].AGS_KernelRadius; P[i].AGS_vsig = 0;
 #ifdef WAKEUP
@@ -281,7 +271,7 @@ void ags_density(void)
 
       /* do check on whether we have enough neighbors, and iterate for density-rkern solution */
         double tstart = my_second(), tend;
-        for(i = FirstActiveParticle, npleft = 0; i >= 0; i = NextActiveParticle[i])
+        npleft = 0; for (int i : ActiveParticleList)
         {
             if(ags_density_isactive(i))
             {
@@ -512,7 +502,7 @@ void ags_density(void)
                 else
                     P[i].TimeBin = -P[i].TimeBin - 1;	/* Mark as inactive */
             } //  if(ags_density_isactive(i))
-        } // for(i = FirstActiveParticle, npleft = 0; i >= 0; i = NextActiveParticle[i])
+        } // npleft = 0; for (int i : ActiveParticleList)
         
         tend = my_second();
         timecomp += timediff(tstart, tend);
@@ -531,13 +521,13 @@ void ags_density(void)
     myfree(Right); myfree(Left);
     
     /* mark as active again */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         if(P[i].TimeBin < 0) {P[i].TimeBin = -P[i].TimeBin - 1;}
     }
 
     /* now that we are DONE iterating to find rkern, we can do the REAL final operations on the results */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         if(ags_density_isactive(i))
         {
@@ -678,8 +668,6 @@ double do_cbe_nvt_inversion_for_faces(int i)
 {
     /* initialize the matrix to be inverted */
     MyDouble NV_T[3][3], Tinv[3][3]; int j,k; for(j=0;j<3;j++) {for(k=0;k<3;k++) {NV_T[j][k]=P[i].NV_T[j][k];}}
-    /* fill in the missing elements of NV_T (it's symmetric, so we saved time not computing these directly) */
-    NV_T[1][0]=NV_T[0][1]; NV_T[2][0]=NV_T[0][2]; NV_T[2][1]=NV_T[1][2];
     /* want to work in dimensionless units for defining certain quantities robustly, so normalize out the units */
     double dimensional_NV_T_normalizer = pow( P[i].KernelRadius , 2-NUMDIMS ); /* this has the same dimensions as NV_T here */
     for(j=0;j<3;j++) {for(k=0;k<3;k++) {NV_T[j][k] /= dimensional_NV_T_normalizer;}} /* now NV_T should be dimensionless */
@@ -717,7 +705,7 @@ double do_cbe_nvt_inversion_for_faces(int i)
 
 struct kernel_AGSForce
 {
-    double dp[3], dv[3], r, wk_i, wk_j, dwk_i, dwk_j, h_i, hinv_i, hinv3_i, hinv4_i, h_j, hinv_j, hinv3_j, hinv4_j;
+    Vec3<double> dp, dv; double r, wk_i, wk_j, dwk_i, dwk_j, h_i, hinv_i, hinv3_i, hinv4_i, h_j, hinv_j, hinv3_j, hinv4_j;
 };
 
 /* structure for variables needed in evaluation sub-routines which must be passed from particles (sent to other processors) */
@@ -725,8 +713,8 @@ struct INPUT_STRUCT_NAME
 {
     double Mass;
     double AGS_KernelRadius;
-    double Pos[3];
-    double Vel[3];
+    Vec3<double> Pos;
+    Vec3<double> Vel;
     int NodeList[NODELISTLENGTH];
     int Type;
     double dtime;
@@ -735,10 +723,10 @@ struct INPUT_STRUCT_NAME
     double V_i;
 #endif
 #if defined(DM_FUZZY)
-    double AGS_Gradients_Density[3], AGS_Gradients2_Density[3][3], AGS_Numerical_QuantumPotential;
+    Vec3<double> AGS_Gradients_Density; double AGS_Gradients2_Density[3][3], AGS_Numerical_QuantumPotential;
 #if (DM_FUZZY > 0)
-    double AGS_Psi_Re, AGS_Gradients_Psi_Re[3], AGS_Gradients2_Psi_Re[3][3];
-    double AGS_Psi_Im, AGS_Gradients_Psi_Im[3], AGS_Gradients2_Psi_Im[3][3];
+    double AGS_Psi_Re; Vec3<double> AGS_Gradients_Psi_Re; Mat3<double> AGS_Gradients2_Psi_Re;
+    double AGS_Psi_Im; Vec3<double> AGS_Gradients_Psi_Im; Mat3<double> AGS_Gradients2_Psi_Im;
 #endif
 #endif
 #if defined(CBE_INTEGRATOR)
@@ -760,24 +748,24 @@ static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int l
     in->Mass = P[i].Mass;
     in->AGS_KernelRadius = P[i].AGS_KernelRadius;
     in->Type = P[i].Type;
-    in->dtime = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);
+    in->dtime = get_particle_timestep_in_physical(i);
     int k,k2; k=0; k2=0;
-    for(k=0;k<3;k++) {in->Pos[k] = P[i].Pos[k];}
-    for(k=0;k<3;k++) {in->Vel[k] = P[i].Vel[k];}
+    in->Pos = P[i].Pos;
+    in->Vel = P[i].Vel;
 #if defined(AGS_FACE_CALCULATION_IS_ACTIVE)
     in->V_i = get_particle_volume_ags(i);
     for(k=0;k<3;k++) {for(k2=0;k2<3;k2++) {in->NV_T[k][k2] = P[i].NV_T[k][k2];}}
 #endif
 #if defined(DM_FUZZY)
-    for(k=0;k<3;k++) {in->AGS_Gradients_Density[k] = P[i].AGS_Gradients_Density[k];}
+    in->AGS_Gradients_Density = P[i].AGS_Gradients_Density;
     for(k=0;k<3;k++) {for(k2=0;k2<3;k2++) {in->AGS_Gradients2_Density[k][k2] = P[i].AGS_Gradients2_Density[k][k2];}}
     in->AGS_Numerical_QuantumPotential = P[i].AGS_Numerical_QuantumPotential;
 #if (DM_FUZZY > 0)
     in->AGS_Psi_Re = P[i].AGS_Psi_Re_Pred * P[i].AGS_Density / P[i].Mass;
-    for(k=0;k<3;k++) {in->AGS_Gradients_Psi_Re[k] = P[i].AGS_Gradients_Psi_Re[k];}
+    in->AGS_Gradients_Psi_Re = P[i].AGS_Gradients_Psi_Re;
     for(k=0;k<3;k++) {for(k2=0;k2<3;k2++) {in->AGS_Gradients2_Psi_Re[k][k2] = P[i].AGS_Gradients2_Psi_Re[k][k2];}}
     in->AGS_Psi_Im = P[i].AGS_Psi_Im_Pred * P[i].AGS_Density / P[i].Mass;
-    for(k=0;k<3;k++) {in->AGS_Gradients_Psi_Im[k] = P[i].AGS_Gradients_Psi_Im[k];}
+    in->AGS_Gradients_Psi_Im = P[i].AGS_Gradients_Psi_Im;
     for(k=0;k<3;k++) {for(k2=0;k2<3;k2++) {in->AGS_Gradients2_Psi_Im[k][k2] = P[i].AGS_Gradients2_Psi_Im[k][k2];}}
 #endif
 #endif
@@ -798,10 +786,10 @@ static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int l
 struct OUTPUT_STRUCT_NAME
 {
 #if defined(DM_SIDM)
-    double sidm_kick[3], dtime_sidm; int si_count;
+    Vec3<double> sidm_kick; double dtime_sidm; int si_count;
 #endif
 #ifdef DM_FUZZY
-    double acc[3], AGS_Dt_Numerical_QuantumPotential;
+    Vec3<double> acc; double AGS_Dt_Numerical_QuantumPotential;
 #if (DM_FUZZY > 0)
     double AGS_Dt_Psi_Re, AGS_Dt_Psi_Im, AGS_Dt_Psi_Mass;
 #endif
@@ -821,12 +809,12 @@ static inline void OUTPUTFUNCTION_NAME(struct OUTPUT_STRUCT_NAME *out, int i, in
 {
     int k,k2; k=0; k2=0;
 #if defined(DM_SIDM)
-    for(k=0;k<3;k++) {P[i].Vel[k] += out->sidm_kick[k];}
+    P[i].Vel += out->sidm_kick; P[i].dp += out->sidm_kick * P[i].Mass;
     MIN_ADD(P[i].dtime_sidm, out->dtime_sidm, mode);
     P[i].NInteractions += out->si_count;
 #endif
 #ifdef DM_FUZZY
-    for(k=0;k<3;k++) {P[i].GravAccel[k] += out->acc[k];} // currently incompatible with hermite integrator -- need to update to Other_Accel
+    P[i].GravAccel += out->acc; // currently incompatible with hermite integrator -- need to update to Other_Accel
     ASSIGN_ADD_PRESET(P[i].AGS_Dt_Numerical_QuantumPotential,out->AGS_Dt_Numerical_QuantumPotential,mode);
 #if (DM_FUZZY > 0)
     ASSIGN_ADD_PRESET(P[i].AGS_Dt_Psi_Re,out->AGS_Dt_Psi_Re,mode);
@@ -888,9 +876,9 @@ int AGSForce_evaluate(int target, int mode, int *exportflag, int *exportnodecoun
                 j = ngblist[n]; /* since we use the -threaded- version above of ngb-finding, its super-important this is the lower-case ngblist here! */
                 if((P[j].Mass <= 0)||(P[j].AGS_KernelRadius <= 0)) continue; /* make sure neighbor is valid */
                 /* calculate position relative to target */
-                kernel.dp[0] = local.Pos[0] - P[j].Pos[0]; kernel.dp[1] = local.Pos[1] - P[j].Pos[1]; kernel.dp[2] = local.Pos[2] - P[j].Pos[2];
-                NEAREST_XYZ(kernel.dp[0],kernel.dp[1],kernel.dp[2],1); /*  now find the closest image in the given box size  */
-                r2 = kernel.dp[0]*kernel.dp[0] + kernel.dp[1]*kernel.dp[1] + kernel.dp[2]*kernel.dp[2];
+                kernel.dp = local.Pos - P[j].Pos;
+                nearest_xyz(kernel.dp); /*  now find the closest image in the given box size  */
+                r2 = kernel.dp.norm_sq();
                 if(r2 <= 0) continue;
                 kernel.r = sqrt(r2);
                 kernel.h_j = P[j].AGS_KernelRadius;
@@ -940,18 +928,18 @@ void AGSForce_calc(void)
     PRINT_STATUS(" ..entering AGS-Force calculation [as hydro loop for non-gas elements]\n");
     /* before doing any operations, need to zero the appropriate memory so we can correctly do pair-wise operations */
 #if defined(DM_SIDM)
-    {int i; for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {P[i].dtime_sidm = 10.*GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);}}
+    {int i; for (int i : ActiveParticleList) {P[i].dtime_sidm = 10.*get_particle_timestep_in_physical(i);}}
 #endif
 #ifdef CBE_INTEGRATOR
     /* need to zero values for active particles (which will be re-calculated) before they are added below */
-    //for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {int k1,k2; for(k1=0;k1<CBE_INTEGRATOR_NBASIS;k1++) {for(k2=0;k2<CBE_INTEGRATOR_NMOMENTS;k2++) {P[i].CBE_basis_moments_dt[k1][k2] = 0;}}}
+    //for (int i : ActiveParticleList) {int k1,k2; for(k1=0;k1<CBE_INTEGRATOR_NBASIS;k1++) {for(k2=0;k2<CBE_INTEGRATOR_NMOMENTS;k2++) {P[i].CBE_basis_moments_dt[k1][k2] = 0;}}}
 #endif
     #include "../system/code_block_xchange_perform_ops_malloc.h" /* this calls the large block of code which contains the memory allocations for the MPI/OPENMP/Pthreads parallelization block which must appear below */
     #include "../system/code_block_xchange_perform_ops.h" /* this calls the large block of code which actually contains all the loops, MPI/OPENMP/Pthreads parallelization */
     #include "../system/code_block_xchange_perform_ops_demalloc.h" /* this de-allocates the memory for the MPI/OPENMP/Pthreads parallelization block which must appear above */
     /* do final operations on results: these are operations that can be done after the complete set of iterations */
 #ifdef CBE_INTEGRATOR
-        for(i=FirstActiveParticle; i>=0; i=NextActiveParticle[i]) {do_postgravity_cbe_calcs(i);} // do any final post-tree-walk calcs from the CBE integrator here //
+        for (int i : ActiveParticleList) {do_postgravity_cbe_calcs(i);} // do any final post-tree-walk calcs from the CBE integrator here //
 #endif
     /* collect timing information */
     double t1; t1 = WallclockTime = my_second(); timeall = timediff(t00_truestart, t1);

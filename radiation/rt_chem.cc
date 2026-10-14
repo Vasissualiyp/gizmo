@@ -11,11 +11,6 @@
 
 #ifdef RT_CHEM_PHOTOION
 
-/* return photon number density in physical code units */
-double rt_return_photon_number_density(int i, int k)
-{
-    return CellP[i].Rad_E_gamma[k] * (CellP[i].Density*All.cf_a3inv/P[i].Mass) / (rt_nu_eff_eV[k]*ELECTRONVOLT_IN_ERGS/UNIT_ENERGY_IN_CGS);
-}
 
 double rt_photoion_chem_return_temperature(int i, double internal_energy)
 {
@@ -23,7 +18,7 @@ double rt_photoion_chem_return_temperature(int i, double internal_energy)
     return 1e4; // use a fixed temp if this special flag for numerical testing is enabled
 #endif
     double mol_wt = 4 / (1 + 3 * HYDROGEN_MASSFRAC + 4 * HYDROGEN_MASSFRAC * CellP[i].Ne);
-    return mol_wt * (GAMMA(i)-1) * internal_energy * U_TO_TEMP_UNITS;
+    return mol_wt * (CellP[i].gamma_eos_value()-1) * internal_energy * U_TO_TEMP_UNITS;
 }
 
 
@@ -38,18 +33,22 @@ void rt_get_sigma(void)
     }
     double fac = 1.0 / (UNIT_LENGTH_IN_CGS*UNIT_LENGTH_IN_CGS);
     
-#ifndef RT_PHOTOION_MULTIFREQUENCY
-    /* just the hydrogen ionization bin */
-    rt_ion_sigma_HI[RT_FREQ_BIN_H0] = 6.3e-18 * fac; // cross-section (blackbody-weighted) for photons
-    rt_ion_nu_min[RT_FREQ_BIN_H0] = 13.6; // minimum frequency [in eV] of photons of interest
-    rt_nu_eff_eV[RT_FREQ_BIN_H0] = 27.2; // typical blackbody-weighted frequency [in eV] of photons of interest: to convert energies to numbers
-    rt_ion_G_HI[RT_FREQ_BIN_H0] = (rt_nu_eff_eV[RT_FREQ_BIN_H0]-13.6)*ELECTRONVOLT_IN_ERGS/UNIT_ENERGY_IN_CGS; // absorption cross-section weighted photon energy in code units
-#else
-    
-    /* now we use the multi-bin spectral information */
+    /* Compute the ionizing-band properties self-consistently by integrating a blackbody at the
+       source effective temperature T_eff over each band. This unifies the single-band (H-only)
+       and 4-band (H+He multifrequency) treatments through one physical machinery:
+         rt_nu_eff_eV[i] = number-weighted mean photon energy   -> energy<->photon-number conversion
+         rt_ion_G_*[i]   = cross-section-weighted mean excess energy (photoelectron energy) -> heating/ionization
+       These are physically distinct quantities and are no longer forced to satisfy G = nu_eff-13.6
+       with a hard-coded nu_eff=27.2 eV (which over-heated by ~3x and mis-counted photons). */
+#ifdef RT_CHEM_PHOTOION_HE
 #define N_BINS_FOR_IONIZATION 4
     double nu_vec[N_BINS_FOR_IONIZATION] = {13.6, 24.6, 54.4, 70.0};
     int i_vec[N_BINS_FOR_IONIZATION] = {RT_FREQ_BIN_H0, RT_FREQ_BIN_He0, RT_FREQ_BIN_He1, RT_FREQ_BIN_He2};
+#else
+#define N_BINS_FOR_IONIZATION 1     /* single H-ionizing band spanning 13.6-500 eV, same integral as the 4-band case */
+    double nu_vec[N_BINS_FOR_IONIZATION] = {13.6};
+    int i_vec[N_BINS_FOR_IONIZATION] = {RT_FREQ_BIN_H0};
+#endif
     
     int i, j, integral=10000;
     double e, d_nu, e_start, e_end, sum_HI_sigma=0, sum_HI_G=0, hc=C_LIGHT_CGS*6.6262e-27, I_nu, sig, f, fac_two, T_eff, sum_egy_allbands=0;
@@ -143,8 +142,8 @@ void rt_get_sigma(void)
 
     if(sum_egy_allbands > 0) {for(i = 0; i < N_RT_FREQ_BINS; i++) {rt_ion_precalc_stellar_luminosity_fraction[i] /= sum_egy_allbands;}} /* guard 0/0 (2026-07-04) */
     
-    if(ThisTask == 0) {for(i = 0; i < N_RT_FREQ_BINS; i++) {printf("%g %g | %g %g | %g %g\n",rt_ion_sigma_HI[i]/fac, rt_ion_G_HI[i]/fac_two,rt_ion_sigma_HeI[i]/fac, rt_ion_G_HeI[i]/fac_two,rt_ion_sigma_HeII[i]/fac, rt_ion_G_HeII[i]/fac_two);}}
-#endif
+    if(ThisTask == 0) {printf("RT ionizing bands (T_eff=%g K): sigma_HI[cm^2] G_HI(heat/ion)[eV] nu_eff[eV] per band:\n",T_eff);
+        for(i = 0; i < N_RT_FREQ_BINS; i++) {if(rt_nu_eff_eV[i]>0) {printf("  band %d: sigma_HI=%.3e  G_HI=%.3g  nu_eff=%.3g\n",i,rt_ion_sigma_HI[i]/fac, rt_ion_G_HI[i]/fac_two, rt_nu_eff_eV[i]);}}}
 }
 
 
@@ -162,10 +161,10 @@ void rt_update_chemistry(void)
     fac = UNIT_TIME_IN_CGS / (UNIT_LENGTH_IN_CGS*UNIT_LENGTH_IN_CGS*UNIT_LENGTH_IN_CGS);
     c_light_codeunits = C_LIGHT_CODE;
     
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
         if(P[i].Type == 0)
         {
-            dtime = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);
+            dtime = get_particle_timestep_in_physical(i);
             rho = CellP[i].Density * All.cf_a3inv;
             nH = HYDROGEN_MASSFRAC * rho / PROTONMASS_CGS * UNIT_MASS_IN_CGS;
             temp = rt_photoion_chem_return_temperature(i,CellP[i].InternalEnergyPred);
@@ -173,7 +172,7 @@ void rt_update_chemistry(void)
             gamma_HI = 5.85e-11 * sqrt(temp) * exp(-157809.1 / temp) / (1.0 + sqrt(temp / 1e5)) * fac;
             /* alpha_B recombination coefficient */
             alpha_HII = 2.59e-13 * pow(temp / 1e4, -0.7) * fac;
-            n_photons_vol = rt_return_photon_number_density(i,RT_FREQ_BIN_H0);
+            n_photons_vol = CellP[i].rt_photon_number_density(RT_FREQ_BIN_H0);
             /* number of photons should be positive */
             if(n_photons_vol < 0 || isnan(n_photons_vol))
             {
@@ -259,7 +258,7 @@ void rt_update_chemistry(void)
     fac = UNIT_TIME_IN_CGS / (UNIT_LENGTH_IN_CGS*UNIT_LENGTH_IN_CGS*UNIT_LENGTH_IN_CGS);
     c_light_codeunits = C_LIGHT_CODE;
     
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
         if(P[i].Type == 0)
         {
             /* get the photo-ionization rates*/
@@ -269,7 +268,7 @@ void rt_update_chemistry(void)
 #endif
             for(j = 0; j < N_RT_FREQ_BINS; j++)
             {
-                n_photons_vol = rt_return_photon_number_density(i,j);
+                n_photons_vol = CellP[i].rt_photon_number_density(j);
                 if(rt_ion_nu_min[j] >= 13.6) {k_HI += c_light_codeunits * rt_ion_sigma_HI[j] * n_photons_vol;}
 #ifdef RT_CHEM_PHOTOION_HE
                 if(rt_ion_nu_min[j] >= 24.6) {k_HeI += c_light_codeunits * rt_ion_sigma_HeI[j] * n_photons_vol;}
@@ -277,7 +276,7 @@ void rt_update_chemistry(void)
 #endif
             }
             
-            dtime = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);
+            dtime = get_particle_timestep_in_physical(i);
             rho = CellP[i].Density * All.cf_a3inv;
             nH = HYDROGEN_MASSFRAC * rho / PROTONMASS_CGS * UNIT_MASS_IN_CGS;
             temp = rt_photoion_chem_return_temperature(i,CellP[i].InternalEnergyPred);
@@ -379,7 +378,7 @@ void rt_write_chemistry_stats(void)
         {
             rho = CellP[i].Density * All.cf_a3inv;
 #ifndef RT_PHOTOION_MULTIFREQUENCY
-            n_photons_vol = rt_return_photon_number_density(i,RT_FREQ_BIN_H0);
+            n_photons_vol = CellP[i].rt_photon_number_density(RT_FREQ_BIN_H0);
             total_ng += n_photons_vol / 1e53 * P[i].Mass / rho;
 #endif
 #ifdef RT_CHEM_PHOTOION_HE

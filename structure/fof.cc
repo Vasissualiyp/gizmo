@@ -39,7 +39,7 @@ group_properties *Group;
 
 static struct fofdata_in
 {
-  MyDouble Pos[3];
+  Vec3<MyDouble> Pos;
   MyFloat KernelRadius;
   MyIDType MinID;
   MyIDType MinIDTask;
@@ -335,7 +335,11 @@ void fof_fof(int num)
     printf("Tree construction.\n");
   force_treebuild(NumPart, NULL);
 
-  TreeReconstructFlag = 0;
+  /* Raise, don't clear: fof's tree is scratch for group-finding -- it may have been built with
+     conversions (fof_make_sink_particles) still pending in the gas block, and clearing here also
+     discarded any decomposition request that was pending when fof ran. The next tree consumer
+     rebuilds deterministically. */
+  TreeReconstructFlag = 1;
 }
 
 
@@ -355,7 +359,7 @@ void fof_find_groups(void)
 
   /* allocate buffers to arrange communication */
 
-  Ngblist = (int *) mymalloc("Ngblist", NumPart * sizeof(int));
+  Ngblist.resize(NumPart);
 
     size_t MyBufferSize = All.BufferSize;
     All.BunchSize = (long) ((MyBufferSize * 1024 * 1024) / (sizeof(struct data_index) + sizeof(struct data_nodelist) +
@@ -461,9 +465,7 @@ void fof_find_groups(void)
 	    {
 	      place = DataIndexTable[j].Index;
 
-	      FoFDataIn[j].Pos[0] = P[place].Pos[0];
-	      FoFDataIn[j].Pos[1] = P[place].Pos[1];
-	      FoFDataIn[j].Pos[2] = P[place].Pos[2];
+	      FoFDataIn[j].Pos = P[place].Pos;
 	      FoFDataIn[j].MinID = MinID[Head[place]];
 	      FoFDataIn[j].MinIDTask = MinIDTask[Head[place]];
 
@@ -576,7 +578,7 @@ void fof_find_groups(void)
 
   myfree(DataNodeList);
   myfree(DataIndexTable);
-  myfree(Ngblist);
+  
 
 PRINT_STATUS("Local groups found.");
 }
@@ -592,9 +594,9 @@ int fof_find_dmparticles_evaluate(int target, int mode, int *nexport, int *nsend
   links = 0;
 
   if(mode == 0 || mode == -1)
-    pos = P[target].Pos;
+    pos = P[target].Pos.data_ptr();
   else
-    pos = FoFDataGet[target].Pos;
+    pos = FoFDataGet[target].Pos.data_ptr();
 
   if(mode == 0 || mode == -1)
     {
@@ -1127,6 +1129,18 @@ void fof_save_groups(int num)
   char buf[DEFAULT_PATH_BUFFERSIZE_TOUSE];
   double t0, t1;
 
+#ifdef RANDOMIZE_GRAVTREE_PERIODIC
+  /* Group.CM/Pos are written outside fill_write_buffer and never un-shifted, so a catalogue
+   * saved in a randomized frame would have wrong positions -- refuse rather than emit it
+   * silently. FOF for sink/BH seeding never reaches here, and postprocessing runs have
+   * RandomShift==0. */
+  if(All.RandomShift[0] != 0 || All.RandomShift[1] != 0 || All.RandomShift[2] != 0)
+    {
+      if(ThisTask == 0) {printf("FATAL: fof_save_groups() in a RANDOMIZE_GRAVTREE frame (RandomShift=%g,%g,%g): group positions are not un-shifted. Run group-finding in postprocessing on snapshots, or un-shift the group position-output sites first.\n", All.RandomShift[0], All.RandomShift[1], All.RandomShift[2]);}
+      endrun(561001);
+    }
+#endif
+
   PRINT_STATUS("start global sorting of group catalogues");
     
   t0 = my_second();
@@ -1439,7 +1453,7 @@ void fof_find_nearest_dmparticle(void)
 
   /* allocate buffers to arrange communication */
 
-  Ngblist = (int *) mymalloc("Ngblist", NumPart * sizeof(int));
+  Ngblist.resize(NumPart);
 
     size_t MyBufferSize = All.BufferSize;
     All.BunchSize = (long) ((MyBufferSize * 1024 * 1024) / (sizeof(struct data_index) + sizeof(struct data_nodelist) +
@@ -1497,9 +1511,7 @@ void fof_find_nearest_dmparticle(void)
 	    {
 	      place = DataIndexTable[j].Index;
 
-	      FoFDataIn[j].Pos[0] = P[place].Pos[0];
-	      FoFDataIn[j].Pos[1] = P[place].Pos[1];
-	      FoFDataIn[j].Pos[2] = P[place].Pos[2];
+	      FoFDataIn[j].Pos = P[place].Pos;
 	      FoFDataIn[j].KernelRadius = fof_nearest_rkern[place];
 
 	      memcpy(FoFDataIn[j].NodeList,
@@ -1620,7 +1632,7 @@ void fof_find_nearest_dmparticle(void)
 
   myfree(DataNodeList);
   myfree(DataIndexTable);
-  myfree(Ngblist);
+  
 
   myfree(fof_nearest_rkern);
   myfree(fof_nearest_distance);
@@ -1635,17 +1647,17 @@ int fof_find_nearest_dmparticle_evaluate(int target, int mode, int *nexport, int
   int j, n, index, listindex = 0;
   int startnode, numngb_inbox;
   double h, r2max;
-  double dx, dy, dz, r2;
+  double r2;
   MyDouble *pos;
 
   if(mode == 0)
     {
-      pos = P[target].Pos;
+      pos = P[target].Pos.data_ptr();
       h = fof_nearest_rkern[target];
     }
   else
     {
-      pos = FoFDataGet[target].Pos;
+      pos = FoFDataGet[target].Pos.data_ptr();
       h = FoFDataGet[target].KernelRadius;
     }
 
@@ -1672,11 +1684,9 @@ int fof_find_nearest_dmparticle_evaluate(int target, int mode, int *nexport, int
 	  for(n = 0; n < numngb_inbox; n++)
 	    {
             j = Ngblist[n];
-            dx = pos[0] - P[j].Pos[0];
-            dy = pos[1] - P[j].Pos[1];
-            dz = pos[2] - P[j].Pos[2];
-            NEAREST_XYZ(dx,dy,dz,1);
-            r2 = dx * dx + dy * dy + dz * dz;
+            Vec3<double> dr = {pos[0] - P[j].Pos[0], pos[1] - P[j].Pos[1], pos[2] - P[j].Pos[2]};
+            nearest_xyz(dr, 1);
+            r2 = dr.norm_sq();
             if(r2 < r2max && r2 < h * h)
 		{
 		  index = j;
@@ -1816,6 +1826,7 @@ void fof_make_sink_particles(void)
 #endif
                 endrun(7772);
         
+        P[import_indices[n]].Mass = CellP[import_indices[n]].Mass; /* sync mass before type conversion */
         P[import_indices[n]].Type = 5;    /* make it a sink particle particle */
 #ifdef GALSF
         P[import_indices[n]].StellarAge = All.Time; /* reset formation time to match BH formation */
@@ -1851,6 +1862,12 @@ void fof_make_sink_particles(void)
 #endif
 #ifdef SINK_WIND_SPAWN
         P[import_indices[n]].unspawned_wind_mass = 0;
+#ifdef SINGLE_STAR_FB_JETS
+        P[import_indices[n]].unspawned_jet_mass = 0;
+#endif
+#endif
+#if defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION) && defined(SINGLE_STAR_FB_WINDS) /* both guard the wind_mode fields */
+        P[import_indices[n]].wind_mode = 0; P[import_indices[n]].wind_mode_time = All.Time; /* persistent state the spawning hysteresis reads: a recycled slot must not inherit the previous star's channel */
 #endif
 #ifdef SINK_COUNTPROGS
         P[import_indices[n]].Sink_CountProgs = 1;

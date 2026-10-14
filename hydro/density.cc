@@ -25,7 +25,7 @@
 
 struct kernel_density /*! defines a number of useful variables we will use below */
 {
-  double dp[3],dv[3],r, wk, dwk, hinv, hinv3, hinv4, mj_wk, mj_dwk_r;
+  Vec3<double> dp; Vec3<double> dv; double r, wk, dwk, hinv, hinv3, hinv4, mj_wk, mj_dwk_r;
 };
 
 
@@ -109,11 +109,11 @@ int density_isactive(int n)
 /*! this structure defines the variables that need to be sent -from- the 'searching' element */
 static struct INPUT_STRUCT_NAME
 {
-  MyDouble Pos[3];
+  Vec3<MyDouble> Pos;
 #if defined(SPHAV_CD10_VISCOSITY_SWITCH)
-  MyFloat Accel[3];
+  Vec3<MyFloat> Accel;
 #endif
-  MyFloat Vel[3];
+  Vec3<MyFloat> Vel;
   MyFloat KernelRadius;
 #ifdef GALSF_SUBGRID_WINDS
   MyFloat DelayTime;
@@ -129,10 +129,10 @@ void hydrokerneldensity_particle2in(struct INPUT_STRUCT_NAME *in, int i, int loo
     int k;
     in->Type = P[i].Type;
     in->KernelRadius = P[i].KernelRadius;
-    for(k=0;k<3;k++) {in->Pos[k] = P[i].Pos[k];}
-    for(k=0;k<3;k++) {if(P[i].Type==0) {in->Vel[k]=CellP[i].VelPred[k];} else {in->Vel[k]=P[i].Vel[k];}}
+    in->Pos = P[i].Pos;
+    if(P[i].Type==0) {in->Vel=CellP[i].VelPred;} else {in->Vel=P[i].Vel;}
 #if defined(SPHAV_CD10_VISCOSITY_SWITCH)
-    if(P[i].Type == 0) {for(k=0;k<3;k++) {in->Accel[k] = All.cf_a2inv*P[i].GravAccel[k] + CellP[i].HydroAccel[k];}} // PHYSICAL units //
+    if(P[i].Type == 0) {in->Accel = All.cf_a2inv * P[i].GravAccel + CellP[i].HydroAccel;} // PHYSICAL units //
 #endif
 #ifdef GALSF_SUBGRID_WINDS
     if(P[i].Type==0) {in->DelayTime = CellP[i].DelayTime;} else {in->DelayTime=0;}
@@ -146,9 +146,10 @@ static struct OUTPUT_STRUCT_NAME
     MyDouble Rho;
     MyDouble DrkernNgb;
     MyDouble Particle_DivVel;
-    MyDouble NV_T[3][3];
+    SymmetricTensor2<MyDouble> NV_T;
+    Vec3<MyDouble> NV_T_face_weights; /*!< weighted first moments sum(wk*dp[k]); used for face area estimation */
 #if defined(HYDRO_MESHLESS_FINITE_VOLUME) && ((HYDRO_FIX_MESH_MOTION==5)||(HYDRO_FIX_MESH_MOTION==6))
-    MyDouble ParticleVel[3];
+    Vec3<MyDouble> ParticleVel;
 #endif
 #ifdef HYDRO_SPH
     MyDouble DrkernHydroSumFactor;
@@ -164,7 +165,7 @@ static struct OUTPUT_STRUCT_NAME
     MyFloat NV_A[3][3];
 #endif
 #ifdef DO_DENSITY_AROUND_NONGAS_PARTICLES
-    MyFloat GradRho[3];
+    Vec3<MyFloat> GradRho;
 #endif
 #if defined(SINK_PARTICLES)
     int Sink_TimeBinGasNeighbor;
@@ -173,12 +174,12 @@ static struct OUTPUT_STRUCT_NAME
 #endif
 #endif
 #if defined(TURB_DRIVING) || defined(GRAIN_FLUID)
-    MyDouble GasVel[3];
+    Vec3<MyDouble> GasVel;
 #endif
 #if defined(GRAIN_FLUID)
     MyDouble Gas_InternalEnergy;
 #if defined(GRAIN_LORENTZFORCE)
-    MyDouble Gas_B[3];
+    Vec3<MyDouble> Gas_B;
 #endif
 #endif
 #ifdef GALSF_RESOLVEDISM_FB
@@ -186,6 +187,10 @@ static struct OUTPUT_STRUCT_NAME
 #endif
 #ifdef GALSF_RESOLVEDISM_DUST
     MyDouble DGR_around;
+#endif
+#ifdef HYDRO_PARTITION_UNITY_IMPROVE_FD
+    Vec3<MyDouble> GradH_numer;     /*!< numerator for kernel support gradient: sum_{j!=i} (dwk/r) * dp */
+    MyDouble GradH_denom;           /*!< denominator for kernel support gradient: sum_{j!=i} u * dwk */
 #endif
 }
  *DATARESULT_NAME, *DATAOUT_NAME;
@@ -202,9 +207,14 @@ void hydrokerneldensity_out2particle(struct OUTPUT_STRUCT_NAME *out, int i, int 
     {
         ASSIGN_ADD(CellP[i].Density, out->Rho, mode);
 #if defined(HYDRO_MESHLESS_FINITE_VOLUME) && ((HYDRO_FIX_MESH_MOTION==5)||(HYDRO_FIX_MESH_MOTION==6))
-        for(k=0;k<3;k++) ASSIGN_ADD(CellP[i].ParticleVel[k], out->ParticleVel[k],   mode);
+        ASSIGN_ADD(CellP[i].ParticleVel, out->ParticleVel, mode);
 #endif
-        for(k=0;k<3;k++) {for(j=0;j<3;j++) {ASSIGN_ADD(CellP[i].NV_T[k][j], out->NV_T[k][j], mode);}}
+        for(k=0;k<6;k++) {ASSIGN_ADD(CellP[i].NV_T.data[k], out->NV_T.data[k], mode);}
+        ASSIGN_ADD(CellP[i].NV_T_face_weights, out->NV_T_face_weights, mode);
+#ifdef HYDRO_PARTITION_UNITY_IMPROVE_FD
+        ASSIGN_ADD(CellP[i].GradH_numer, out->GradH_numer, mode);
+        ASSIGN_ADD(CellP[i].GradH_denom, out->GradH_denom, mode);
+#endif
 
 #ifdef HYDRO_SPH
         ASSIGN_ADD(CellP[i].DrkernHydroSumFactor, out->DrkernHydroSumFactor, mode);
@@ -213,7 +223,7 @@ void hydrokerneldensity_out2particle(struct OUTPUT_STRUCT_NAME *out, int i, int 
         ASSIGN_ADD(CellP[i].EgyWtDensity,   out->EgyRho,   mode);
 #endif
 #if defined(TURB_DRIVING)
-        for(k = 0; k < 3; k++) {ASSIGN_ADD(CellP[i].SmoothedVel[k], out->GasVel[k], mode);}
+        ASSIGN_ADD(CellP[i].SmoothedVel, out->GasVel, mode);
 #endif
 #if defined(SPHAV_CD10_VISCOSITY_SWITCH)
         for(k = 0; k < 3; k++)
@@ -230,16 +240,16 @@ void hydrokerneldensity_out2particle(struct OUTPUT_STRUCT_NAME *out, int i, int 
     {
         ASSIGN_ADD(P[i].Gas_Density, out->Rho, mode);
         ASSIGN_ADD(P[i].Gas_InternalEnergy, out->Gas_InternalEnergy, mode);
-        for(k = 0; k<3; k++) {ASSIGN_ADD(P[i].Gas_Velocity[k], out->GasVel[k], mode);}
+        ASSIGN_ADD(P[i].Gas_Velocity, out->GasVel, mode);
 #if defined(GRAIN_LORENTZFORCE)
-        for(k = 0; k<3; k++) {ASSIGN_ADD(P[i].Gas_B[k], out->Gas_B[k], mode);}
+        ASSIGN_ADD(P[i].Gas_B, out->Gas_B, mode);
 #endif
     }
 #endif
 
 #ifdef DO_DENSITY_AROUND_NONGAS_PARTICLES
     ASSIGN_ADD(P[i].DensityAroundParticle, out->Rho, mode);
-    for(k = 0; k<3; k++) {ASSIGN_ADD(P[i].GradRho[k], out->GradRho[k], mode);}
+    ASSIGN_ADD(P[i].GradRho, out->GradRho, mode);
 #endif
 #ifdef GALSF_RESOLVEDISM_FB
     ASSIGN_ADD(P[i].InternalEnergyAroundParticle, out->InternalEnergyAroundStar, mode);
@@ -284,7 +294,7 @@ int density_evaluate(int target, int mode, int *exportflag, int *exportnodecount
     if(mode == 0) {startnode = All.MaxPart; /* root node */} else {startnode = DATAGET_NAME[target].NodeList[0]; startnode = Nodes[startnode].u.d.nextnode;    /* open it */}
     while(startnode >= 0) {
         while(startnode >= 0) {
-            numngb_inbox = ngb_treefind_variable_threads(local.Pos, local.KernelRadius, target, &startnode, mode, exportflag, exportnodecount, exportindex, ngblist);
+            numngb_inbox = ngb_treefind_variable_threads(local.Pos.data_ptr(), local.KernelRadius, target, &startnode, mode, exportflag, exportnodecount, exportindex, ngblist);
             if(numngb_inbox < 0) {return -2;}
             for(n = 0; n < numngb_inbox; n++)
             {
@@ -293,11 +303,9 @@ int density_evaluate(int target, int mode, int *exportflag, int *exportnodecount
                 if(CellP[j].DelayTime > 0) {if(local.DelayTime <= 0) {continue;}}
 #endif
                 if(P[j].Mass <= 0) continue;
-                kernel.dp[0] = local.Pos[0] - P[j].Pos[0];
-                kernel.dp[1] = local.Pos[1] - P[j].Pos[1];
-                kernel.dp[2] = local.Pos[2] - P[j].Pos[2];
-                NEAREST_XYZ(kernel.dp[0],kernel.dp[1],kernel.dp[2],1);
-                r2 = kernel.dp[0] * kernel.dp[0] + kernel.dp[1] * kernel.dp[1] + kernel.dp[2] * kernel.dp[2];
+                kernel.dp = local.Pos - P[j].Pos;
+                nearest_xyz(kernel.dp);
+                r2 = kernel.dp.norm_sq();
                 if(r2 < h2) /* this loop is only considering particles inside local.KernelRadius, i.e. seen-by-main */
                 {
                     kernel.r = sqrt(r2);
@@ -309,7 +317,7 @@ int density_evaluate(int target, int mode, int *exportflag, int *exportnodecount
                     out.Ngb += kernel.wk;
                     out.Rho += kernel.mj_wk;
 #if defined(HYDRO_MESHLESS_FINITE_VOLUME) && ((HYDRO_FIX_MESH_MOTION==5)||(HYDRO_FIX_MESH_MOTION==6))
-                    if(local.Type == 0 && kernel.r==0) {int kv; for(kv=0;kv<3;kv++) {out.ParticleVel[kv] += kernel.mj_wk * CellP[j].VelPred[kv];}} // just the self-contribution //
+                    if(local.Type == 0 && kernel.r==0) {out.ParticleVel += kernel.mj_wk * CellP[j].VelPred;} // just the self-contribution //
 #endif
 #if defined(RT_SOURCE_INJECTION)
 #if defined(RT_SINK_ANGLEWEIGHT_PHOTON_INJECTION)
@@ -333,26 +341,21 @@ int density_evaluate(int target, int mode, int *exportflag, int *exportnodecount
                         {
                             wk = kernel.wk; /* MAKE SURE THIS MATCHES CHOICE IN GRADIENTS.c! */
                             /* the weights for the MLS tensor used for gradient estimation */
-                            out.NV_T[0][0] +=  wk * kernel.dp[0] * kernel.dp[0];
-                            out.NV_T[0][1] +=  wk * kernel.dp[0] * kernel.dp[1];
-                            out.NV_T[0][2] +=  wk * kernel.dp[0] * kernel.dp[2];
-                            out.NV_T[1][1] +=  wk * kernel.dp[1] * kernel.dp[1];
-                            out.NV_T[1][2] +=  wk * kernel.dp[1] * kernel.dp[2];
-                            out.NV_T[2][2] +=  wk * kernel.dp[2] * kernel.dp[2];
-                            /* these will temporarily hold the 'face area' terms */
-                            out.NV_T[1][0] += wk * kernel.dp[0];
-                            out.NV_T[2][0] += wk * kernel.dp[1];
-                            out.NV_T[2][1] += wk * kernel.dp[2];
+                            out.NV_T += wk * outer_product(kernel.dp);
+                            /* weighted first moments, used for face area estimation */
+                            out.NV_T_face_weights += wk * kernel.dp;
+#ifdef HYDRO_PARTITION_UNITY_IMPROVE_FD
+                            out.GradH_numer += (kernel.dwk / kernel.r) * kernel.dp; /* sum_{j!=i} (dwk/r)*dp: numerator for grad(H) */
+                            out.GradH_denom += u * kernel.dwk; /* sum_{j!=i} u*dwk: denominator for grad(H) */
+#endif
                         }
-                        kernel.dv[0] = local.Vel[0] - CellP[j].VelPred[0];
-                        kernel.dv[1] = local.Vel[1] - CellP[j].VelPred[1];
-                        kernel.dv[2] = local.Vel[2] - CellP[j].VelPred[2];
+                        kernel.dv = local.Vel - CellP[j].VelPred;
                         NGB_SHEARBOX_BOUNDARY_VELCORR_(local.Pos,P[j].Pos,kernel.dv,1); /* wrap velocities for shearing boxes if needed */
 #if defined(HYDRO_MESHLESS_FINITE_VOLUME) && ((HYDRO_FIX_MESH_MOTION==5)||(HYDRO_FIX_MESH_MOTION==6))
                         // do neighbor contribution to smoothed particle velocity here, after wrap, so can account for shearing boxes correctly //
-                        {int kv; for(kv=0;kv<3;kv++) {out.ParticleVel[kv] += kernel.mj_wk * (local.Vel[kv] - kernel.dv[kv]);}}
+                        out.ParticleVel += kernel.mj_wk * (local.Vel - kernel.dv);
 #endif
-                        out.Particle_DivVel -= kernel.dwk * (kernel.dp[0] * kernel.dv[0] + kernel.dp[1] * kernel.dv[1] + kernel.dp[2] * kernel.dv[2]) / kernel.r;
+                        out.Particle_DivVel -= kernel.dwk * dot(kernel.dp, kernel.dv) / kernel.r;
                         /* this is the -particle- divv estimator, which determines how KernelRadius will evolve (particle drift) */
 
                         density_evaluate_extra_physics_gas(&local, &out, &kernel, j);
@@ -379,13 +382,9 @@ void density_evaluate_extra_physics_gas(struct INPUT_STRUCT_NAME *local, struct 
         if((1 << local->Type) & (GRAIN_PTYPES))
         {
             out->Gas_InternalEnergy += kernel->mj_wk * CellP[j].InternalEnergyPred;
-            out->GasVel[0] += kernel->mj_wk * (local->Vel[0]-kernel->dv[0]);
-            out->GasVel[1] += kernel->mj_wk * (local->Vel[1]-kernel->dv[1]);
-            out->GasVel[2] += kernel->mj_wk * (local->Vel[2]-kernel->dv[2]);
+            out->GasVel += kernel->mj_wk * (local->Vel - kernel->dv);
 #if defined(GRAIN_LORENTZFORCE)
-            out->Gas_B[0] += kernel->wk * CellP[j].BPred[0];
-            out->Gas_B[1] += kernel->wk * CellP[j].BPred[1];
-            out->Gas_B[2] += kernel->wk * CellP[j].BPred[2];
+            out->Gas_B += kernel->wk * CellP[j].BPred;
 #endif
         }
 #endif
@@ -417,9 +416,16 @@ void density_evaluate_extra_physics_gas(struct INPUT_STRUCT_NAME *local, struct 
             }
 #endif
             short int TimeBin_j = P[j].TimeBin; if(TimeBin_j < 0) {TimeBin_j = -TimeBin_j - 1;} // need to make sure we correct for the fact that TimeBin is used as a 'switch' here to determine if a particle is active for iteration, otherwise this gives nonsense!
+#ifdef WAKEUP_TRUNCATE_STEP_ON_DEMOTION
+            /* a truncated step is shorter than its bin, so TimeBin over-reports how long this neighbour will run,
+               and both users of this field are unsafe when it reads long (a sink outruns its gas, and unlike gas a
+               sink cannot be woken to recover). floor to a bin that fits, stopping at 1: bin 0 has zero length, which
+               reads as 'no neighbour' and would disable the limiter entirely. */
+            {integertime dt_j = P[j].integertime_step(); if(dt_j > 0) {while(TimeBin_j > 1 && GET_INTEGERTIME_FROM_TIMEBIN(TimeBin_j) > dt_j) {TimeBin_j--;}}}
+#endif
             if(out->Sink_TimeBinGasNeighbor > TimeBin_j) {out->Sink_TimeBinGasNeighbor = TimeBin_j;}
 #if defined(SINGLE_STAR_TIMESTEPPING)
-            double dr_eff_wtd = Get_Particle_Size(j);
+            double dr_eff_wtd = P[j].Get_Particle_Size();
             dr_eff_wtd=sqrt(dr_eff_wtd*dr_eff_wtd + (kernel->r)*(kernel->r)); /* effective distance for Gaussian-type kernel, weighted by density */
             if((dr_eff_wtd < out->Sink_dr_to_NearestGasNeighbor) && (P[j].Mass > 0)) {out->Sink_dr_to_NearestGasNeighbor = dr_eff_wtd;}
 #endif
@@ -429,9 +435,7 @@ void density_evaluate_extra_physics_gas(struct INPUT_STRUCT_NAME *local, struct 
     } else { /* local.Type == 0 */
 
 #if defined(TURB_DRIVING)
-        out->GasVel[0] += kernel->mj_wk * (local->Vel[0]-kernel->dv[0]);
-        out->GasVel[1] += kernel->mj_wk * (local->Vel[1]-kernel->dv[1]);
-        out->GasVel[2] += kernel->mj_wk * (local->Vel[2]-kernel->dv[2]);
+        out->GasVel += kernel->mj_wk * (local->Vel - kernel->dv);
 #endif
 
 #if defined(SPHAV_CD10_VISCOSITY_SWITCH)
@@ -464,9 +468,7 @@ void density_evaluate_extra_physics_gas(struct INPUT_STRUCT_NAME *local, struct 
      just need a quick-and-dirty, single-pass approximation for the gradients (the error from
      using this as opposed to the higher-order gradient estimators is small compared to the
      Sobolev approximation): use only for -non-gas- particles */
-    out->GradRho[0] += kernel->mj_dwk_r * kernel->dp[0];
-    out->GradRho[1] += kernel->mj_dwk_r * kernel->dp[1];
-    out->GradRho[2] += kernel->mj_dwk_r * kernel->dp[2];
+    out->GradRho += kernel->mj_dwk_r * kernel->dp;
 #endif
 
 }
@@ -500,7 +502,7 @@ void density(void)
 #endif
     
     /* initialize anything we need to about the active particles before their loop */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
+    for (int i : ActiveParticleList) {
         if(density_isactive(i)) {
             Left[i] = Right[i] = 0;
 #ifdef SINK_PARTICLES
@@ -532,7 +534,7 @@ void density(void)
 
         /* do check on whether we have enough neighbors, and iterate for density-rkern solution */
         double tstart = my_second(), tend;
-        for(i = FirstActiveParticle, npleft = 0; i >= 0; i = NextActiveParticle[i])
+        npleft = 0; for (int i : ActiveParticleList)
         {
             desnumngb = All.DesNumNgb; desnumngbdev = All.MaxNumNgbDeviation;
             /* in the initial timestep and iteration, use a much more strict tolerance for the neighbor number */
@@ -562,25 +564,24 @@ void density(void)
                 {
                     /* use the single-moment terms of NV_T to construct the faces one would have if the system were perfectly symmetric in reconstruction 'from both sides' */
                     double V_i = VOLUME_NORM_COEFF_FOR_NDIMS * pow(P[i].KernelRadius,NUMDIMS) / P[i].NumNgb, dx_i = pow(V_i , 1./NUMDIMS); // this is the effective volume which will be used below
-                    dx_i = sqrt(V_i * (CellP[i].NV_T[0][0] + CellP[i].NV_T[1][1] + CellP[i].NV_T[2][2])); // this is the sqrt of the weighted sum of (w*r^2)
-                    double Face_Area_OneSided_Estimator_in[3]={0}, Face_Area_OneSided_Estimator_out[3]={0}; Face_Area_OneSided_Estimator_in[0]=CellP[i].NV_T[1][0]; Face_Area_OneSided_Estimator_in[1]=CellP[i].NV_T[2][0]; Face_Area_OneSided_Estimator_in[2]=CellP[i].NV_T[2][1];
-                    /* now fill in the missing elements of NV_T (it's symmetric, so we saved time not computing these directly) */
-                    CellP[i].NV_T[1][0]=CellP[i].NV_T[0][1]; CellP[i].NV_T[2][0]=CellP[i].NV_T[0][2]; CellP[i].NV_T[2][1]=CellP[i].NV_T[1][2];
+                    dx_i = sqrt(V_i * CellP[i].NV_T.trace()); // this is the sqrt of the weighted sum of (w*r^2)
+                    double Face_Area_OneSided_Estimator_in[3]={0}, Face_Area_OneSided_Estimator_out[3]={0}; Face_Area_OneSided_Estimator_in[0]=CellP[i].NV_T_face_weights[0]; Face_Area_OneSided_Estimator_in[1]=CellP[i].NV_T_face_weights[1]; Face_Area_OneSided_Estimator_in[2]=CellP[i].NV_T_face_weights[2];
                     double dimensional_NV_T_normalizer = pow( P[i].KernelRadius , 2-NUMDIMS ); /* this has the same dimensions as NV_T here */
-                    for(k1=0;k1<3;k1++) {for(k2=0;k2<3;k2++) {CellP[i].NV_T[k1][k2] /= dimensional_NV_T_normalizer;}} /* now NV_T should be dimensionless */
+                    double NV_T_local[3][3]; /* local working copy for inversion: avoids passing SymmetricTensor2 to matrix_invert_ndims and avoids double-applying normalizer to off-diagonal elements */
+                    for(k1=0;k1<3;k1++) {for(k2=0;k2<3;k2++) {NV_T_local[k1][k2] = CellP[i].NV_T[k1][k2] / dimensional_NV_T_normalizer;}} /* dimensionless copy */
                     /* Also, we want to be able to calculate the condition number of the matrix to be inverted, since
                         this will tell us how robust our procedure is (and let us know if we need to expand the neighbor number */
                     double ConditionNumber_threshold = 10. * CONDITION_NUMBER_DANGER; /* set a threshold condition number - above this we will 'pre-condition' the matrix for better behavior */
-                    double trace_initial = CellP[i].NV_T[0][0] + CellP[i].NV_T[1][1] + CellP[i].NV_T[2][2]; /* initial trace of this symmetric, positive-definite matrix; used below as a characteristic value for adding the identity */
+                    double trace_initial = NV_T_local[0][0] + NV_T_local[1][1] + NV_T_local[2][2]; /* initial trace of this symmetric, positive-definite matrix; used below as a characteristic value for adding the identity */
                     double conditioning_term_to_add = 1.05 * (trace_initial / NUMDIMS) / ConditionNumber_threshold; /* this will be added as a test value if the code does not reach the desired condition number */
                     while(1)
                     {
-                        ConditionNumber = matrix_invert_ndims(CellP[i].NV_T, Tinv);
+                        ConditionNumber = matrix_invert_ndims(NV_T_local, Tinv);
                         if(ConditionNumber < ConditionNumber_threshold) {break;}
-                        for(k1=0;k1<NUMDIMS;k1++) {CellP[i].NV_T[k1][k1] += conditioning_term_to_add;} /* add the conditioning term which should make the matrix better-conditioned for subsequent use */
+                        for(k1=0;k1<NUMDIMS;k1++) {NV_T_local[k1][k1] += conditioning_term_to_add;} /* add the conditioning term which should make the matrix better-conditioned for subsequent use */
                         conditioning_term_to_add *= 1.2; /* multiply the conditioning term so it will grow and eventually satisfy our criteria */
                     }
-                    for(k1=0;k1<3;k1++) {for(k2=0;k2<3;k2++) {CellP[i].NV_T[k1][k2] = Tinv[k1][k2] / dimensional_NV_T_normalizer;}} /* re-insert normalization correctly */
+                    for(k1=0;k1<3;k1++) {for(k2=k1;k2<3;k2++) {CellP[i].NV_T[k1][k2] = Tinv[k1][k2] / dimensional_NV_T_normalizer;}} /* re-insert normalization correctly */
                     /* now NV_T holds the inverted matrix elements, for use in hydro */
                     for(k1=0;k1<3;k1++) {for(k2=0;k2<3;k2++) {Face_Area_OneSided_Estimator_out[k1] += 2.*V_i*CellP[i].NV_T[k1][k2]*Face_Area_OneSided_Estimator_in[k2];}} /* calculate mfm/mfv areas that we would have by default, if both sides of reconstruction were symmetric */
                     for(k1=0;k1<3;k1++) {dimless_face_leak += fabs(Face_Area_OneSided_Estimator_out[k1]) / NUMDIMS;} // average of absolute values
@@ -881,7 +882,7 @@ void density(void)
                 }
                 else {P[i].TimeBin = -P[i].TimeBin - 1;}	/* Mark as inactive */
             } //  if(density_isactive(i))
-        } // for(i = FirstActiveParticle, npleft = 0; i >= 0; i = NextActiveParticle[i])
+        } // npleft = 0; for (int i : ActiveParticleList)
 
         tend = my_second();
         timecomp += timediff(tstart, tend);
@@ -900,7 +901,7 @@ void density(void)
     myfree(Right); myfree(Left);
 
     /* mark as active again */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         if(P[i].TimeBin < 0) {P[i].TimeBin = -P[i].TimeBin - 1;}
     }
@@ -911,7 +912,7 @@ void density(void)
      won't save much b/c the real cost is in the neighbor loop for each particle, but it's something )
      -- also, some results (for example, viscosity suppression below) should not be calculated unless
      the quantities are 'stabilized' at their final values -- */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         if(density_isactive(i))
         {
@@ -925,9 +926,9 @@ void density(void)
                     set_mesh_motion(i); // use user-specified analytic function to define mesh motions //
 #elif ((HYDRO_FIX_MESH_MOTION==5)||(HYDRO_FIX_MESH_MOTION==6))
                     double eps_pvel = 0.3; // normalization for how much 'weight' to give to neighbors (unstable if >=0.5)
-                    {int k; for(k=0;k<3;k++) {CellP[i].ParticleVel[k] = (1.-eps_pvel)*CellP[i].VelPred[k] + eps_pvel*CellP[i].ParticleVel[k]/CellP[i].Density;}} // assign mixture velocity
+                    CellP[i].ParticleVel = CellP[i].VelPred * (1.-eps_pvel) + CellP[i].ParticleVel * (eps_pvel/CellP[i].Density); // assign mixture velocity
 #elif (HYDRO_FIX_MESH_MOTION==7)
-                    {int k; for(k=0;k<3;k++) {CellP[i].ParticleVel[k] = CellP[i].VelPred[k];}} // move with fluid
+                    CellP[i].ParticleVel = CellP[i].VelPred; // move with fluid
 #endif
 #endif
 
@@ -987,11 +988,9 @@ void density(void)
 #if defined(TURB_DRIVING)
                     if(CellP[i].Density > 0)
                     {
-                        CellP[i].SmoothedVel[0] /= CellP[i].Density;
-                        CellP[i].SmoothedVel[1] /= CellP[i].Density;
-                        CellP[i].SmoothedVel[2] /= CellP[i].Density;
+                        CellP[i].SmoothedVel /= CellP[i].Density;
                     } else {
-                        CellP[i].SmoothedVel[0] = CellP[i].SmoothedVel[1] = CellP[i].SmoothedVel[2] = 0;
+                        CellP[i].SmoothedVel = {};
                     }
 #endif
                 }
@@ -1010,6 +1009,14 @@ void density(void)
                 }
 #endif
                 double Volume_0; Volume_0 = P[i].Mass / CellP[i].Density; // save for potential later use
+#ifdef HYDRO_PARTITION_UNITY_IMPROVE_FD
+                if(CellP[i].GradH_denom != 0) { /* apply FD partition-of-unity volume correction (Massaro Acha+ 2026, Eq. 15 with second-derivative terms dropped) */
+                    Vec3<double> gradH = -CellP[i].GradH_numer / CellP[i].GradH_denom; /* spatial gradient of kernel support size H, from Eq. 40 */
+                    double fd_correction = 1.0 + 4.0 * KERNEL_AWPMHD_FD_ALPHA * gradH.norm_sq(); /* correction factor: 1 + 4*alpha_zeta*|grad(H)|^2 */
+                    CellP[i].Density /= fd_correction; /* apply: volume *= fd_correction, so density /= fd_correction */
+                    Volume_0 = P[i].Mass / CellP[i].Density; /* update Volume_0 to reflect corrected volume */
+                }
+#endif
 #if defined(HYDRO_KERNEL_SURFACE_VOLCORR)
                 CellP[i].Density /= CellP[i].FaceClosureError; // correct volume of the cell based on the free surface correction above
                 CellP[i].FaceClosureError = Volume_0;
@@ -1026,7 +1033,7 @@ void density(void)
 #ifdef GALSF_RESOLVEDISM_SAMPLE_IMF
                 CellP[i].IMFSpawnBlock = 0; /* density is fresh — allow SF again */
 #endif
-                set_eos_pressure(i);		// should account for density independent pressure
+                set_eos_pressure(i, P, CellP);		// should account for density independent pressure
 
             } // P[i].Type == 0
 
@@ -1038,12 +1045,12 @@ void density(void)
                 if(P[i].Gas_Density > 0)
                 {
                     P[i].Gas_InternalEnergy /= P[i].Gas_Density;
-                    for(k = 0; k<3; k++) {P[i].Gas_Velocity[k] /= P[i].Gas_Density;}
+                    P[i].Gas_Velocity /= P[i].Gas_Density;
                 } else {
                     P[i].Gas_InternalEnergy = 0;
-                    for(k = 0; k<3; k++) {P[i].Gas_Velocity[k] = 0;}
+                    P[i].Gas_Velocity = {};
 #if defined(GRAIN_LORENTZFORCE)
-                    for(k = 0; k<3; k++) {P[i].Gas_B[k] = 0;}
+                    P[i].Gas_B = {};
 #endif
                 }
             }
@@ -1067,20 +1074,19 @@ void density(void)
 #if defined(MAGNETIC)
             if(P[i].Type == 0) {
                 if(CellP[i].recent_refinement_flag == 1) {
-                    int k; for(k=0;k<3;k++) {
-                        CellP[i].BPred[k] = CellP[i].B[k] = CellP[i].BField_prerefinement[k] * P[i].Mass / CellP[i].Density; // reset B-fields to desired values given the conserved variable is VB, after refinement or de-refinement step
-                        CellP[i].BField_prerefinement[k] = 0; // reset this variable to null
-                    }}}
+                    CellP[i].BPred = CellP[i].B = CellP[i].BField_prerefinement * (P[i].Mass / CellP[i].Density); // reset B-fields to desired values given the conserved variable is VB, after refinement or de-refinement step
+                    CellP[i].BField_prerefinement = {}; // reset this variable to null
+                    }}
 #endif
             if(P[i].Type == 0) {CellP[i].recent_refinement_flag = 0;} // reset this flag after density re-computation
             
         } // density_isactive(i)
         
 #if defined(SINK_WIND_SPAWN_SET_BFIELD_POLTOR) /* re-assign magnetic fields after getting the correct density for newly-spawned cells when these options are enabled */
-        if(P[i].Type==0) {if(P[i].ID==All.SpawnedWindCellID && CellP[i].IniDen<0) {CellP[i].IniDen=CellP[i].Density; int k; for(k=0;k<3;k++) {CellP[i].BPred[k]=CellP[i].B[k]=CellP[i].IniB[k]*(All.UnitMagneticField_in_gauss/UNIT_B_IN_GAUSS)*(P[i].Mass/(All.cf_a2inv*CellP[i].Density));}}}
+        if(P[i].Type==0) {if(P[i].ID==All.SpawnedWindCellID && CellP[i].IniDen<0) {CellP[i].IniDen=CellP[i].Density; CellP[i].BPred=CellP[i].B=CellP[i].IniB*((All.UnitMagneticField_in_gauss/UNIT_B_IN_GAUSS)*(P[i].Mass/(All.cf_a2inv*CellP[i].Density)));}}
 #endif
         
-    } // for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    } // for (int i : ActiveParticleList)
 
     /* collect some timing information */
     double t1; t1 = WallclockTime = my_second(); timeall = timediff(t00_truestart, t1);
@@ -1098,15 +1104,15 @@ void density(void)
 #define CORE_FUNCTION_NAME cellcorrections_evaluate /* name of the 'core' function doing the actual inter-neighbor operations. this MUST be defined somewhere as "int CORE_FUNCTION_NAME(int target, int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist, int loop_iteration)" */
 #define INPUTFUNCTION_NAME particle2in_cellcorrections    /* name of the function which loads the element data needed (for e.g. broadcast to other processors, neighbor search) */
 #define OUTPUTFUNCTION_NAME out2particle_cellcorrections  /* name of the function which takes the data returned from other processors and combines it back to the original elements */
-#define CONDITIONFUNCTION_FOR_EVALUATION if(GasGrad_isactive(i)) /* function for which elements will be 'active' and allowed to undergo operations. for current implementation, only cells eligible for gradients and hydro should be called */
+#define CONDITIONFUNCTION_FOR_EVALUATION if(GasGrad_isactive(i, P, CellP)) /* function for which elements will be 'active' and allowed to undergo operations. for current implementation, only cells eligible for gradients and hydro should be called */
 #include "../system/code_block_xchange_initialize.h" /* pre-define all the ALL_CAPS variables we will use below, so their naming conventions are consistent and they compile together, as well as defining some of the function calls needed */
 
 /* define structures to use below */
-struct INPUT_STRUCT_NAME {MyDouble Pos[3], KernelRadius, Volume_0; int NodeList[NODELISTLENGTH];} *DATAIN_NAME, *DATAGET_NAME;
+struct INPUT_STRUCT_NAME {Vec3<MyDouble> Pos; MyDouble KernelRadius, Volume_0; int NodeList[NODELISTLENGTH];} *DATAIN_NAME, *DATAGET_NAME;
 
 /* define properties to be sent to nodes */
 void particle2in_cellcorrections(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
-{in->Volume_0=CellP[i].Volume_0; in->KernelRadius=P[i].KernelRadius; int k; for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k];}}
+{in->Volume_0=CellP[i].Volume_0; in->KernelRadius=P[i].KernelRadius; in->Pos=P[i].Pos;}
 
 /* define output structure to use below */
 struct OUTPUT_STRUCT_NAME {MyFloat Volume_1;} *DATARESULT_NAME, *DATAOUT_NAME;
@@ -1128,9 +1134,9 @@ int cellcorrections_evaluate(int target, int mode, int *exportflag, int *exportn
             for(n=0; n<numngb_inbox; n++)
             {
                 j = ngblist[n]; /* since we use the -threaded- version above of ngb-finding, its super-important this is the lower-case ngblist here! */
-                double dp[3]; for(k=0;k<3;k++) {dp[k]=local.Pos[k]-P[j].Pos[k];}
-                NEAREST_XYZ(dp[0],dp[1],dp[2],1); // find the closest image in the given box size  //
-                double r2=0; for(k=0;k<3;k++) {r2+=dp[k]*dp[k];} // distance
+                Vec3<double> dp = local.Pos - P[j].Pos;
+                nearest_xyz(dp); // find the closest image in the given box size  //
+                double r2 = dp.norm_sq(); // distance
                 if(r2 >= P[j].KernelRadius*P[j].KernelRadius) {continue;} // need to be inside of 'j's kernel search
                 double u,hinv,hinv3,hinv4,wk,dwk; kernel_hinv(P[j].KernelRadius, &hinv, &hinv3, &hinv4); u=sqrt(r2)*hinv; wk=0; dwk=0; // define kernel-needed variables
                 kernel_main(u, hinv3, hinv4, &wk, &dwk, -1); // calculate the normal kernel weight 'wk'
@@ -1146,11 +1152,11 @@ int cellcorrections_evaluate(int target, int mode, int *exportflag, int *exportn
 /* final operations for after the updates are computed */
 void cellcorrections_final_operations_and_cleanup(void)
 {
-    int i; for(i=FirstActiveParticle; i>=0; i=NextActiveParticle[i]) { /* check all active elements */
+    int i; for (int i : ActiveParticleList) { /* check all active elements */
         CONDITIONFUNCTION_FOR_EVALUATION /* ensures only the ones which met our criteria above are actually treated here */
         {
             if(CellP[i].Volume_1 > 0) {CellP[i].Density = P[i].Mass / CellP[i].Volume_1;} else {CellP[i].Volume_1 = CellP[i].Volume_0;} // set the updated density. other variables that need volumes will all scale off this, so we can rely on it to inform everything else [if bad value here, revert to the 0th-order volume quadrature]
-            set_eos_pressure(i);
+            set_eos_pressure(i, P, CellP);
         }}
 }
 

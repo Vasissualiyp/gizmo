@@ -28,15 +28,15 @@
 void determine_where_addthermalFB_events_occur(void)
 {
     int i; double check = 0;
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         if(P[i].Type != 4) {continue;}
         if(P[i].Mass <= 0) {continue;}
         check += mechanical_fb_calculate_eventrates(i,1); // this should do the calculation and add to number of SNe as needed //
-    } // for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) //
+    } // for (int i : ActiveParticleList) //
 }
 
-struct kernel_addthermalFB {double dp[3], r, wk, dwk, hinv, hinv3, hinv4;};
+struct kernel_addthermalFB {Vec3<double> dp; double r, wk, dwk, hinv, hinv3, hinv4;};
 
 
 #define CORE_FUNCTION_NAME addthermalFB_evaluate /* name of the 'core' function doing the actual inter-neighbor operations. this MUST be defined somewhere as "int CORE_FUNCTION_NAME(int target, int mode, int *exportflag, int *exportnodecount, int *exportindex, int *ngblist, int loop_iteration)" */
@@ -78,7 +78,7 @@ struct OUTPUT_STRUCT_NAME
 
 void out2particle_addthermalFB(struct OUTPUT_STRUCT_NAME *out, int i, int mode, int loop_iteration)
 {
-    if(P[i].Mass > 0) {P[i].Mass -= out->M_coupled; if((P[i].Mass<0)||(isnan(P[i].Mass))) {P[i].Mass=0;}}
+    if(P[i].Mass > 0) {P[i].dp -= out->M_coupled * P[i].Vel; P[i].Mass -= out->M_coupled; if((P[i].Mass<0)||(isnan(P[i].Mass))) {P[i].Mass=0;}} if(P[i].Type==0) {CellP[i].Mass = P[i].Mass;}
 }
 
 
@@ -150,8 +150,8 @@ int addthermalFB_evaluate(int target, int mode, int *exportflag, int *exportnode
 
                 if(Mass_j <= 0) {continue;} // require the particle has mass //
                 for(k=0; k<3; k++) {kernel.dp[k] = local.Pos[k] - P[j].Pos[k];}
-                NEAREST_XYZ(kernel.dp[0],kernel.dp[1],kernel.dp[2],1); // find the closest image in the given box size  //
-                r2=0; for(k=0;k<3;k++) {r2 += kernel.dp[k]*kernel.dp[k];}
+                nearest_xyz(kernel.dp); // find the closest image in the given box size  //
+                r2 = kernel.dp.norm_sq();
                 if(r2<=0) {continue;} // same particle //
                 if(r2>=h2) {continue;} // outside kernel //
                 // calculate kernel quantities //
@@ -192,7 +192,7 @@ int addthermalFB_evaluate(int target, int mode, int *exportflag, int *exportnode
                 
                 /* we updated variables that need to get assigned to element 'j' -- let's do it */
                 #pragma omp atomic
-                P[j].Mass += Mass_j - Mass_j_0; // finite mass update [delta difference added here, allowing for another element to update in the meantime]
+                P[j].Mass += Mass_j - Mass_j_0; // finite mass update [delta difference added here, allowing for another element to update in the meantime] if(P[j].Type==0) {CellP[j].Mass = P[j].Mass;}
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
                 #pragma omp atomic
                 CellP[j].MassTrue += Mass_j - Mass_j_0; // finite mass update
@@ -203,7 +203,7 @@ int addthermalFB_evaluate(int target, int mode, int *exportflag, int *exportnode
                 }
                 for(k=0;k<3;k++) {
                     #pragma omp atomic
-                    P[j].dp[k] *= Mass_j / Mass_j_0; // discrete momentum change -- no velocity change so just rescale by the mass
+                    P[j].dp[k] += (Mass_j - Mass_j_0) * P[j].Vel[k]; // momentum change from mass gain at constant velocity
                 }
                 #pragma omp atomic
                 CellP[j].InternalEnergy += InternalEnergy_j - InternalEnergy_j_0; // delta-update

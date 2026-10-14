@@ -196,6 +196,70 @@ void resolvedism_mass_balance_log(const char *tag)
 /* MCBAL_LOG is defined in proto.h so other translation units can call it. */
 #endif
 
+#ifdef ENERGY_BUDGET_DIAGNOSTIC
+/*! Total gas energy, reported ONLY at full synchronization (HighestActiveTimeBin ==
+    HighestOccupiedTimeBin) -- the only point where Vel and InternalEnergy share a clock and the sum is
+    conserved. Snapshots never satisfy this, since io.cc writes Velocities from Vel (kick-time) but
+    InternalEnergy from InternalEnergyPred (drift-time). Compare successive lines against energy injected. */
+void energy_budget_sync_report(void)
+{
+    if(All.HighestActiveTimeBin != All.HighestOccupiedTimeBin) {return;} /* not synchronized: sum is meaningless */
+    double loc[3] = {0,0,0}, glob[3]; int i;
+    for(i = 0; i < NumPart; i++)
+    {
+        if(P[i].Type == 0 && P[i].Mass > 0)
+        {
+            loc[0] += P[i].Mass * CellP[i].InternalEnergy;
+            loc[1] += 0.5 * P[i].Mass * P[i].Vel.norm_sq() * All.cf_a2inv;
+            loc[2] += P[i].Mass;
+        }
+    }
+    MPI_Allreduce(loc, glob, 3, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    if(ThisTask == 0)
+    {
+        printf("Energy (synced) t=%.10g E_int=%.10e E_kin=%.10e E_tot=%.10e M_gas=%.10e\n",
+               All.Time, glob[0], glob[1], glob[0]+glob[1], glob[2]); fflush(stdout);
+    }
+}
+
+#ifdef EVALPOTENTIAL
+/*! Kinetic + gravitational energy over ALL particle types, again only at full synchronization.
+ *
+ *  The report above is gas thermal+kinetic and carries no potential term, so it is blind to a
+ *  collisionless self-gravitating run -- a pure N-body problem has no gas at all and would report
+ *  zeros. This is the conserved quantity for that case.
+ *
+ *  Why this cannot be done from snapshots: io.cc writes Velocities from P[].Vel, which is at
+ *  kick-time, while positions (and hence the potential) are at drift-time. The resulting error is
+ *  of order dt/(2 t_dyn) per particle -- percent-level under a typical accuracy criterion. Across
+ *  a large-N system those per-particle errors are random and average away, which is why the
+ *  snapshot estimate is adequate for a 512-star cluster; across a 3-10 body system, where one star
+ *  can hold a third of the binding energy, they do not, and the snapshot sum cannot resolve a 1%
+ *  budget however carefully the potential is recomputed.
+ *
+ *  Called at the end of the step, after the Hermite correction, so Vel is the final velocity of
+ *  the step and Potential comes from the gravity solve at the (predicted) end-of-step positions. */
+void energy_budget_gravity_report(void)
+{
+    if(All.HighestActiveTimeBin != All.HighestOccupiedTimeBin) {return;} /* not synchronized: sum is meaningless */
+    double loc[3] = {0,0,0}, glob[3]; int i;
+    for(i = 0; i < NumPart; i++)
+    {
+        if(P[i].Mass <= 0) {continue;}
+        loc[0] += 0.5 * P[i].Mass * P[i].Vel.norm_sq() * All.cf_a2inv;
+        loc[1] += 0.5 * P[i].Mass * P[i].Potential; /* 1/2 removes the double counting of each pair */
+        loc[2] += P[i].Mass;
+    }
+    MPI_Allreduce(loc, glob, 3, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    if(ThisTask == 0)
+    {
+        printf("Energy (synced,grav) t=%.10g E_kin=%.10e E_pot=%.10e E_tot=%.10e M_tot=%.10e\n",
+               All.Time, glob[0], glob[1], glob[0]+glob[1], glob[2]); fflush(stdout);
+    }
+}
+#endif
+#endif
+
 
 /*! \file run.c
  *  \brief  iterates over timesteps, main loop
@@ -365,6 +429,22 @@ static void incode_total_energy(void)
 }
 
 
+/*! Seconds between stop-file checks; 0 checks every step, which is the historical behaviour.
+    The check is a filesystem open on a shared parallel filesystem, and every other rank blocks in
+    the broadcast that follows it until rank 0 is done. Measured at 96 ranks on Ceph, restarted
+    from a STARFORGE M2e3_R3 run: 1.63 ms on rank 0 and 1.76 ms of waiting on the other 95, every
+    step -- 26% of the wall time of a run taking millions of short steps, to open a file that is
+    not there. Harmless at 1e5 steps, pathological at 7e6. Polling on a wall clock rather than a
+    step count bounds the cost when steps are cheap and bounds the response to a stop file when
+    they are expensive. GIZMO_STOPFILE_INTERVAL_SEC overrides the interval. */
+static double stopfile_check_interval(void)
+{
+    static double dt = -1;
+    if(dt < 0) {const char *e = getenv("GIZMO_STOPFILE_INTERVAL_SEC"); dt = e ? atof(e) : 1.0; if(dt < 0) {dt = 0;}}
+    return dt;
+}
+
+
 /*! This routine contains the main simulation loop that iterates over
  * single timesteps. The loop terminates when the cpu-time limit is
  * reached, when a `stop' file is found in the output directory, or
@@ -406,6 +486,12 @@ void run(void)
     {
         incode_total_energy();	/* DIAGNOSTIC: true KETJU-aware energy at sync point (prints on full syncs) */
         compute_statistics();	/* regular statistics outputs (like total energy) */
+#if defined(EOS_GAMMA_PROBE) && defined(EOS_GENERAL)
+        eos_gamma_probe_report();
+#endif
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+        rt_diag_ir_double_count_report();
+#endif
 
         write_cpu_log();		/* output some CPU usage log-info (accounts for everything needed up to the current sync-point) */
 
@@ -428,7 +514,6 @@ void run(void)
                                      * inter-region KDK coupling was evaluated at inconsistent times. */
 #endif
         find_timesteps();		/* find-timesteps */
-        int TreeReconstructFlag_local = TreeReconstructFlag;
 #ifdef HERMITE_INTEGRATION
         HermiteOnlyFlag = 1;
         gravity_tree();	/* re-compute gravitational accelerations for synchronous particles */
@@ -454,23 +539,77 @@ void run(void)
         set_non_standard_physics_for_current_time();	/* update auxiliary physics for current time */
 
         int reconstructed_tree = 0;
-#if defined(SINGLE_STAR_SINK_DYNAMICS)
-        if(All.NumForcesSinceLastDomainDecomp > All.TreeDomainUpdateFrequency * All.TotNumPart) {TreeReconstructFlag_local = 1;}
+        /* The rebuild ladder. Two requests with different price tags, reduced together:
+           DomainReconstructFlag -- ownership/balance decomposition owed; consumed ONLY here.
+           TreeReconstructFlag   -- the standing tree is condemned; also consumable mid-step
+                                    (gravity_tree/compute_potential rebuild it and clear).
+           Both are read HERE rather than snapshotted at step top: nothing clears Domain except
+           the decomposition below, and a Tree raise/consume inside the drift+statistics window
+           resolves itself before this reduce. Two cadence checks feed the TREE tier: force
+           updates since the last whole-tree build (walk quality decays as the tree ages), and
+           insertions accepted by the standing tree (each attaches at an existing node, so depth
+           and opening quality degrade with their count). Decomposition cadence is the big-step
+           test alone. The reduce is a SUM so the insertion count aggregates; for the flags a
+           rank-count is as good as a max. */
+        long long rflags_local[3] = {TreeReconstructFlag, DomainReconstructFlag, ForceAddElementToTree_CallsSinceBuild}, rflags_glob[3];
+#if defined(SINGLE_STAR_SINK_DYNAMICS) || defined(GRAVITY_ACCURATE_FEWBODY_INTEGRATION) || defined(HERMITE_INTEGRATION)
+        /* cadence: the periodic rebuild is a tree ACCURACY measure, so it belongs to every
+           configuration that integrates close encounters (gate widened per kokkos f7213a89) --
+           and only to those: for everything else the big-step decomposition cadence suffices. */
+        if(All.NumForcesSinceLastDomainDecomp > All.TreeDomainUpdateFrequency * All.TotNumPart) {rflags_local[0] = 1;}
 #endif
-        MPI_Allreduce(&TreeReconstructFlag_local, &TreeReconstructFlag, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD); // if one process reconstructs the tree then everbody has to
+        MPI_Allreduce(rflags_local, rflags_glob, 3, MPI_LONG_LONG, MPI_SUM, MPI_COMM_WORLD); // if one process reconstructs then everybody has to
+        if(rflags_glob[2] > 0.01 * All.TotNumPart) {rflags_glob[0] = 1;} /* fixed threshold by design: a tunable would grow All (restartfile layout) for a knob nobody should turn */
+        TreeReconstructFlag = (rflags_glob[0] != 0); DomainReconstructFlag = (rflags_glob[1] != 0);
         if(GlobNumForceUpdate > All.TreeDomainUpdateFrequency * All.TotNumPart)	/* check whether we have a big step */
         {
-            domain_Decomposition(0, 0, 1);      /* do domain decomposition if step is big enough, and set new list of active particles  */
+#ifdef DOMAIN_LIGHTWEIGHT_REPARTITION
+            if(!DomainReconstructFlag) {domain_Decomposition_light(0);}  /* lightweight repartition: reuse top tree, just rebalance */
+            else
+#endif
+            {domain_Decomposition(0, 0, 1);}  /* full decomposition needed */
             reconstructed_tree = 1;
 #ifdef KETJU_REGULARIZATION
             ketju_mark_regions_stale();  /* particle indices changed — invalidate cached KETJU communicators */
 #endif
         }
-        else if(TreeReconstructFlag) {
+        else if(DomainReconstructFlag) {
             domain_Decomposition(0, 0, 1); reconstructed_tree = 1;
 #ifdef KETJU_REGULARIZATION
-            ketju_mark_regions_stale();
+            ketju_mark_regions_stale(); /* particle indices changed — invalidate cached KETJU communicators */
 #endif
+        }
+        else if(TreeReconstructFlag)
+        {
+            /* Condemned tree, no decomposition owed. The cheap answer -- skip force_update_tree,
+               let gravity_tree below do the rearrange+rebuild -- is only safe while every local
+               particle still keys into a top-leaf this rank owns: a rebuild buckets by position,
+               and an escaped particle's subtree is destroyed by the pseudo exchange, so its mass
+               enters no rank's moments (cf. kokkos 068b4f33). Ownership drift therefore escalates
+               to a decomposition; benign steps keep the cheap rebuild. */
+            move_particles(All.Ti_Current); /* drift first, so the escape check sees the positions
+                the build will bucket (a pre-drift check misses crossings within this step);
+                idempotent, so the build's own drift is then a no-op. */
+            int esc_loc = domain_any_local_particle_escaped(), esc_any = 0;
+            MPI_Allreduce(&esc_loc, &esc_any, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+            if(esc_any)
+            {
+                TreeOpsCount[TREEOPS_ESCALATE]++;
+#ifdef DOMAIN_LIGHTWEIGHT_REPARTITION
+                domain_Decomposition_light(0);
+#else
+                domain_Decomposition(0, 0, 1);
+#endif
+                reconstructed_tree = 1;
+#ifdef KETJU_REGULARIZATION
+                ketju_mark_regions_stale();
+#endif
+            }
+            else
+            {
+                TreeOpsCount[TREEOPS_DEFER]++;
+                make_list_of_active_particles();
+            }
         }
         else
         {
@@ -551,7 +690,6 @@ void run(void)
 
         compute_hydro_densities_and_forces();	/* densities, gradients, & hydro-accels for synchronous particles */
 
-        
 #ifdef PARTICLE_MERGE_SPLIT_EVERY_TIMESTEP // do merge/split routines every single timestep - need to do it here if we didn't do it during domain decomp on a coarse timestep
         if(!reconstructed_tree)
         {
@@ -566,30 +704,42 @@ void run(void)
 
 
         calculate_non_standard_physics();	/* source terms are here treated in a strang-split fashion */
+        EB_SYNC_REPORT();
 
 
 #ifdef HERMITE_INTEGRATION // we do a prediction step using the saved "old" pos, accel and jerk from the beginning of the timestep. Then we recompute accel and jerk and do the correction
         do_hermite_prediction();
-        HermiteOnlyFlag = 2;
-        gravity_tree();	/* re-compute gravitational accelerations for synchronous particles */
-        HermiteOnlyFlag = 0;
-        do_hermite_correction();
+        for(int hermite_pass = 0; hermite_pass < HERMITE_CORRECTOR_ITERATIONS; hermite_pass++) /* P(EC)^n: each pass evaluates at the latest (predicted, then corrected) state */
+        {
+            HermiteOnlyFlag = 2;
+            gravity_tree();	/* re-compute gravitational accelerations for synchronous particles */
+            HermiteOnlyFlag = 0;
+            do_hermite_correction(hermite_pass == HERMITE_CORRECTOR_ITERATIONS - 1);
+        }
 #endif
 #ifdef KETJU_REGULARIZATION
         ketju_finish_step();        /* clean up KETJU region data (flags persist for next step's guards) */
 #endif
+        EB_GRAV_REPORT(); /* after Hermite, so Vel is the corrected end-of-step velocity */
         /* Check whether we need to interrupt the run */
         int stopflag = 0;
         if(ThisTask == 0)
         {
-            FILE *fd;
-            char stopfname[DEFAULT_PATH_BUFFERSIZE_TOUSE];
-            snprintf(stopfname, DEFAULT_PATH_BUFFERSIZE_TOUSE, "%sstop", All.OutputDir);
-            if((fd = fopen(stopfname, "r")))	/* Is the stop-file present? If yes, interrupt the run. */
+            static double t_last_stopcheck = -1;
+            double t_now = MPI_Wtime();
+            if(t_last_stopcheck < 0) {t_last_stopcheck = t_now;}
+            if(t_now - t_last_stopcheck >= stopfile_check_interval())
             {
-                fclose(fd);
-                stopflag = 1;
-                unlink(stopfname);
+                t_last_stopcheck = t_now;
+                FILE *fd;
+                char stopfname[DEFAULT_PATH_BUFFERSIZE_TOUSE];
+                snprintf(stopfname, DEFAULT_PATH_BUFFERSIZE_TOUSE, "%sstop", All.OutputDir);
+                if((fd = fopen(stopfname, "r")))	/* Is the stop-file present? If yes, interrupt the run. */
+                {
+                    fclose(fd);
+                    stopflag = 1;
+                    unlink(stopfname);
+                }
             }
 
             if(CPUThisRun > 0.85 * All.TimeLimitCPU)	/* are we running out of CPU-time ? If yes, interrupt run. */
@@ -713,13 +863,17 @@ void calculate_non_standard_physics(void)
 #endif
     {
         sink_accretion();
+        /* rank-uniform: Allreduce'd in the swallow tally. Swallow victims sit at Mass=0, still
+           linked in the tree, until a rearrange eliminates them -- previously that only happened
+           if the SPAWN gate below chanced to open, so zero-mass slots could linger indefinitely. */
+        int need_cleanup_rearrange = (NtotSwallowedThisStep > 0);
 #ifdef SINK_WIND_SPAWN
         double Max_Unspawned_MassUnits_fromSink_global;
         MPI_Allreduce(&Max_Unspawned_MassUnits_fromSink, &Max_Unspawned_MassUnits_fromSink_global, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
         if(Max_Unspawned_MassUnits_fromSink_global > 1)
         {
             spawn_sink_wind_feedback();
-            rearrange_particle_sequence();
+            need_cleanup_rearrange = 1;
             Max_Unspawned_MassUnits_fromSink=Max_Unspawned_MassUnits_fromSink_global=0.;
         }
 #if defined(SNE_NONSINK_SPAWN)
@@ -728,6 +882,13 @@ void calculate_non_standard_physics(void)
             if(n_unspawned> Max_Unspawned_MassUnits_fromSink) {Max_Unspawned_MassUnits_fromSink = n_unspawned;} // track the maximum integer number of elements this sink could spawn
         }}
 #endif
+#endif
+        /* one deterministic cleanup for the whole sink pass: eliminates swallow victims and folds
+           in freshly spawned cells. Runs on spawn OR swallow (both rank-uniform triggers); the
+           tree consequences are decided inside rearrange itself. */
+        if(need_cleanup_rearrange) {rearrange_particle_sequence();}
+#if defined(TREE_INTEGRITY_AUDITS) && defined(MAINTAIN_TREE_IN_REARRANGE)
+        if(need_cleanup_rearrange) {force_tree_full_audit(0, "sink_cleanup");}
 #endif
         MPI_Barrier(MPI_COMM_WORLD); CPU_Step[CPU_SINKS] += measure_time();
     }
@@ -739,21 +900,53 @@ void calculate_non_standard_physics(void)
         if(All.ComovingIntegrationOn) {All.TimeNextOnTheFlyFoF *= All.TimeBetOnTheFlyFoF;} else {All.TimeNextOnTheFlyFoF += All.TimeBetOnTheFlyFoF;}}
 #endif
 
+#ifdef TRANSPORT_SUBCYCLE
+    /* --- compute the global number of transport subcycles --- */
+    {
+        double min_transport_dt_local = MAX_REAL_NUMBER, max_hydro_dt_local = 0;
+        for(int idx : ActiveParticleList) {
+            if(P[idx].Type != 0 || P[idx].Mass <= 0) continue;
+            double hydro_dt = get_particle_timestep_in_physical(idx);
+            min_transport_dt_local = DMIN(min_transport_dt_local, CellP[idx].Transport_Dt_Subcycle);
+            max_hydro_dt_local = DMAX(max_hydro_dt_local, hydro_dt);
+        }
+        double min_transport_dt_global, max_hydro_dt_global;
+        MPI_Allreduce(&min_transport_dt_local, &min_transport_dt_global, 1, MPI_DOUBLE, MPI_MIN, MPI_COMM_WORLD);
+        MPI_Allreduce(&max_hydro_dt_local, &max_hydro_dt_global, 1, MPI_DOUBLE, MPI_MAX, MPI_COMM_WORLD);
+        All.Transport_Subcycle_N = 1;
+        if(min_transport_dt_global > 0 && min_transport_dt_global < MAX_REAL_NUMBER && max_hydro_dt_global > min_transport_dt_global)
+            All.Transport_Subcycle_N = IMIN((int)ceil(max_hydro_dt_global / min_transport_dt_global), TRANSPORT_SUBCYCLE);
+        All.Transport_Subcycle_dt_fraction = 1.0 / (double)All.Transport_Subcycle_N;
+        if(ThisTask == 0 && All.Transport_Subcycle_N > 1)
+            printf("Transport subcycling: %d sub-steps (hydro_dt/transport_dt = %.1f)\n",
+                   All.Transport_Subcycle_N, max_hydro_dt_global / min_transport_dt_global);
+    }
+    for(int transport_sub = 0; transport_sub < All.Transport_Subcycle_N; transport_sub++) {
+#endif // TRANSPORT_SUBCYCLE
+
 #ifdef RADTRANSFER
     CPU_Step[CPU_MISC] += measure_time();
 #if defined(RT_SOURCE_INJECTION)
-    int flag; flag=1;
+#ifdef TRANSPORT_SUBCYCLE
+    if(transport_sub == 0) /* source injection only on first sub-step */
+#endif
+    {
+        int flag; flag=1;
 #if !defined(RT_INJECT_PHOTONS_DISCRETELY)
-    flag = Flag_FullStep; /* for continous injection, requires all sources and gas be active synchronously or else 2x-counts */
+        flag = Flag_FullStep; /* for continous injection, requires all sources and gas be active synchronously or else 2x-counts */
 #endif
 #if !defined(GRAIN_RDI_TESTPROBLEM_LIVE_RADIATION_INJECTION)
-    if(flag) {rt_source_injection();} /* source injection into neighbor gas particles (only on full timesteps, if using non-discrete scheme) */
+        if(flag) {rt_source_injection();} /* source injection into neighbor gas particles (only on full timesteps, if using non-discrete scheme) */
 #endif
+    }
 #endif
 #if defined(RT_DIFFUSION_CG) /* use the CG method to solve the RT diffusion equation implicitly for all particles; do only on full timesteps, requires synchronous timestepping right now */
     if(Flag_FullStep) {All.Radiation_Ti_endstep = All.Ti_Current; rt_diffusion_cg_solve(); All.Radiation_Ti_begstep = All.Radiation_Ti_endstep;}
 #endif
 #if defined(RT_CHEM_PHOTOION) && !defined(COOLING)
+#ifdef TRANSPORT_SUBCYCLE
+    if(transport_sub == 0) /* chemistry update only on first sub-step (cooling handles it on subsequent sub-steps if TRANSPORT_SUBCYCLE_COOLING) */
+#endif
     rt_update_chemistry(); /* chemistry updated at sub-stepping as well */
 #ifdef OUTPUT_ADDITIONAL_RUNINFO
     if(Flag_FullStep) {rt_write_chemistry_stats();}
@@ -770,7 +963,45 @@ void calculate_non_standard_physics(void)
 #endif
 
     MCBAL_LOG("pre_cooling");
-#if defined(COOLING) && !defined(RESOLVEDISM_ADIABATIC_NOCOOL)	/* radiative cooling and chemistry; NOCOOL = adiabatic test twin (energy-conservation ladder): skip the energy/chemistry update entirely, all kick/drift paths identical */
+#ifdef TRANSPORT_SUBCYCLE
+    /* --- recompute transport fluxes every sub-step and apply kick --- */
+    transport_subcycle_exchange_fluxes();
+    transport_subcycle_kick();
+#endif
+
+#if defined(TRANSPORT_SUBCYCLE_COOLING) && defined(COOLING) && !defined(RESOLVEDISM_ADIABATIC_NOCOOL)
+    /* save DtInternalEnergy before cooling (it gets overwritten with CGS-converted value inside cooling).
+       Restore the original code-units value before each sub-step so the CGS conversion isn't applied twice. */
+    {
+#ifndef COOLING_OPERATOR_SPLIT
+        for(int idx : ActiveParticleList) {
+            if(P[idx].Type == 0 && P[idx].Mass > 0)
+                CellP[idx].Dt_Transport_Subcycle_Saved = CellP[idx].DtInternalEnergy;
+        }
+#endif
+        cooling_parent_routine();
+#ifndef COOLING_OPERATOR_SPLIT
+        for(int idx : ActiveParticleList) {
+            if(P[idx].Type == 0 && P[idx].Mass > 0)
+                CellP[idx].DtInternalEnergy = CellP[idx].Dt_Transport_Subcycle_Saved;
+        }
+#endif
+    }
+    MPI_Barrier(MPI_COMM_WORLD); CPU_Step[CPU_COOLINGSFR] += measure_time();
+#endif
+
+#ifdef TRANSPORT_SUBCYCLE
+    } /* end transport subcycle loop */
+#if defined(TRANSPORT_SUBCYCLE_COOLING) && !defined(COOLING_OPERATOR_SPLIT)
+    /* zero DtInternalEnergy after the subcycle loop — the hydro work has been fully applied across all sub-steps */
+    for(int idx : ActiveParticleList) {
+        if(P[idx].Type == 0 && P[idx].Mass > 0 && CellP[idx].CoolingIsOperatorSplitThisTimestep==0)
+            CellP[idx].DtInternalEnergy = 0;
+    }
+#endif
+#endif
+
+#if defined(COOLING) && !defined(TRANSPORT_SUBCYCLE_COOLING) && !defined(RESOLVEDISM_ADIABATIC_NOCOOL) /* NOCOOL = adiabatic test twin: skip the energy/chemistry update */
     cooling_parent_routine(); // top-level cooling and chemistry subroutine //
     MPI_Barrier(MPI_COMM_WORLD); CPU_Step[CPU_COOLINGSFR] += measure_time(); // finish time calc for SFR+cooling
 #endif
@@ -801,7 +1032,7 @@ void calculate_non_standard_physics(void)
 #endif
 
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
-    int i; for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]){if(P[i].Type == 5 && P[i].do_gas_search_this_timestep){P[i].dt_since_last_gas_search = 0;}}
+    int i; for (int i : ActiveParticleList){if(P[i].Type == 5 && P[i].do_gas_search_this_timestep){P[i].dt_since_last_gas_search = 0;}}
 #endif
 
 }
@@ -840,6 +1071,31 @@ void execute_resubmit_command(void)
  * function will drift to this moment, generate an output, and then
  * resume the drift.
  */
+#ifdef SINK_TRIGGERED_FINE_OUTPUT
+/* Diagnostic branch runs: once the first sink exists, re-anchor the snapshot grid to that moment
+   and refine it by SINK_TRIGGERED_FINE_OUTPUT, then stop after SINK_TRIGGERED_FINE_OUTPUT_COUNT
+   snapshots. Output scheduling never feeds back into ti_next_kick_global -- the loop below only
+   drifts to the output time and writes -- so this changes what is written, not what is integrated.
+
+   State is file-scope rather than in All: restart files are a raw byte dump of that struct with no
+   version guard (file_io/restart.cc:155), so a field added there would make restart files written
+   by an unpatched build unreadable. The cost is that the counter resets if this run is itself
+   restarted; acceptable for a one-shot diagnostic. */
+#if !defined(SINK_TRIGGERED_FINE_OUTPUT_COUNT)
+#define SINK_TRIGGERED_FINE_OUTPUT_COUNT (300)
+#endif
+static int FineOutputActive = 0, FineOutputCount = 0;
+
+static int fine_output_sink_exists(void)
+{
+    int i, n_local = 0, n_global = 0;
+    for(i = 0; i < NumPart; i++) {if(P[i].Type == 5) {n_local++;}}
+    MPI_Allreduce(&n_local, &n_global, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
+    return n_global > 0;
+}
+#endif
+
+
 void find_next_sync_point_and_drift(void)
 {
   int n, i, prev;
@@ -875,6 +1131,24 @@ void find_next_sync_point_and_drift(void)
 
   MPI_Allreduce(&ti_next_kick, &ti_next_kick_global, 1, MPI_TYPE_TIME, MPI_MIN, MPI_COMM_WORLD);
 
+#ifdef SINK_TRIGGERED_FINE_OUTPUT
+  if(!FineOutputActive && fine_output_sink_exists())
+    {
+      All.TimeBetSnapshot /= (double) SINK_TRIGGERED_FINE_OUTPUT;
+      All.TimeOfFirstSnapshot = All.Time;  /* anchor the fine grid at formation, so the first fine
+                                              snapshot is written at this sync point */
+      All.Ti_nextoutput = find_next_outputtime(All.Ti_Current);
+      FineOutputActive = 1;
+      if(ThisTask == 0)
+        {
+          printf("SINK_TRIGGERED_FINE_OUTPUT: first sink present at Time=%g. TimeBetSnapshot -> %g; "
+                 "stopping after %d snapshots.\n", All.Time, All.TimeBetSnapshot,
+                 (int) SINK_TRIGGERED_FINE_OUTPUT_COUNT);
+          fflush(stdout);
+        }
+    }
+#endif
+
   while(ti_next_kick_global >= All.Ti_nextoutput && All.Ti_nextoutput >= 0)
     {
         All.Ti_Current = All.Ti_nextoutput;
@@ -895,6 +1169,19 @@ void find_next_sync_point_and_drift(void)
 #endif
 
         savepositions(All.SnapshotFileCount++);	/* write snapshot file */
+#ifdef SINK_TRIGGERED_FINE_OUTPUT
+        if(FineOutputActive && ++FineOutputCount >= SINK_TRIGGERED_FINE_OUTPUT_COUNT)
+          {
+            if(ThisTask == 0)
+              {
+                printf("SINK_TRIGGERED_FINE_OUTPUT: wrote %d post-formation snapshots at Time=%g. "
+                       "Stopping.\n", FineOutputCount, All.Time);
+                fflush(stdout);
+              }
+            /* every rank is inside this loop together, so the collective finalize is safe */
+            endrun(0);
+          }
+#endif
         All.Ti_nextoutput = find_next_outputtime(All.Ti_nextoutput + 1);
     }
 
@@ -962,28 +1249,17 @@ void find_next_sync_point_and_drift(void)
 
 void make_list_of_active_particles(void)
 {
-    int i, n, prev;
-    /* make a link list with the particles in the active time bins */
-    FirstActiveParticle = -1;
-    ActiveParticleNumber = 0;
-
-    for(n = 0, prev = -1; n < TIMEBINS; n++)
+    ActiveParticleList.clear();
+    for(int n = 0; n < TIMEBINS; n++)
     {
         if(TimeBinActive[n])
         {
-            for(i = FirstInTimeBin[n]; i >= 0; i = NextInTimeBin[i])
+            for(int i = FirstInTimeBin[n]; i >= 0; i = NextInTimeBin[i])
             {
-                if(P[i].Mass <= 0) {continue;}
-                if(prev == -1) {FirstActiveParticle = i;}
-                if(prev >= 0) {NextActiveParticle[prev] = i;}
-                prev = i;
-                ActiveParticleList[ActiveParticleNumber] = i;
-                ActiveParticleNumber++;
+                if(P[i].Mass > 0) {ActiveParticleList.push_back(i);}
             }
         }
     }
-
-    if(prev >= 0) {NextActiveParticle[prev] = -1;}
 }
 
 
@@ -1245,6 +1521,8 @@ void write_cpu_log(void)
 
   MPI_Reduce(CPU_Step, max_CPU_Step, CPU_PARTS, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
   MPI_Reduce(CPU_Step, avg_CPU_Step, CPU_PARTS, MPI_DOUBLE, MPI_SUM, 0, MPI_COMM_WORLD);
+  double maint_loc[3] = {TreeMaintTime_SwapPointers, TreeMaintTime_Rearrange, (double) TreeMaintCount_SwapPointers}, maint_max[3];
+  MPI_Reduce(maint_loc, maint_max, 3, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD); /* rank-local work: report the worst rank */
 
   if(ThisTask == 0)
     {
@@ -1293,6 +1571,7 @@ void write_cpu_log(void)
     {
       fprintf(FdCPU, "Step %lld, Time: %.16g, CPUs: %d\n",(long long) All.NumCurrentTiStep, All.Time, NTask);
       fprintf(FdCPU, "Nactive=%lld, Imbal(Max/Mean)=%g \n", (long long) GlobNumForceUpdate, (max_CPU_Step[0]/(MIN_REAL_NUMBER + avg_CPU_Step[0])-1.)*NTask+1.);
+      fprintf(FdCPU, "TreeOps: build=%lld refresh=%lld decomp=%lld light=%lld defer=%lld escalate=%lld rearrange=%lld condemned_walk=%lld swap_s=%.2f rearr_s=%.2f swaps=%lld\n", TreeOpsCount[TREEOPS_BUILD], TreeOpsCount[TREEOPS_REFRESH], TreeOpsCount[TREEOPS_DECOMP], TreeOpsCount[TREEOPS_DECOMP_LIGHT], TreeOpsCount[TREEOPS_DEFER], TreeOpsCount[TREEOPS_ESCALATE], TreeOpsCount[TREEOPS_REARRANGE], TreeOpsCount[TREEOPS_CONDEMNED_WALK], maint_max[0], maint_max[1], (long long) maint_max[2]);
       fprintf(FdCPU,
 	      "total         %10.2f  %5.1f%%\n"
 	      "tree+gravity  %10.2f  %5.1f%%\n"

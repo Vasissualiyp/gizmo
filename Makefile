@@ -69,6 +69,7 @@ HG_REPO := $(shell git config --get remote.origin.url)
 HG_BRANCH := $(shell git rev-parse --abbrev-ref HEAD 2>/dev/null)
 BUILDINFO = "Build on $(HOSTNAME) by $(USER) from $(HG_BRANCH):$(HG_COMMIT) at $(HG_REPO)"
 OPT += -DBUILDINFO='$(BUILDINFO)'
+OPT += -DGIZMO_SOURCE_DIR='"$(CURDIR)/"'
 
 
 # initialize some default flags -- these will all get re-written below
@@ -79,19 +80,26 @@ OPTIMIZE = -Wall  -g   # optimization and warning flags (default)
 MPICHLIB = -lmpich	# mpi library (arbitrary default, set for machine below)
 CHIMESINCL = # default to empty, will only be used below if called
 CHIMESLIBS = # default to empty, will only be used below if called
-
+HYPRE_INCL = # hypre library for AMG-preconditioned solver in MG gradient correction
+HYPRE_LIBS = # hypre library for AMG-preconditioned solver in MG gradient correction
 
 
 
 ## read the systype information to use the blocks below for different machines
+## precedence: environment SYSTYPE overrides; otherwise ~/.gizmo is checked before Makefile.systype
+HOME_GIZMO := $(wildcard $(HOME)/.gizmo)
 ifdef SYSTYPE
-SYSTYPE := "$(SYSTYPE)"
--include Makefile.systype
+SYSTYPE := "$(patsubst "%",%,$(SYSTYPE))"
+else ifneq ($(HOME_GIZMO),)
+include $(HOME_GIZMO)
+SYSTYPE := "$(patsubst "%",%,$(SYSTYPE))"
 else
 include Makefile.systype
 endif
 
-ifeq ($(wildcard Makefile.systype), Makefile.systype)
+ifneq ($(HOME_GIZMO),)
+INCL = $(HOME_GIZMO)
+else ifeq ($(wildcard Makefile.systype), Makefile.systype)
 INCL = Makefile.systype
 else
 INCL =
@@ -114,6 +122,11 @@ endif
 ifeq (NEED_HEALPIX,$(findstring NEED_HEALPIX,$(CONFIGVARS)))
 HEALPIXINCL =
 HEALPIXLIBS =
+endif
+ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+HYPRE_VERSION := $(shell ls /opt/homebrew/Cellar/hypre/ 2>/dev/null | sort -V | tail -n 1)
+HYPRE_INCL = -I/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/include/
+HYPRE_LIBS = -L/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/lib/ -lHYPRE
 endif
 MKL_INCL = -I$(TACC_MKL_INC)
 MKL_LIBS = -L$(TACC_MKL_LIB) -mkl=sequential
@@ -192,6 +205,11 @@ OPTIMIZE = -O2 -xCORE-AVX2
 ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
 OPTIMIZE += -qopenmp
 endif
+ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+HYPRE_VERSION := $(shell ls /opt/homebrew/Cellar/hypre/ 2>/dev/null | sort -V | tail -n 1)
+HYPRE_INCL = -I/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/include/
+HYPRE_LIBS = -L/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/lib/ -lHYPRE
+endif
 MKL_INCL = -I$(CPATH)
 MKL_LIBS = -L$(LIBRARY_PATH) -mkl=sequential
 GSL_INCL = -I$(CPATH)
@@ -266,23 +284,40 @@ endif
 # that the specific GSL and HDF5 versions are hardcoded here...
 ifeq ($(SYSTYPE),"MacBookCellar")
 CC       =  mpicc
-CXX      =  mpicxx -std=c++11
+CXX      =  mpicxx -std=c++17
 FC       =  $(CC) #mpifort  ## change this to "mpifort" for packages requiring linking secondary fortran code, currently -only- the helmholtz eos modules do this, so I leave it un-linked for now to save people the compiler headaches
-OPTIMIZE = -O1 -funroll-loops
-OPTIMIZE += -g -Wall # compiler warnings
+OPTIMIZE = -O3 -funroll-loops -ffast-math -march=native -flto 
+OPTIMIZE += -Wno-unused-command-line-argument ## -g -Wall # compiler warnings
 ifeq (CHIMES,$(findstring CHIMES,$(CONFIGVARS)))
-CXX     = mpic++
+#CXX     = mpic++
 CHIMESINCL = -I/usr/local/include/sundials
 CHIMESLIBS = -L/usr/local/lib -lsundials_cvode -lsundials_nvecserial
 endif
+ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
+OPTIMIZE += -Xpreprocessor -fopenmp -I/opt/homebrew/opt/libomp/include
+OPTIMIZE += -L/opt/homebrew/opt/libomp/lib -lomp
+endif
+ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifneq (MHD_MODIFIED_GRADIENT_CG_ONLY,$(findstring MHD_MODIFIED_GRADIENT_CG_ONLY,$(CONFIGVARS)))
+HYPRE_VERSION := $(shell ls /opt/homebrew/Cellar/hypre/ 2>/dev/null | sort -V | tail -n 1)
+HYPRE_INCL = -I/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/include/
+HYPRE_LIBS = -L/opt/homebrew/Cellar/hypre/$(HYPRE_VERSION)/lib/ -lHYPRE
+endif
+endif
+ifeq (MHD_MODIFIED_GRADIENT_USE_PARDISO,$(findstring MHD_MODIFIED_GRADIENT_USE_PARDISO,$(CONFIGVARS)))
+MKL_INCL = -I$(MKLROOT)/include
+MKL_LIBS = -L$(MKLROOT)/lib -lmkl_intel_lp64 -lmkl_sequential -lmkl_core -lpthread -lm -ldl
+else
 MKL_INCL = #
 MKL_LIBS = #
+endif
 GSL_INCL = -I/opt/homebrew/Cellar/gsl/2.8/include #-I$(PORTINCLUDE)
 GSL_LIBS = -L/opt/homebrew/Cellar/gsl/2.8/lib #-L$(PORTLIB)
-FFTW_INCL= -I/usr/local/include
-FFTW_LIBS= -L/usr/local/lib
-HDF5INCL = -I/opt/homebrew/Cellar/hdf5/1.14.6/include -DH5_USE_16_API  #-I$(PORTINCLUDE) -DH5_USE_16_API
-HDF5LIB  = -L/opt/homebrew/Cellar/hdf5/1.14.6/lib -lhdf5 -lz  #-L$(PORTLIB)
+FFTW_INCL= -I/opt/homebrew/Cellar/fftw/3.3.10_3/include
+FFTW_LIBS= -L/opt/homebrew/Cellar/fftw/3.3.10_3/lib
+HDF5_VERSION := $(shell ls /opt/homebrew/Cellar/hdf5/ 2>/dev/null | sort -V | tail -n 1)
+HDF5INCL = -I/opt/homebrew/Cellar/hdf5/$(HDF5_VERSION)/include -DH5_USE_16_API  #-I$(PORTINCLUDE) -DH5_USE_16_API
+HDF5LIB  = -L/opt/homebrew/Cellar/hdf5/$(HDF5_VERSION)/lib -lhdf5 -lz  #-L$(PORTLIB)
 MPICHLIB = #
 OPT     += -DDISABLE_ALIGNED_ALLOC -DCHIMES_USE_DOUBLE_PRECISION #
 endif
@@ -295,6 +330,9 @@ FC       =  $(CC)
 OPTIMIZE = -g -fcommon -O1 -funroll-loops -finline-functions -funswitch-loops -fpredictive-commoning -fgcse-after-reload -fipa-cp-clone  ## optimizations for gcc compilers (1/2)
 OPTIMIZE += -ftree-loop-distribute-patterns -fvect-cost-model -ftree-partial-pre   ## optimizations for gcc compilers (2/2)
 OPTIMIZE += -g -Wall # compiler warnings
+ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
+OPTIMIZE += -fopenmp
+endif
 ifeq (CHIMES,$(findstring CHIMES,$(CONFIGVARS)))
 CXX     = mpic++
 CHIMESINCL = -I/usr/include/sundials
@@ -325,14 +363,184 @@ ifeq (SOFTDOUBLEDOUBLE,$(findstring SOFTDOUBLEDOUBLE,$(OPT)))
 CC       =   mpicxx
 endif
 FC      = mpifort
-OPTIMIZE =  -O2 -g -Wall
+OPTIMIZE =  -O3 -ffast-math -funroll-loops -march=native -g -Wall
+ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
+OPTIMIZE += -fopenmp
+endif
 GSL_INCL = -I$(GSL_BASE)/include
 GSL_LIBS = -L$(GSL_BASE)/lib -Xlinker -R -Xlinker $(GSL_BASE) -lgsl -lgslcblas
+FFTW3_BASE= /mnt/sw/nix/store/bjzkf3pwcw0gy54db19kd4rl0xdiq98s-fftw-3.3.10/.
 FFTW_INCL= -I$(FFTW3_BASE)/include
 FFTW_LIBS= -L$(FFTW3_BASE)/lib -Xlinker -R -Xlinker $(FFTW3_BASE)/lib
 MPICHLIB =
 HDF5INCL = -I$(HDF5_BASE)/include -DH5_USE_16_API
 HDF5LIB  = -L$(HDF5_BASE)/lib -Xlinker -R -Xlinker $(HDF5_BASE)/lib -lhdf5 -lz
+endif
+
+
+#================================================================================
+# Rusty (Flatiron) -- per-architecture systypes.
+#
+# The generic "RUSTY" systype above uses -march=native, which requires building on
+# the same node type you run on. The three blocks below name the target explicitly
+# so you can build anywhere (e.g. a workstation or a login node) and still get a
+# correctly-tuned binary. Pick the one matching your --constraint.
+#
+#   systype         --constraint     cores/node   RAM/node   ISA target
+#   RUSTY_ROME      rome                128        1.0 TB    znver2  (Zen 2)
+#   RUSTY_GENOA     genoa                96        1.5 TB    znver4  (Zen 4)
+#   RUSTY_ICELAKE   icelake&cpu          64        1.0 TB    icelake-server
+#
+# ---- HOW TO RUN (measured 2026-08-02, 2.5e6-cell STARFORGE full-physics box) ----
+#
+# 1. USE PURE MPI. One rank per core, OPENMP off. Throughput in a fixed wall-clock
+#    budget, best config per node type:
+#        Genoa  96x1 -> 24 steps      (best absolute AND best per core)
+#        Rome  128x1 -> 16 steps
+#        Ice    64x1 -> 13 steps
+#    Per-core cost (core-seconds/step, lower better): Genoa ~500, Ice ~700, Rome ~1150.
+#    Genoa wins outright despite having fewer cores than Rome -- prefer it when free.
+#
+# 2. HYBRID MPI+OpenMP COSTS YOU THROUGHPUT. Relative to pure MPI on the same node:
+#    2 threads/rank is roughly free (Rome ties), then it degrades -- ~1.5-2x slower
+#    by 8 threads/rank, ~2.5x by 16. Only go hybrid if you need fewer ranks for
+#    memory reasons; 2 threads/rank is the sweet spot if you must.
+#
+# 3. IF YOU BUILD WITH OPENMP, YOU MUST PASS --cpu-bind=cores TO srun:
+#        srun --cpus-per-task=$SLURM_CPUS_PER_TASK --cpu-bind=cores ./GIZMO ...
+#    OMP_PROC_BIND/OMP_PLACES are honored only by OpenMP-enabled binaries. Without
+#    a per-task cpuset each rank's libgomp independently sees the whole node and
+#    pins its threads to the same first N cores, so only N cores of the node do any
+#    work while they are R-way oversubscribed. This cost us a factor of 10-49x and
+#    is completely silent -- pure-MPI builds are immune, so it masquerades as
+#    "OpenMP is slow". Always dump the placement and check it:
+#        srun --cpu-bind=cores --label grep Cpus_allowed_list /proc/self/status
+#    Every rank must report a DISTINCT cpu list.
+#
+# 4. SCALE MaxMemSize WITH RANK COUNT. It is per-MPI-process, so a value tuned for
+#    128 ranks starves an 8-rank run of the same problem. Budget ~75% of node RAM
+#    divided by ranks-per-node.
+#
+# 5. COMPILERS. Spread is small (~8% end to end): intel-oneapi 2025 was fastest on
+#    all three architectures, aocc/5.0 a close second, gcc/13-14 ~5-8% behind.
+#    Load a compiler and point the MPI wrappers at it:
+#        module load modules gcc/14.2.0 openmpi gsl hdf5/mpi-1.12.3
+#        export OMPI_CC=gcc   OMPI_CXX=g++         # gcc
+#        export OMPI_CC=clang OMPI_CXX=clang++     # aocc/5.0.0
+#        export OMPI_CC=icx   OMPI_CXX=icpx        # intel-oneapi-compilers/2025.0.4
+#    NOTE gcc/13.2.0 only resolves under modules/2.3-20240529; load that explicitly
+#    or the build and the run will link against different GSL and fail at startup.
+#    NOTE icpx at -O2 and above miscompiled the H2 rotational partition sum into an
+#    infinite loop (fixed in eos/hydrogen_molecule.cc). If you use the Intel
+#    compiler, sanity-check that a run actually advances past the first few steps.
+#
+# 6. EXTRA FLAGS. Append with OPT_EXTRA, e.g.
+#        make SYSTYPE='"RUSTY_GENOA"' OPT_EXTRA="-flto"
+#    Later flags win over earlier ones, so this also un-sets defaults:
+#        OPT_EXTRA="-O2"                  # drop to -O2
+#        OPT_EXTRA="-fno-fast-math"       # disable fast-math entirely
+#        OPT_EXTRA="-fno-finite-math-only" # keep fast-math but restore NaN/Inf semantics
+#        OPT_EXTRA="-mprefer-vector-width=256"  # avoid AVX-512 downclocking
+#================================================================================
+
+#----------------------------
+# Rusty AMD Rome (EPYC, Zen 2) -- 128 cores/node, 1 TB. Run: --constraint=rome, 128x1.
+ifeq ($(SYSTYPE),"RUSTY_ROME")
+CC       =   mpicc
+CXX      =   mpicxx
+ifeq (SOFTDOUBLEDOUBLE,$(findstring SOFTDOUBLEDOUBLE,$(OPT)))
+CC       =   mpicxx
+endif
+FC       =   mpifort
+OPTIMIZE =  -O3 -ffast-math -funroll-loops -march=znver2 -mtune=znver2 -g -Wall $(OPT_EXTRA)
+ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
+OPTIMIZE += -fopenmp   # remember --cpu-bind=cores on srun (see note 3 above)
+endif
+GSL_INCL = -I$(GSL_BASE)/include
+GSL_LIBS = -L$(GSL_BASE)/lib -Xlinker -R -Xlinker $(GSL_BASE) -lgsl -lgslcblas
+FFTW3_BASE= /mnt/sw/nix/store/bjzkf3pwcw0gy54db19kd4rl0xdiq98s-fftw-3.3.10/.
+FFTW_INCL= -I$(FFTW3_BASE)/include
+FFTW_LIBS= -L$(FFTW3_BASE)/lib -Xlinker -R -Xlinker $(FFTW3_BASE)/lib
+MPICHLIB =
+HDF5INCL = -I$(HDF5_BASE)/include -DH5_USE_16_API
+HDF5LIB  = -L$(HDF5_BASE)/lib -Xlinker -R -Xlinker $(HDF5_BASE)/lib -lhdf5 -lz
+endif
+
+
+#----------------------------
+# Rusty AMD Genoa (EPYC, Zen 4) -- 96 cores/node, 1.5 TB. Run: --constraint=genoa, 96x1.
+# FASTEST OF THE THREE, both in absolute throughput and per core. Prefer this.
+# Genoa has AVX-512; if a kernel turns out to be downclock-limited, compare
+# OPT_EXTRA="-mprefer-vector-width=256".
+ifeq ($(SYSTYPE),"RUSTY_GENOA")
+CC       =   mpicc
+CXX      =   mpicxx
+ifeq (SOFTDOUBLEDOUBLE,$(findstring SOFTDOUBLEDOUBLE,$(OPT)))
+CC       =   mpicxx
+endif
+FC       =   mpifort
+OPTIMIZE =  -O3 -ffast-math -funroll-loops -march=znver4 -mtune=znver4 -g -Wall $(OPT_EXTRA)
+ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
+OPTIMIZE += -fopenmp   # remember --cpu-bind=cores on srun (see note 3 above)
+endif
+GSL_INCL = -I$(GSL_BASE)/include
+GSL_LIBS = -L$(GSL_BASE)/lib -Xlinker -R -Xlinker $(GSL_BASE) -lgsl -lgslcblas
+FFTW3_BASE= /mnt/sw/nix/store/bjzkf3pwcw0gy54db19kd4rl0xdiq98s-fftw-3.3.10/.
+FFTW_INCL= -I$(FFTW3_BASE)/include
+FFTW_LIBS= -L$(FFTW3_BASE)/lib -Xlinker -R -Xlinker $(FFTW3_BASE)/lib
+MPICHLIB =
+HDF5INCL = -I$(HDF5_BASE)/include -DH5_USE_16_API
+HDF5LIB  = -L$(HDF5_BASE)/lib -Xlinker -R -Xlinker $(HDF5_BASE)/lib -lhdf5 -lz
+endif
+
+
+#----------------------------
+# Rusty Intel Ice Lake -- 64 cores/node, 1 TB. Run: --constraint='icelake&cpu', 64x1.
+# NB use 'icelake&cpu': the bare 'icelake' feature also matches the A100/H100 GPU
+# nodes, and a CPU-only job should not tie those up.
+ifeq ($(SYSTYPE),"RUSTY_ICELAKE")
+CC       =   mpicc
+CXX      =   mpicxx
+ifeq (SOFTDOUBLEDOUBLE,$(findstring SOFTDOUBLEDOUBLE,$(OPT)))
+CC       =   mpicxx
+endif
+FC       =   mpifort
+OPTIMIZE =  -O3 -ffast-math -funroll-loops -march=icelake-server -mtune=icelake-server -g -Wall $(OPT_EXTRA)
+ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
+OPTIMIZE += -fopenmp   # remember --cpu-bind=cores on srun (see note 3 above)
+endif
+GSL_INCL = -I$(GSL_BASE)/include
+GSL_LIBS = -L$(GSL_BASE)/lib -Xlinker -R -Xlinker $(GSL_BASE) -lgsl -lgslcblas
+FFTW3_BASE= /mnt/sw/nix/store/bjzkf3pwcw0gy54db19kd4rl0xdiq98s-fftw-3.3.10/.
+FFTW_INCL= -I$(FFTW3_BASE)/include
+FFTW_LIBS= -L$(FFTW3_BASE)/lib -Xlinker -R -Xlinker $(FFTW3_BASE)/lib
+MPICHLIB =
+HDF5INCL = -I$(HDF5_BASE)/include -DH5_USE_16_API
+HDF5LIB  = -L$(HDF5_BASE)/lib -Xlinker -R -Xlinker $(HDF5_BASE)/lib -lhdf5 -lz
+endif
+
+
+#----------------------------
+# PSMN (ENS Lyon) - Debian 13, e5-2667v4 nodes
+# Compiler: system OpenMPI 5.0.7 (Debian); libs: EasyBuild gompi-2025a toolchain
+ifeq ($(SYSTYPE),"PSMN")
+CC       =  mpicc
+CXX      =  mpicxx
+FC       =  mpifort
+OPTIMIZE = -O2 -g -Wall -funroll-loops -finline-functions
+ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
+OPTIMIZE += -fopenmp
+endif
+GSL_INCL = -I/usr/include
+GSL_LIBS = -L/usr/lib/x86_64-linux-gnu -Wl,-rpath,/usr/lib/x86_64-linux-gnu -lgsl -lgslcblas
+FFTW_BASE= /applis/PSMN/debian13/E5/software/FFTW.MPI/3.3.10-gompi-2025a
+FFTW_INCL= -I$(FFTW_BASE)/include
+FFTW_LIBS= -L$(FFTW_BASE)/lib -Wl,-rpath,$(FFTW_BASE)/lib
+HDF5_BASE= /applis/PSMN/debian13/E5/software/HDF5/1.14.6-gompi-2025a
+HDF5INCL = -I$(HDF5_BASE)/include -DH5_USE_16_API
+HDF5LIB  = -L$(HDF5_BASE)/lib -Wl,-rpath,$(HDF5_BASE)/lib -lhdf5 -lz
+MPICHLIB =
+OPT     += -DDISABLE_ALIGNED_ALLOC
 endif
 
 
@@ -351,7 +559,8 @@ endif
 CORE_OBJS =	core/main.o core/accel.o core/timestep.o core/init.o file_io/restart.o file_io/io.o \
 			core/predict.o declarations/global.o core/begrun.o core/run.o declarations/allvars.o \
 			file_io/read_ic.o domain/domain.o core/driftfac.o core/kicks.o mesh/ngb.o \
-			compile_time_info.o mesh/merge_split.o
+			compile_time_info.o mesh/merge_split.o \
+			core/transport_subcycle.o
 
 SYSTEM_OBJS =   system/system.o \
 				system/allocate.o \
@@ -371,11 +580,13 @@ GRAVITY_OBJS  = gravity/forcetree.o \
                 gravity/pm_nonperiodic.o \
                 gravity/longrange.o \
                 gravity/ags_rkern.o \
-                gravity/binary.o
+                gravity/binary.o \
+                gravity/star_direct_gravity.o
 
 HYDRO_OBJS = 	hydro/hydro_toplevel.o \
 				hydro/density.o \
 				hydro/gradients.o \
+				hydro/mg_gradient_correction.o \
 				turb/dynamic_diffusion.o \
 				turb/dynamic_diffusion_velocities.o \
 				turb/turb_driving.o \
@@ -431,9 +642,38 @@ MISC_OBJS = sidm/cbe_integrator.o \
 			sidm/dm_fuzzy.o \
 			sidm/sidm_core.o
 
+## hypre, for MHD_MODIFIED_GRADIENT's AMG-preconditioned solver. mg_gradient_correction.cc
+## includes HYPRE.h unless MHD_MODIFIED_GRADIENT_CG_ONLY or _USE_PARDISO is set, and there is no
+## hypre module on Rusty (nor one bundled with petsc), so fall back to a local build --
+## scripts/build_hypre_rusty.sh makes one. Only fills in when no systype block above already set a
+## path, so the homebrew prefixes stay intact. Gated on the same flags as the include: HYPRE_LIBS
+## goes on every link line, and Apple ld rejects -R, so an ungated fallback breaks every macOS build.
+ifeq (MHD_MODIFIED_GRADIENT,$(findstring MHD_MODIFIED_GRADIENT,$(CONFIGVARS)))
+ifeq (,$(findstring MHD_MODIFIED_GRADIENT_CG_ONLY,$(CONFIGVARS))$(findstring MHD_MODIFIED_GRADIENT_USE_PARDISO,$(CONFIGVARS)))
+ifeq ($(strip $(HYPRE_INCL)),)
+ifeq ($(strip $(HYPRE_PATH)),)
+HYPRE_PATH := $(HOME)/opt/hypre
+endif
+HYPRE_INCL = -I$(HYPRE_PATH)/include
+HYPRE_LIBS = -L$(HYPRE_PATH)/lib -L$(HYPRE_PATH)/lib64 -Xlinker -R -Xlinker $(HYPRE_PATH)/lib -Xlinker -R -Xlinker $(HYPRE_PATH)/lib64 -lHYPRE
+endif
+endif
+endif
+
 ## name of executable and optimizations
 EXEC   = GIZMO
 OPTIONS = $(OPTIMIZE) $(OPT)
+
+.DEFAULT_GOAL := $(EXEC)
+
+ifeq (JACO,$(findstring JACO,$(CONFIGVARS)))
+JACO_MODEL := $(strip $(shell grep '^\#define JACO' GIZMO_config.h | awk '{print $$3}'))
+ifeq ($(JACO_MODEL),)
+JACO_MODEL := wind_comparison
+endif
+JACO_GENERATED = cooling/jaco_eos.cc cooling/microphysics_func_jac.cc cooling/microphysics_func_jac.h cooling/jaco_interp.h
+EOSCOOL_OBJS += cooling/jaco.o cooling/jaco_eos.o cooling/microphysics_func_jac.o
+endif
 
 ## combine all the objects above
 OBJS  = $(CORE_OBJS) $(SYSTEM_OBJS) $(GRAVITY_OBJS) $(HYDRO_OBJS) \
@@ -459,6 +699,13 @@ INCL    += 	declarations/allvars.h \
 			cooling/cooling.h \
 			Makefile
 
+ifeq (JACO,$(findstring JACO,$(CONFIGVARS)))
+INCL += cooling/microphysics_func_jac.h cooling/jaco_interp.h
+JACO_PYTHON ?= python3
+$(JACO_GENERATED): $(CONFIG)
+	$(JACO_PYTHON) -m jaco.codegen.gizmo.gizmo $(JACO_MODEL) --language c --ext .cc --output-dir cooling
+endif
+
 
 ## now we add special cases dependent on compiler flags. normally we would
 ##  include the files always, and simply use the in-file compiler variables
@@ -479,6 +726,11 @@ OBJS    += eos/eos_interface.o
 INCL    += eos/helmholtz/helm_wrap.h
 FOBJS   += eos/helmholtz/helm_impl.o eos/helmholtz/helm_wrap.o
 FINCL   += eos/helmholtz/helm_const.dek eos/helmholtz/helm_implno.dek eos/helmholtz/helm_table_storage.dek eos/helmholtz/helm_vector_eos.dek
+endif
+
+ifeq (EOS_ANEOS,$(findstring EOS_ANEOS,$(CONFIGVARS)))
+OBJS    += eos/aneos.o
+INCL    += eos/aneos.h
 endif
 
 # chimes files are treated as special for now because they require special external libraries (e.g. sundials) that are otherwise not
@@ -584,9 +836,10 @@ GRACKLEINCL =
 GRACKLELIBS =
 endif
 
+
 # linking libraries (includes machine-dependent options above)
 CFLAGS = $(OPTIONS) $(GSL_INCL) $(FFTW_INCL) $(HDF5INCL) \
-         $(GRACKLEINCL) $(CHIMESINCL) $(HEALPIXINCL) $(KETJU_INCL) $(SUNDIALS_INCL)
+         $(GRACKLEINCL) $(CHIMESINCL) $(HEALPIXINCL) $(KETJU_INCL) $(SUNDIALS_INCL) $(HYPRE_INCL) $(MKL_INCL)
 
 
 
@@ -612,7 +865,7 @@ endif
 
 
 LIBS = $(HDF5LIB) -g $(MPICHLIB) $(GSL_LIBS) -lgsl -lgslcblas \
-	   $(FFTW_LIBS) $(FFTW_LIBNAMES) -lm $(GRACKLELIBS) $(CHIMESLIBS) $(HEALPIXLIBS) $(KETJU_LIBS) $(SUNDIALS_LIBS)
+	   $(FFTW_LIBS) $(FFTW_LIBNAMES) -lm $(GRACKLELIBS) $(CHIMESLIBS) $(HEALPIXLIBS) $(KETJU_LIBS) $(SUNDIALS_LIBS) $(HYPRE_LIBS) $(MKL_LIBS)
 
 FFLAGS = $(FOPTIONS) -Icooling/chemcool
 
@@ -644,5 +897,6 @@ clean:
 # otherwise objects left over from a CHEMCOOL_CXX build survive a clean
 # made with the flag off (harmless -- they are not linked -- but stale).
 	rm -f cooling/chemcool/cxx/*.o *.oo *.c~ compile_time_info.cc GIZMO_config.h
+	rm -f cooling/jaco_eos.cc cooling/microphysics_func_jac.cc cooling/microphysics_func_jac.h cooling/jaco_interp.h
 
 

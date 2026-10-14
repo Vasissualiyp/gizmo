@@ -32,23 +32,23 @@ struct Subfind_DensityOtherPropsEval_data_out *Subfind_DensityOtherPropsEval_Dat
 */
 /*!   -- this subroutine is not openmp parallelized at present, so there's not any issue about conflicts over shared memory. if you make it openmp, make sure you protect the writes to shared memory here! -- */
 /*! first define a short structure needed to pass in the group info here */
-static struct Subfind_DensityOtherPropsEval_data_in {MyDouble Pos[3]; MyOutputFloat R200; int NodeList[NODELISTLENGTH]; /* all needed for any version */} *Subfind_DensityOtherPropsEval_DataIn, *Subfind_DensityOtherPropsEval_DataGet;
+static struct Subfind_DensityOtherPropsEval_data_in {Vec3<MyDouble> Pos; MyOutputFloat R200; int NodeList[NODELISTLENGTH]; /* all needed for any version */} *Subfind_DensityOtherPropsEval_DataIn, *Subfind_DensityOtherPropsEval_DataGet;
 /*! now the main routine */
 int Subfind_DensityOtherProps_evaluate(int target, int mode, int *nexport, int *nsend_local)
 {
     int ngb,n,j,k,startnode,listindex=0; double *subhalo_pos, Hsearch; struct Subfind_DensityOtherPropsEval_data_out out; memset(&out, 0, sizeof(struct Subfind_DensityOtherPropsEval_data_out));
-    if(mode == 0) {subhalo_pos=Group[target].Pos; Hsearch=R200[target];} else {subhalo_pos=Subfind_DensityOtherPropsEval_DataGet[target].Pos; Hsearch=Subfind_DensityOtherPropsEval_DataGet[target].R200;}
+    if(mode == 0) {subhalo_pos=Group[target].Pos.data_ptr(); Hsearch=R200[target];} else {subhalo_pos=Subfind_DensityOtherPropsEval_DataGet[target].Pos.data_ptr(); Hsearch=Subfind_DensityOtherPropsEval_DataGet[target].R200;}
     if(mode == 0) {startnode = All.MaxPart;} else {startnode = Subfind_DensityOtherPropsEval_DataGet[target].NodeList[0]; startnode = Nodes[startnode].u.d.nextnode;}
     while(startnode >= 0) {while(startnode >= 0) {
       ngb = ngb_treefind_variable_targeted(subhalo_pos, Hsearch, target, &startnode, mode, nexport, nsend_local, 63);
       if(ngb < 0) {return -2;}
       for(n = 0; n < ngb; n++)
         { j = Ngblist[n];
-            double dp[3]; for(k=0;k<3;k++) {dp[k]=P[j].Pos[k]-subhalo_pos[k];} NEAREST_XYZ(dp[0],dp[1],dp[2],-1); double r2=dp[0]*dp[0]+dp[1]*dp[1]+dp[2]*dp[2]; if(r2>Hsearch*Hsearch) continue; /* position offset */
+            Vec3<double> dr; for(k=0;k<3;k++) {dr[k]=P[j].Pos[k]-subhalo_pos[k];} nearest_xyz(dr,-1); double r2=dr.norm_sq(); if(r2>Hsearch*Hsearch) continue; /* position offset */
             out.M200+=P[j].Mass;
             
 #ifdef SUBFIND_ADDIO_VELDISP
-            for(k=0;k<3;k++) {double dv=P[j].Vel[k]/All.cf_atime+All.cf_hubble_a*All.cf_atime*dp[k]; out.V200[k]+=P[j].Mass*dv; out.Disp200+=P[j].Mass*dv*dv;}
+            for(k=0;k<3;k++) {double dv=P[j].Vel[k]/All.cf_atime+All.cf_hubble_a*All.cf_atime*dr[k]; out.V200[k]+=P[j].Mass*dv; out.Disp200+=P[j].Mass*dv*dv;}
 #endif
 #ifdef SUBFIND_ADDIO_BARYONS
             if(P[j].Type==0)
@@ -107,7 +107,7 @@ void Subfind_DensityOtherProps_Loop(void)
     double t0, t1, t2, t3, rguess, overdensity, Deltas[SUBFIND_ADDIO_NUMOVERDEN], z;
 
     /* allocate buffers to arrange communication */
-    Ngblist = (int *) mymalloc("Ngblist", NumPart * sizeof(int));
+    Ngblist.resize(NumPart);
     Left = (MyFloat *) mymalloc("Left", sizeof(MyFloat) * Ngroups);
     Right = (MyFloat *) mymalloc("Right", sizeof(MyFloat) * Ngroups);
     R200 = (MyOutputFloat *) mymalloc("R200", sizeof(MyOutputFloat) * Ngroups);
@@ -477,7 +477,7 @@ void Subfind_DensityOtherProps_Loop(void)
   myfree(Right);
   myfree(Left);
 
-  myfree(Ngblist);
+  
 }
 
 
@@ -489,7 +489,7 @@ int Subfind_RvirMvir_evaluate(int target, int mode, int *nexport, int *nsend_loc
 {
   int startnode, listindex = 0;
   double h, mass, massret;
-  MyDouble *pos;
+  Vec3<double> pos;
 
 
   if(mode == 0)
@@ -545,8 +545,7 @@ int Subfind_RvirMvir_evaluate(int target, int mode, int *nexport, int *nsend_loc
 }
 
 
-double subfind_ovderdens_treefind(MyDouble searchcenter[3], MyFloat rkern, int target, int *startnode,
-				  int mode, int *nexport, int *nsend_local)
+double subfind_ovderdens_treefind(Vec3<double>& searchcenter, MyFloat rkern, int target, int *startnode, int mode, int *nexport, int *nsend_local)
 {
   int no, p, task, nexport_save;
   struct NODE *current;

@@ -98,11 +98,11 @@ struct Conserved_var_Riemann
 {
     MyDouble rho;
     MyDouble p;
-    MyDouble v[3];
+    Vec3<MyDouble> v;
     MyDouble u;
     MyDouble cs;
 #ifdef MAGNETIC
-    MyDouble B[3];
+    Vec3<MyDouble> B;
     MyDouble B_normal_corrected;
 #ifdef DIVBCLEANING_DEDNER
     MyDouble phi;
@@ -120,9 +120,9 @@ struct Conserved_var_Riemann
 
 struct kernel_hydra
 {
-    double dp[3];
+    Vec3<double> dp;
     double r, vsig, sound_i, sound_j;
-    double dv[3], vdotr2;
+    Vec3<double> dv; double vdotr2;
     double wk_i, wk_j, dwk_i, dwk_j;
     double h_i, h_j, dwk_ij, rho_ij_inv;
     double spec_egy_u_i;
@@ -160,10 +160,10 @@ struct kernel_hydra
 struct INPUT_STRUCT_NAME
 {
     /* basic hydro variables */
-    MyDouble Pos[3];
-    MyFloat Vel[3];
+    Vec3<MyDouble> Pos;
+    Vec3<MyFloat> Vel;
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
-    MyFloat ParticleVel[3];
+    Vec3<MyFloat> ParticleVel;
 #endif
     MyFloat KernelRadius;
     MyFloat Mass;
@@ -183,33 +183,33 @@ struct INPUT_STRUCT_NAME
     /* matrix of the conserved variable gradients: rho, u, vx, vy, vz */
     struct
     {
-        MyDouble Density[3];
-        MyDouble Pressure[3];
-        MyDouble Velocity[3][3];
+        Vec3<MyDouble> Density;
+        Vec3<MyDouble> Pressure;
+        Mat3<MyDouble> Velocity;
 #ifdef MAGNETIC
-        MyDouble B[3][3];
+        Mat3<MyDouble> B;
 #ifdef DIVBCLEANING_DEDNER
-        MyDouble Phi[3];
+        Vec3<MyDouble> Phi;
 #endif
 #endif
 #if defined(TURB_DIFF_METALS) && !defined(TURB_DIFF_METALS_LOWORDER)
-        MyDouble Metallicity[NUM_METAL_SPECIES][3];
+        Vec3<MyDouble> Metallicity[NUM_METAL_SPECIES];
 #endif
 #ifdef DOGRAD_INTERNAL_ENERGY
-        MyDouble InternalEnergy[3];
+        Vec3<MyDouble> InternalEnergy;
 #endif
 #ifdef DOGRAD_SOUNDSPEED
-        MyDouble SoundSpeed[3];
+        Vec3<MyDouble> SoundSpeed;
 #endif
 #if defined(RT_SOLVER_EXPLICIT) && defined(RT_COMPGRAD_EDDINGTON_TENSOR)
-        MyDouble Rad_E_gamma_ET[N_RT_FREQ_BINS][3];
+        Vec3<MyDouble> Rad_E_gamma_ET[N_RT_FREQ_BINS];
 #endif
 #if defined(RT_M1_SECONDORDER) && defined(RT_EVOLVE_FLUX)
         MyFloat Rad_E_gamma_Grad[N_RT_FREQ_BINS][3];
         MyFloat Rad_Flux_Grad[N_RT_FREQ_BINS][3][3];
 #endif
     } Gradients;
-    MyDouble NV_T[3][3];
+    SymmetricTensor2<MyDouble> NV_T;
     
 #if defined(KERNEL_CRK_FACES)
     MyFloat Tensor_CRK_Face_Corrections[16];
@@ -231,10 +231,10 @@ struct INPUT_STRUCT_NAME
     MyDouble Rad_Kappa[N_RT_FREQ_BINS];
     MyDouble RT_DiffusionCoeff[N_RT_FREQ_BINS];
 #if defined(RT_EVOLVE_FLUX) || defined(HYDRO_SPH)
-    MyDouble ET[N_RT_FREQ_BINS][6];
+    SymmetricTensor2<MyDouble> ET[N_RT_FREQ_BINS];
 #endif
 #ifdef RT_EVOLVE_FLUX
-    MyDouble Rad_Flux[N_RT_FREQ_BINS][3];
+    Vec3<MyDouble> Rad_Flux[N_RT_FREQ_BINS];
 #endif
 #ifdef RT_INFRARED
     MyDouble Radiation_Temperature;
@@ -264,19 +264,22 @@ struct INPUT_STRUCT_NAME
 #endif
     
 #ifdef MAGNETIC
-    MyFloat BPred[3];
+    Vec3<MyFloat> BPred;
 #if defined(SPH_TP12_ARTIFICIAL_RESISTIVITY)
     MyFloat Balpha;
 #endif
 #ifdef DIVBCLEANING_DEDNER
     MyFloat PhiPred;
 #endif
+#ifdef MHD_MODIFIED_GRADIENT
+    MyFloat MG_cgcoeff;
+#endif
 #endif // MAGNETIC //
     
 #ifdef COSMIC_RAY_FLUID
     MyDouble CosmicRayPressure[N_CR_PARTICLE_BINS];
     MyDouble CosmicRayDiffusionCoeff[N_CR_PARTICLE_BINS];
-    MyDouble CosmicRayFlux[N_CR_PARTICLE_BINS][3];
+    Vec3<MyDouble> CosmicRayFlux[N_CR_PARTICLE_BINS];
 #ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
     MyDouble CosmicRayAlfvenEnergy[N_CR_PARTICLE_BINS][2];
 #endif
@@ -289,8 +292,10 @@ struct INPUT_STRUCT_NAME
     MyDouble DelayTime;
 #endif
     
-#ifdef EOS_ELASTIC
+#if defined(EOS_ELASTIC) || defined(EOS_ANEOS)
     int CompositionType;
+#endif
+#ifdef EOS_ELASTIC
     MyFloat Elastic_Stress_Tensor[3][3];
 #endif
     
@@ -308,7 +313,7 @@ struct INPUT_STRUCT_NAME
 /* --------------------------------------------------------------------------------- */
 struct OUTPUT_STRUCT_NAME
 {
-    MyDouble Acc[3];
+    Vec3<MyDouble> Acc;
     //MyDouble dMomentum[3]; //manifest-indiv-timestep-debug//
     MyDouble DtInternalEnergy;
     //MyDouble dInternalEnergy; //manifest-indiv-timestep-debug//
@@ -322,7 +327,7 @@ struct OUTPUT_STRUCT_NAME
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
     MyDouble DtMass;
     MyDouble dMass;
-    MyDouble GravWorkTerm[3];
+    Vec3<MyDouble> GravWorkTerm;
 #endif
 
 #if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))
@@ -338,7 +343,7 @@ struct OUTPUT_STRUCT_NAME
     MyFloat Dt_Rad_E_gamma[N_RT_FREQ_BINS];
 #endif
 #if defined(RT_EVOLVE_FLUX)
-    MyFloat Dt_Rad_Flux[N_RT_FREQ_BINS][3];
+    Vec3<MyFloat> Dt_Rad_Flux[N_RT_FREQ_BINS];
 #endif
 #if defined(RT_INFRARED)
     MyFloat Dt_Rad_E_gamma_T_weighted_IR;
@@ -349,14 +354,14 @@ struct OUTPUT_STRUCT_NAME
 #endif
 
 #if defined(MAGNETIC)
-    MyDouble Face_Area[3];
-    MyFloat DtB[3];
+    Vec3<MyDouble> Face_Area;
+    Vec3<MyFloat> DtB;
     MyFloat divB;
 #if defined(DIVBCLEANING_DEDNER)
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME // mass-based phi-flux
     MyFloat DtPhi;
 #endif
-    MyFloat DtB_PhiCorr[3];
+    Vec3<MyFloat> DtB_PhiCorr;
 #endif
 #endif // MAGNETIC //
 
@@ -387,21 +392,18 @@ static inline void particle2in_hydra(struct INPUT_STRUCT_NAME *in, int i, int lo
 static inline void particle2in_hydra(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
 {
     int k;
-    for(k = 0; k < 3; k++)
-    {
-        in->Pos[k] = P[i].Pos[k];
-        in->Vel[k] = CellP[i].VelPred[k];
+    in->Pos = P[i].Pos;
+    in->Vel = CellP[i].VelPred;
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
-        in->ParticleVel[k] = CellP[i].ParticleVel[k];
+    in->ParticleVel = CellP[i].ParticleVel;
 #endif
-    }
     in->KernelRadius = P[i].KernelRadius;
     in->Mass = P[i].Mass;
     in->Density = CellP[i].Density;
     in->Pressure = CellP[i].Pressure;
     in->InternalEnergyPred = CellP[i].InternalEnergyPred;
-    in->SoundSpeed = Get_Gas_effective_soundspeed_i(i);
-    in->dt_hydrostep_i = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);
+    in->SoundSpeed = CellP[i].effective_soundspeed();
+    in->dt_hydrostep_i = get_particle_timestep_in_physical(i);
     in->ConditionNumber = CellP[i].ConditionNumber;
     in->FaceClosureError = CellP[i].FaceClosureError;
 #ifdef MHD_CONSTRAINED_GRADIENT
@@ -426,53 +428,49 @@ static inline void particle2in_hydra(struct INPUT_STRUCT_NAME *in, int i, int lo
     for(k=0;k<16;k++) {in->Tensor_CRK_Face_Corrections[k] = CellP[i].Tensor_CRK_Face_Corrections[k];}
 #endif
     
+    in->NV_T = CellP[i].NV_T;
+
     int j;
-    for(j=0;j<3;j++) {for(k=0;k<3;k++) {in->NV_T[j][k] = CellP[i].NV_T[j][k];}}
-    
-    
     /* matrix of the conserved variable gradients: rho, u, vx, vy, vz */
-    for(k=0;k<3;k++)
-    {
-        in->Gradients.Density[k] = CellP[i].Gradients.Density[k];
-        in->Gradients.Pressure[k] = CellP[i].Gradients.Pressure[k];
-        for(j=0;j<3;j++) {in->Gradients.Velocity[j][k] = CellP[i].Gradients.Velocity[j][k];}
+    in->Gradients.Density = CellP[i].Gradients.Density;
+    in->Gradients.Pressure = CellP[i].Gradients.Pressure;
+    in->Gradients.Velocity = CellP[i].Gradients.Velocity;
 #ifdef MAGNETIC
-        for(j=0;j<3;j++) {in->Gradients.B[j][k] = CellP[i].Gradients.B[j][k];}
+    in->Gradients.B = CellP[i].Gradients.B;
 #ifdef DIVBCLEANING_DEDNER
-        in->Gradients.Phi[k] = CellP[i].Gradients.Phi[k];
+    in->Gradients.Phi = CellP[i].Gradients.Phi;
 #endif
 #endif
 #if defined(TURB_DIFF_METALS) && !defined(TURB_DIFF_METALS_LOWORDER)
-        for(j=0;j<NUM_METAL_SPECIES;j++) {in->Gradients.Metallicity[j][k] = CellP[i].Gradients.Metallicity[j][k];}
+    for(j=0;j<NUM_METAL_SPECIES;j++) {in->Gradients.Metallicity[j] = CellP[i].Gradients.Metallicity[j];}
 #endif
 #ifdef DOGRAD_INTERNAL_ENERGY
-        in->Gradients.InternalEnergy[k] = CellP[i].Gradients.InternalEnergy[k];
+    in->Gradients.InternalEnergy = CellP[i].Gradients.InternalEnergy;
 #endif
 #ifdef DOGRAD_SOUNDSPEED
-        in->Gradients.SoundSpeed[k] = CellP[i].Gradients.SoundSpeed[k];
+    in->Gradients.SoundSpeed = CellP[i].Gradients.SoundSpeed;
 #endif
 #if defined(RT_SOLVER_EXPLICIT) && defined(RT_COMPGRAD_EDDINGTON_TENSOR)
-        for(j=0;j<N_RT_FREQ_BINS;j++) {in->Gradients.Rad_E_gamma_ET[j][k] = CellP[i].Gradients.Rad_E_gamma_ET[j][k];}
+    for(j=0;j<N_RT_FREQ_BINS;j++) {in->Gradients.Rad_E_gamma_ET[j] = CellP[i].Gradients.Rad_E_gamma_ET[j];}
 #endif
 #if defined(RT_M1_SECONDORDER) && defined(RT_EVOLVE_FLUX)
-        for(j=0;j<N_RT_FREQ_BINS;j++) {
-            in->Gradients.Rad_E_gamma_Grad[j][k] = CellP[i].Gradients.Rad_E_gamma_Grad[j][k];
-            int j_d; for(j_d=0;j_d<3;j_d++) {in->Gradients.Rad_Flux_Grad[j][j_d][k] = CellP[i].Gradients.Rad_Flux_Grad[j][j_d][k];}
-        }
-#endif
+    for(j=0;j<N_RT_FREQ_BINS;j++) {
+        int k_d; for(k_d=0;k_d<3;k_d++) {in->Gradients.Rad_E_gamma_Grad[j][k_d] = CellP[i].Gradients.Rad_E_gamma_Grad[j][k_d];}
+        int j_d; for(j_d=0;j_d<3;j_d++) {int k_d2; for(k_d2=0;k_d2<3;k_d2++) {in->Gradients.Rad_Flux_Grad[j][j_d][k_d2] = CellP[i].Gradients.Rad_Flux_Grad[j][j_d][k_d2];}}
     }
+#endif
     
 #ifdef RT_SOLVER_EXPLICIT
     for(k=0;k<N_RT_FREQ_BINS;k++)
     {
         in->Rad_E_gamma[k] = CellP[i].Rad_E_gamma_Pred[k];
         in->Rad_Kappa[k] = CellP[i].Rad_Kappa[k];
-        in->RT_DiffusionCoeff[k] = rt_diffusion_coefficient(i,k);
+        in->RT_DiffusionCoeff[k] = rt_diffusion_coefficient(i,k, CellP);
 #if defined(RT_EVOLVE_FLUX) || defined(HYDRO_SPH)
-        {int k_dir; for(k_dir=0;k_dir<6;k_dir++) in->ET[k][k_dir] = CellP[i].ET[k][k_dir];}
+        in->ET[k] = CellP[i].ET[k];
 #endif
 #ifdef RT_EVOLVE_FLUX
-        {int k_dir; for(k_dir=0;k_dir<3;k_dir++) in->Rad_Flux[k][k_dir] = CellP[i].Rad_Flux_Pred[k][k_dir];}
+        in->Rad_Flux[k] = CellP[i].Rad_Flux_Pred[k];
 #endif
 #if defined(RT_EVOLVE_INTENSITIES)
         {int k_dir; for(k_dir=0;k_dir<N_RT_INTENSITY_BINS;k_dir++) {in->Rad_Intensity_Pred[k][k_dir] = CellP[i].Rad_Intensity_Pred[k][k_dir];}}
@@ -486,7 +484,7 @@ static inline void particle2in_hydra(struct INPUT_STRUCT_NAME *in, int i, int lo
 #if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))
     for(k=0;k<NUM_METAL_SPECIES;k++) {in->Metallicity[k] = P[i].Metallicity[k];}
 #if defined(GALSF_ISMDUSTCHEM_MODEL)
-    for(k=NUM_METAL_SPECIES;k<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;k++) {in->Metallicity[k] = return_ismdustchem_species_of_interest_for_diffusion_and_yields(i,k,0);}
+    for(k=NUM_METAL_SPECIES;k<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;k++) {in->Metallicity[k] = return_ismdustchem_species_of_interest_for_diffusion_and_yields(i,k,0, CellP);}
 #endif
 #if defined(GALSF_RESOLVEDISM_METALS_INDIVIDUAL) || defined(GALSF_RESOLVEDISM_DUST)
     {int k_offset = NUM_METAL_SPECIES;
@@ -559,21 +557,24 @@ static inline void particle2in_hydra(struct INPUT_STRUCT_NAME *in, int i, int lo
 #endif
 
 #ifdef MAGNETIC
-    for(k = 0; k < 3; k++) {in->BPred[k] = Get_Gas_BField(i,k);}
+    in->BPred = CellP[i].Bfield();
 #if defined(SPH_TP12_ARTIFICIAL_RESISTIVITY)
     in->Balpha = CellP[i].Balpha;
 #endif
 #ifdef DIVBCLEANING_DEDNER
     in->PhiPred = Get_Gas_PhiField(i);
 #endif
+#ifdef MHD_MODIFIED_GRADIENT
+    in->MG_cgcoeff = CellP[i].MG_cgcoeff;
+#endif
 #endif // MAGNETIC //
 
 #ifdef COSMIC_RAY_FLUID
     for(j=0;j<N_CR_PARTICLE_BINS;j++)
     {
-        in->CosmicRayPressure[j] = Get_Gas_CosmicRayPressure(i,j);
+        in->CosmicRayPressure[j] = Get_Gas_CosmicRayPressure(i, j, CellP);
         in->CosmicRayDiffusionCoeff[j] = CellP[i].CosmicRayDiffusionCoeff[j];
-        for(k=0;k<3;k++) {in->CosmicRayFlux[j][k] = CellP[i].CosmicRayFluxPred[j][k];}
+        in->CosmicRayFlux[j] = CellP[i].CosmicRayFluxPred[j];
 #ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
         for(k=0;k<2;k++) {in->CosmicRayAlfvenEnergy[j][k] = CellP[i].CosmicRayAlfvenEnergyPred[j][k];}
 #endif
@@ -584,8 +585,10 @@ static inline void particle2in_hydra(struct INPUT_STRUCT_NAME *in, int i, int lo
     }
 #endif
 
-#ifdef EOS_ELASTIC
+#if defined(EOS_ELASTIC) || defined(EOS_ANEOS)
     in->CompositionType = CellP[i].CompositionType;
+#endif
+#ifdef EOS_ELASTIC
     {int k_v; for(k=0;k<3;k++) {for(k_v=0;k_v<3;k_v++) {in->Elastic_Stress_Tensor[k][k_v] = CellP[i].Elastic_Stress_Tensor_Pred[k][k_v];}}}
 #endif
 
@@ -609,18 +612,14 @@ static inline void out2particle_hydra(struct OUTPUT_STRUCT_NAME *out, int i, int
 {
     int k;
     /* these are zero-d out at beginning of hydro loop so should always be added */
-    for(k = 0; k < 3; k++)
-    {
-        CellP[i].HydroAccel[k] += out->Acc[k];
-        //CellP[i].dMomentum[k] += out->dMomentum[k]; //manifest-indiv-timestep-debug//
-    }
+    CellP[i].HydroAccel += out->Acc;
     CellP[i].DtInternalEnergy += out->DtInternalEnergy;
     //CellP[i].dInternalEnergy += out->dInternalEnergy; //manifest-indiv-timestep-debug//
 
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
     CellP[i].DtMass += out->DtMass;
     CellP[i].dMass += out->dMass;
-    for(k=0;k<3;k++) {CellP[i].GravWorkTerm[k] += out->GravWorkTerm[k];}
+    CellP[i].GravWorkTerm += out->GravWorkTerm;
 #endif
     if(CellP[i].MaxSignalVel < out->MaxSignalVel) {CellP[i].MaxSignalVel = out->MaxSignalVel;}
 #ifdef OUTPUT_SHOCK_MACH_NUMBER
@@ -643,7 +642,7 @@ static inline void out2particle_hydra(struct OUTPUT_STRUCT_NAME *out, int i, int
     for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[i].Dt_Rad_E_gamma[k] += out->Dt_Rad_E_gamma[k];}
 #endif
 #if defined(RT_EVOLVE_FLUX)
-    for(k=0;k<N_RT_FREQ_BINS;k++) {int k_dir; for(k_dir=0;k_dir<3;k_dir++) {CellP[i].Dt_Rad_Flux[k][k_dir] += out->Dt_Rad_Flux[k][k_dir];}}
+    for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[i].Dt_Rad_Flux[k] += out->Dt_Rad_Flux[k];}
 #endif
 #if defined(RT_INFRARED)
     CellP[i].Dt_Rad_E_gamma_T_weighted_IR += out->Dt_Rad_E_gamma_T_weighted_IR;
@@ -655,13 +654,13 @@ static inline void out2particle_hydra(struct OUTPUT_STRUCT_NAME *out, int i, int
 
 #if defined(MAGNETIC)
     /* can't just do DtB += out-> DtB, because for some hydro methods, the induction equation is solved in the density loop; need to simply add it here */
-    for(k=0;k<3;k++) {CellP[i].DtB[k] += out->DtB[k]; CellP[i].Face_Area[k] += out->Face_Area[k];}
+    CellP[i].DtB += out->DtB; CellP[i].Face_Area += out->Face_Area;
     CellP[i].divB += out->divB;
 #if defined(DIVBCLEANING_DEDNER)
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME // mass-based phi-flux
     CellP[i].DtPhi += out->DtPhi;
 #endif
-    for(k=0;k<3;k++) {CellP[i].DtB_PhiCorr[k] += out->DtB_PhiCorr[k];}
+    CellP[i].DtB_PhiCorr += out->DtB_PhiCorr;
 #endif // Dedner //
 #endif // MAGNETIC //
 
@@ -701,32 +700,34 @@ void hydro_final_operations_and_cleanup(void)
     /* Diffusion unpack breakdown accumulators (line 867 clamp diagnostic). */
     double dMZ_pair_loc = 0;   /* Σ Dyield[0]: 0 if pair-flux solver conservative */
     double dMZ_clamp_loc = 0;  /* Σ M·(clamp_correction): non-zero iff DMAX(,0) fires on Met[0] */
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) reduction(+:dMZ_pair_loc,dMZ_clamp_loc)
+#endif
+    for (int i : ActiveParticleList)
     {
         if(P[i].Type == 0 && P[i].Mass > 0)
         {
-            double dt; dt = GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i);
+            double dt; dt = get_particle_timestep_in_physical(i);
 
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
             /* signal velocity needs to include rate of gas flow -over- the resolution element, which can be non-zero here */
-            double v2_p = CellP[i].MaxSignalVel*CellP[i].MaxSignalVel;
-            for(k=0;k<3;k++) {v2_p += (CellP[i].VelPred[k]-CellP[i].ParticleVel[k])*(CellP[i].VelPred[k]-CellP[i].ParticleVel[k]);}
+            double v2_p = CellP[i].MaxSignalVel*CellP[i].MaxSignalVel + (CellP[i].VelPred - CellP[i].ParticleVel).norm_sq();
             CellP[i].MaxSignalVel = sqrt(v2_p);
 #endif
 
 #if defined(MAGNETIC)
             /* need to subtract out the source terms proportional to the (non-zero) B-field divergence; to stabilize the scheme */
-            for(k = 0; k < 3; k++)
             {
+                Vec3<double> Bi = CellP[i].Bfield() * All.cf_a2inv;
 #ifndef HYDRO_SPH
                 /* this part of the induction equation has to do with advection of div-B, it is not present in SPH */
-                CellP[i].DtB[k] -= CellP[i].divB * CellP[i].VelPred[k]/All.cf_atime;
+                CellP[i].DtB -= CellP[i].divB * (CellP[i].VelPred/All.cf_atime);
 #endif
-                CellP[i].HydroAccel[k] -= CellP[i].divB * Get_Gas_BField(i,k)*All.cf_a2inv;
-                CellP[i].DtInternalEnergy -= CellP[i].divB * (CellP[i].VelPred[k]/All.cf_atime) * Get_Gas_BField(i,k)*All.cf_a2inv;
+                CellP[i].HydroAccel -= CellP[i].divB * Bi;
+                CellP[i].DtInternalEnergy -= CellP[i].divB * dot(CellP[i].VelPred/All.cf_atime, Bi);
             }
 
-            double magnorm_closure = Get_DtB_FaceArea_Limiter(i);
+            double magnorm_closure = Get_DtB_FaceArea_Limiter(i, P, CellP);
 
 #if defined(DIVBCLEANING_DEDNER) && !defined(HYDRO_SPH)
             // ok now deal with the divB correction forces and damping fields //
@@ -737,7 +738,7 @@ void hydro_final_operations_and_cleanup(void)
             for(k=0; k<3; k++)
             {
                 DtB_UnCorr += CellP[i].DtB[k] * CellP[i].DtB[k]; // physical units //
-                db_vsig_h = db_vsig_h_norm * (CellP[i].BPred[k]*All.cf_atime) * (0.5*CellP[i].MaxSignalVel) / (Get_Particle_Size(i)*All.cf_atime);
+                db_vsig_h = db_vsig_h_norm * (CellP[i].BPred[k]*All.cf_atime) * (0.5*CellP[i].MaxSignalVel) / (P[i].Get_Particle_Size()*All.cf_atime);
                 DtB_UnCorr += db_vsig_h * db_vsig_h;
                 DtB_PhiCorr += CellP[i].DtB_PhiCorr[k] * CellP[i].DtB_PhiCorr[k];
             }
@@ -749,11 +750,8 @@ void hydro_final_operations_and_cleanup(void)
             {
 
                 if(DtB_PhiCorr > tolerance_for_correction * DtB_UnCorr) {PhiCorr_Norm *= tolerance_for_correction * DtB_UnCorr / DtB_PhiCorr;}
-                for(k=0; k<3; k++)
-                {
-                    CellP[i].DtB[k] += PhiCorr_Norm * CellP[i].DtB_PhiCorr[k];
-                    CellP[i].DtInternalEnergy += PhiCorr_Norm * CellP[i].DtB_PhiCorr[k] * Get_Gas_BField(i,k)*All.cf_a2inv;
-                }
+                CellP[i].DtB += PhiCorr_Norm * CellP[i].DtB_PhiCorr;
+                CellP[i].DtInternalEnergy += PhiCorr_Norm * dot(CellP[i].DtB_PhiCorr, CellP[i].Bfield() * All.cf_a2inv);
             }
 
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME // mass-based phi-flux
@@ -765,8 +763,8 @@ void hydro_final_operations_and_cleanup(void)
             {
                 double tmp_ded = 0.5 * CellP[i].MaxSignalVel / (fac_mu*All.cf_atime); // has units of v_physical now
                 /* do a check to make sure divB isn't something wildly divergent (owing to particles being too close) */
-                double b2_max = 0.0;
-                for(k=0;k<3;k++) {b2_max += Get_Gas_BField(i,k)*Get_Gas_BField(i,k);}
+                Vec3<double> Bfield_i = CellP[i].BPred * (CellP[i].Density / P[i].Mass);
+                double b2_max = Bfield_i.norm_sq();
                 b2_max = 100.0 * fabs( sqrt(b2_max) * All.cf_a2inv * P[i].Mass / (CellP[i].Density*All.cf_a3inv) * 1.0 / (P[i].KernelRadius*All.cf_atime) );
                 if(fabs(CellP[i].divB) > b2_max) {CellP[i].divB *= b2_max / fabs(CellP[i].divB);}
                 /* ok now can apply this to get the growth rate of phi */
@@ -780,27 +778,22 @@ void hydro_final_operations_and_cleanup(void)
             /* we calculated the flux of conserved variables: these are used in the kick operation. But for
              intermediate drift operations, we need the primive variables, so reduce to those here
              (remembering that v_phys = v_code/All.cf_atime, for the sake of doing the unit conversions to physical) */
-            for(k=0;k<3;k++)
-            {
-                CellP[i].DtInternalEnergy -= (CellP[i].VelPred[k]/All.cf_atime) * CellP[i].HydroAccel[k];
-                /* we solved for total energy flux (and remember, HydroAccel is still momentum -- keep units straight here!) */
+            {Vec3<double> vel_phys = CellP[i].VelPred / All.cf_atime;
+            CellP[i].DtInternalEnergy -= dot(vel_phys, CellP[i].HydroAccel);
+            /* we solved for total energy flux (and remember, HydroAccel is still momentum -- keep units straight here!) */
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
-                CellP[i].DtInternalEnergy += 0.5 * (CellP[i].VelPred[k]/All.cf_atime) * (CellP[i].VelPred[k]/All.cf_atime) * CellP[i].DtMass;
-                CellP[i].HydroAccel[k] -= (CellP[i].VelPred[k]/All.cf_atime) * CellP[i].DtMass; /* we solved for momentum flux */
+            CellP[i].DtInternalEnergy += 0.5 * vel_phys.norm_sq() * CellP[i].DtMass;
+            CellP[i].HydroAccel -= vel_phys * CellP[i].DtMass; /* we solved for momentum flux */
 #endif
-                CellP[i].HydroAccel[k] /= P[i].Mass; /* we solved for momentum flux */
-            }
+            CellP[i].HydroAccel /= P[i].Mass;} /* we solved for momentum flux */
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
             CellP[i].DtInternalEnergy -= CellP[i].InternalEnergyPred * CellP[i].DtMass;
 #endif
 #ifdef MAGNETIC
 #ifndef HYDRO_SPH
-            for(k=0;k<3;k++)
-            {
-                CellP[i].DtInternalEnergy += -Get_Gas_BField(i,k)*All.cf_a2inv * CellP[i].DtB[k];
-            }
+            CellP[i].DtInternalEnergy -= dot(CellP[i].Bfield() * All.cf_a2inv, CellP[i].DtB);
 #endif
-            for(k=0;k<3;k++) {CellP[i].DtB[k] *= magnorm_closure;}
+            CellP[i].DtB *= magnorm_closure;
 #endif
             CellP[i].DtInternalEnergy /= P[i].Mass;
             /* ok, now: HydroAccel = dv/dt, DtInternalEnergy = du/dt (energy per unit mass) */
@@ -809,56 +802,56 @@ void hydro_final_operations_and_cleanup(void)
             if(P[i].KernelRadius >= 0.99*All.MaxKernelRadius) {CellP[i].DtInternalEnergy = 0;}
 
             // need to explicitly include adiabatic correction from the hubble-flow (for drifting) here //
-            if(All.ComovingIntegrationOn) {CellP[i].DtInternalEnergy -= 3*(GAMMA(i)-1) * CellP[i].InternalEnergyPred * All.cf_hubble_a;}
+            if(All.ComovingIntegrationOn) {CellP[i].DtInternalEnergy -= 3*(CellP[i].gamma_eos_value()-1) * CellP[i].InternalEnergyPred * All.cf_hubble_a;}
             // = du/dlna -3*(gamma-1)*u ; then dlna/dt = H(z) =  All.cf_hubble_a //
 
 
 #if defined(RT_RAD_PRESSURE_FORCES) && defined(RT_EVOLVE_FLUX) && !defined(RT_RADPRESSURE_IN_HYDRO) /* // -- moved for OTVET+FLD to drift-kick operation to deal with limiters more accurately -- // */
             /* calculate the radiation pressure force */
-            double radacc[3]; radacc[0]=radacc[1]=radacc[2]=0; int kfreq;
+            Vec3<double> radacc = {}; int kfreq;
             for(kfreq=0;kfreq<N_RT_FREQ_BINS;kfreq++)
             {
-                double vol_inv = CellP[i].Density*All.cf_a3inv/P[i].Mass, f_kappa_abs = rt_absorb_frac_albedo(i,kfreq), vel_i[3]={0}, vdot_h[3]={0}, vdot_D[3]={0}, flux_i[3]={0}, flux_mag=0, erad_i=0, flux_corr=0, work_band=0, radacc_thisband[3]={0}, rmag=0;
+                double vol_inv = CellP[i].Density*All.cf_a3inv/P[i].Mass, f_kappa_abs = rt_absorb_frac_albedo(i,kfreq, P, CellP), flux_mag=0, erad_i=0, flux_corr=0, work_band=0, rmag=0;
+                Vec3<double> vel_i = {}, vdot_h = {}, flux_i = {}, radacc_thisband = {};
                 erad_i = CellP[i].Rad_E_gamma_Pred[kfreq]*vol_inv; // radiation energy density, needed below
-                for(k=0;k<3;k++) {flux_i[k]=CellP[i].Rad_Flux_Pred[kfreq][k]*vol_inv; vel_i[k]=(C_LIGHT_CODE_REDUCED(i)/C_LIGHT_CODE)*CellP[i].VelPred[k]/All.cf_atime; flux_mag+=flux_i[k]*flux_i[k];}
-                eddington_tensor_dot_vector(CellP[i].ET[kfreq],vel_i,vdot_D); // note these 'vdoth' terms shouldn't be included in FLD, since its really assuming the entire right-hand-side of the flux equation reaches equilibrium with the pressure tensor, which gives the expression in rt_utilities
-                for(k=0;k<3;k++) {vdot_h[k] = (RSOL_CORRECTION_FACTOR_FOR_VELOCITY_TERMS(i)*C_LIGHT_CODE/C_LIGHT_CODE_REDUCED(i)) * erad_i * (vel_i[k] + vdot_D[k]);} // calculate volume integral of scattering coefficient t_inv * (gas_vel . [e_rad*I + P_rad_tensor]), which gives an additional time-derivative term. this is the P term //
-                double flux_thin = erad_i * C_LIGHT_CODE_REDUCED(i); if(flux_mag>0) {flux_mag=sqrt(flux_mag);} else {flux_mag=1.e-20*flux_thin;}
+                flux_i = CellP[i].Rad_Flux_Pred[kfreq] * vol_inv; vel_i = CellP[i].VelPred * ((C_LIGHT_CODE_REDUCED/C_LIGHT_CODE)/All.cf_atime); flux_mag = flux_i.norm_sq();
+                vdot_h = (RSOL_CORRECTION_FACTOR_FOR_VELOCITY_TERMS*C_LIGHT_CODE/C_LIGHT_CODE_REDUCED) * erad_i * (vel_i + CellP[i].ET[kfreq].matvec(vel_i)); // P_rad term + eI term //
+                double flux_thin = erad_i * C_LIGHT_CODE_REDUCED; if(flux_mag>0) {flux_mag=sqrt(flux_mag);} else {flux_mag=1.e-20*flux_thin;}
                 if(flux_mag > 0) {flux_corr = DMIN(1., flux_thin/flux_mag); // restrict flux here (b/c drifted can exceed physical b/c of integration errors
 #if defined(RT_ENABLE_R15_GRADIENTFIX)
                     flux_corr = flux_thin/flux_mag; // set to maximum (optically thin limit)
 #endif
                 }
-                double L_particle=Get_Particle_Size(i)*All.cf_atime, Sigma_particle=P[i].Mass/(M_PI*L_particle*L_particle), abs_per_kappa_dt=C_LIGHT_CODE_REDUCED(i)*(CellP[i].Density*All.cf_a3inv)*dt; // effective surface density through particle & fractional absorption over timestep
+                double L_particle=P[i].Get_Particle_Size()*All.cf_atime, Sigma_particle=P[i].Mass/(M_PI*L_particle*L_particle), abs_per_kappa_dt=C_LIGHT_CODE_REDUCED*(CellP[i].Density*All.cf_a3inv)*dt; // effective surface density through particle & fractional absorption over timestep
                 int checker_int = 0; // normal default: only use the corrections below for bands which dont re-emit to the same band
                 checker_int = 1; // actually here and above now changed to use the slabfac corrections for all bands. in the resolved limit this should still be correct because the re-emitted photons should be isotropic: otherwise you run into linear momentum conservation problems. this is only an issue if the source is at the center of the distribution.
                 double slabfac_rp=1; if(check_if_absorbed_photons_can_be_reemitted_into_same_band(kfreq)<=checker_int) {slabfac_rp=slab_averaging_function(f_kappa_abs*CellP[i].Rad_Kappa[kfreq]*Sigma_particle) * slab_averaging_function(f_kappa_abs*CellP[i].Rad_Kappa[kfreq]*abs_per_kappa_dt);} // reduction factor for absorption over dt
-                for(k=0;k<3;k++) {radacc_thisband[k] = slabfac_rp * (CellP[i].Rad_Kappa[kfreq]/C_LIGHT_CODE_REDUCED(i)) * (flux_corr*flux_i[k] - vdot_h[k]); rmag += radacc_thisband[k]*radacc_thisband[k];} // acceleration term before accounting for the 'work' term, which is calculated separately in the absorption/emission loop
+                radacc_thisband = (slabfac_rp * (CellP[i].Rad_Kappa[kfreq]/C_LIGHT_CODE_REDUCED)) * (flux_corr * flux_i - vdot_h); rmag = radacc_thisband.norm_sq(); // acceleration term before accounting for the 'work' term, which is calculated separately in the absorption/emission loop
                 if(check_if_absorbed_photons_can_be_reemitted_into_same_band(kfreq)<=checker_int && f_kappa_abs > MIN_REAL_NUMBER && rmag > MIN_REAL_NUMBER && dt > 0 && P[i].Mass > 0) { // bands that destroy photons upon absorption (e.g. ionization, dust absorption) should limit the imparted momentum to the total photon momentum available - the flux in the solver normally prevents this but this addresses some edge cases with e.g. pathological ICs, rapidly-varying kappa, etc.
-                    rmag=sqrt(rmag); double r_from_abs=f_kappa_abs*rmag, abs_dt=rt_absorption_rate(i,kfreq)*dt, dE_abs=erad_i*(1.-exp(-abs_dt)); if(abs_dt<0.01) {dE_abs=erad_i*abs_dt;}
-                    double rmag_max_abs=dE_abs/(vol_inv*P[i].Mass*C_LIGHT_CODE_REDUCED(i)*dt); if(rmag_max_abs<r_from_abs) {double cfac=1.+(rmag_max_abs-r_from_abs)/rmag; if(cfac>0 && cfac<1) {for(k=0;k<3;k++) {radacc_thisband[k]*=cfac;}}}
+                    rmag=sqrt(rmag); double r_from_abs=f_kappa_abs*rmag, abs_dt=rt_absorption_rate(i,kfreq, P, CellP)*dt, dE_abs=erad_i*(1.-exp(-abs_dt)); if(abs_dt<0.01) {dE_abs=erad_i*abs_dt;}
+                    double rmag_max_abs=dE_abs/(vol_inv*P[i].Mass*C_LIGHT_CODE_REDUCED*dt); if(rmag_max_abs<r_from_abs) {double cfac=1.+(rmag_max_abs-r_from_abs)/rmag; if(cfac>0 && cfac<1) {radacc_thisband *= cfac;}}
                 }
-                for(k=0;k<3;k++) { /* now record the total work term and photon momentum imparted to gas */
-                    radacc[k]+=radacc_thisband[k]; work_band += radacc_thisband[k] * vel_i[k] * P[i].Mass; // PdV work done by photons [absorbed ones are fully-destroyed, so their loss of energy and momentum is already accounted for by their deletion in this limit -- note that we have to be careful about the RSOL factors here! //
-                }
+                radacc += radacc_thisband; work_band = dot(radacc_thisband, vel_i) * P[i].Mass; // PdV work done by photons [absorbed ones are fully-destroyed, so their loss of energy and momentum is already accounted for by their deletion in this limit -- note that we have to be careful about the RSOL factors here! //
 #ifdef SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM_SPECIALBOUNDARIES
                 f_kappa_abs = 0;
 #endif
                 CellP[i].Dt_Rad_E_gamma[kfreq] += (2.*f_kappa_abs-1.)*work_band; // loss/gain term for the radiation field itself
-                CellP[i].DtInternalEnergy -= (C_LIGHT_CODE/C_LIGHT_CODE_REDUCED(i)) * 2.*f_kappa_abs*work_band / P[i].Mass; // correct for rsol factor above which reduced vel_i by rsol; -only- add back this term for gas
-            }
-            for(k=0;k<3;k++) { /* now actually set the frequency-integrated cell values as needed */
-#ifdef RT_RAD_PRESSURE_OUTPUT
-                CellP[i].Rad_Accel[k] = radacc[k]; // physical units, as desired
-#else
-                CellP[i].HydroAccel[k] += radacc[k]; // physical units, as desired
+#ifdef TRANSPORT_SUBCYCLE
+                CellP[i].Dt_Rad_E_gamma_Work[kfreq] += (2.*f_kappa_abs-1.)*work_band; // save work term separately for subcycle restoration
 #endif
+                CellP[i].DtInternalEnergy -= (C_LIGHT_CODE/C_LIGHT_CODE_REDUCED) * 2.*f_kappa_abs*work_band / P[i].Mass; // correct for rsol factor above which reduced vel_i by rsol; -only- add back this term for gas
             }
+            /* now actually set the frequency-integrated cell values as needed */
+#ifdef RT_RAD_PRESSURE_OUTPUT
+            CellP[i].Rad_Accel = radacc; // physical units, as desired
+#else
+            CellP[i].HydroAccel += radacc; // physical units, as desired
+#endif
 #endif
 #ifdef RT_RADPRESSURE_IN_HYDRO
             int kfreq; for(kfreq=0;kfreq<N_RT_FREQ_BINS;kfreq++) {
-                double fac = (1./3.) * return_flux_limiter(i,kfreq) * CellP[i].Rad_E_gamma_Pred[kfreq] * P[i].Particle_DivVel*All.cf_a2inv * (1.-2.*rt_absorb_frac_albedo(i,kfreq));
-                CellP[i].Dt_Rad_E_gamma[kfreq] -= (C_LIGHT_CODE_REDUCED(i)/C_LIGHT_CODE) * fac; CellP[i].DtInternalEnergy += fac / P[i].Mass; /* exact energy conservation; for appropriate RSOL definitions - careful of terms here where beta arises */
+                double fac = (1./3.) * CellP[i].flux_limiter(kfreq) * CellP[i].Rad_E_gamma_Pred[kfreq] * P[i].Particle_DivVel*All.cf_a2inv * (1.-2.*rt_absorb_frac_albedo(i, kfreq, P, CellP));
+                CellP[i].Dt_Rad_E_gamma[kfreq] -= (C_LIGHT_CODE_REDUCED/C_LIGHT_CODE) * fac; CellP[i].DtInternalEnergy += fac / P[i].Mass; /* exact energy conservation; for appropriate RSOL definitions - careful of terms here where beta arises */
             }
 #endif
 
@@ -977,11 +970,11 @@ void hydro_final_operations_and_cleanup(void)
 #if (defined(COSMIC_RAY_FLUID) && !defined(COOLING_OPERATOR_SPLIT)) || defined(COSMIC_RAY_SUBGRID_LEBRON)
             /* with the spectrum model, we account here the adiabatic heating/cooling of the 'fluid', here, which was solved in the hydro solver but doesn't resolve which portion goes to CRs and which to internal energy, with gamma=GAMMA_COSMICRAY */
 #ifdef COSMIC_RAY_SUBGRID_LEBRON
-            double P_cr_spec = (1./3.)*CellP[i].SubGrid_CosmicRayEnergyDensity/CellP[i].Density, P_tot_spec = P_cr_spec + (2./3.)*CellP[i].InternalEnergyPred + (1./2.)*pow(Get_Gas_Alfven_speed_i(i),2); // just include CR+thermal+magnetic here
+            double P_cr_spec = (1./3.)*CellP[i].SubGrid_CosmicRayEnergyDensity/CellP[i].Density, P_tot_spec = P_cr_spec + (2./3.)*CellP[i].InternalEnergyPred + (1./2.)*pow(CellP[i].Alfven_speed(),2); // just include CR+thermal+magnetic here
             CellP[i].DtInternalEnergy *= (1.-P_cr_spec/P_tot_spec); /* approximate correction, valid to level here [more sophisticated correction can cause problems since the PdV energy isn't actually being taken -out- of the CR field, as it would be if followed explicitly] */
 #else
             double gamma_minus_eCR_tmp=0; for(k=0;k<N_CR_PARTICLE_BINS;k++) {gamma_minus_eCR_tmp+=(GAMMA_COSMICRAY(k)-1.)*CellP[i].CosmicRayEnergyPred[k];} // routine below only depends on the total CR energy, not bin-by-bin energies, when we do it this way here
-            double dCR_div = CR_calculate_adiabatic_gasCR_exchange_term(i, dt, gamma_minus_eCR_tmp, 1); // this will handle the update below - separate subroutine b/c we want to allow it to appear in a couple different places
+            double dCR_div = CR_calculate_adiabatic_gasCR_exchange_term(i, dt, gamma_minus_eCR_tmp, 1, P, CellP); // this will handle the update below - separate subroutine b/c we want to allow it to appear in a couple different places
             double u0=DMAX(CellP[i].InternalEnergyPred, All.MinEgySpec) , uf=DMAX(u0 - dCR_div/P[i].Mass , All.MinEgySpec); // final updated value of internal energy per above
             CellP[i].DtInternalEnergy += (uf - u0) / (dt + MIN_REAL_NUMBER); // update gas quantities to be used in cooling function
 #endif
@@ -991,31 +984,31 @@ void hydro_final_operations_and_cleanup(void)
                 (note this is important; otherwise build up CR 'traps' where the gas piles up and cools but is entirely supported by CRs in outer disks) */
 #if !defined(CRFLUID_EVOLVE_SCATTERINGWAVES) // handled in separate solver if explicitly evolving the relevant wave families
             for(k=0;k<N_CR_PARTICLE_BINS;k++) {
-                double streamfac = fabs(CR_get_streaming_loss_rate_coefficient(i,k));
+                double streamfac = fabs(CR_get_streaming_loss_rate_coefficient(i,k, CellP));
                 CellP[i].DtInternalEnergy += CellP[i].CosmicRayEnergyPred[k] * streamfac / P[i].Mass; // make sure to divide by mass here to get the correct units since DtInternalEnergy has been converted to specific energy units (while CR energies are absolute)
 #if !defined(CRFLUID_EVOLVE_SPECTRUM)
-                CellP[i].DtCosmicRayEnergy[k] -= CosmicRayFluid_RSOL_Corrfac(k) * CellP[i].CosmicRayEnergyPred[k] * streamfac; // in the multi-bin formalism, save this operation for the CR cooling ops since can involve bin-to-bin transfer of energy
+                CellP[i].DtCosmicRayEnergy[k] -= cosmicrayfluid_rsol_corrfac(k) * CellP[i].CosmicRayEnergyPred[k] * streamfac; // in the multi-bin formalism, save this operation for the CR cooling ops since can involve bin-to-bin transfer of energy
 #endif
             }
 #endif
 #if defined(MAGNETIC) // only makes sense to include parallel correction below if all these terms enabled //
             /* 'residual' term from parallel scattering of CRs being not-necessarily-in-equilibrium with a two-moment form of the equations */
-            double vA_eff=Get_Gas_ion_Alfven_speed_i(i), vol_i=CellP[i].Density*All.cf_a3inv/P[i].Mass, Bmag=0, bhat[3]={0}; // define some useful variables
-            for(k=0;k<3;k++) {bhat[k]=CellP[i].BPred[k]; Bmag+=bhat[k]*bhat[k];} // get direction vector for B-field needed below
-            if(Bmag>0) {Bmag=sqrt(Bmag); for(k=0;k<3;k++) {bhat[k] /= Bmag;}} // make dimensionless
+            double vA_eff=Get_Gas_ion_Alfven_speed_i(i, CellP), vol_i=CellP[i].Density*All.cf_a3inv/P[i].Mass, Bmag=0; Vec3<double> bhat = CellP[i].BPred; // define some useful variables
+            Bmag = bhat.norm_sq(); // get direction vector for B-field needed below
+            if(Bmag>0) {Bmag=sqrt(Bmag); bhat /= Bmag;} // make dimensionless
             if(Bmag>0) {for(k=0;k<N_CR_PARTICLE_BINS;k++) {
                 int target_for_cr_betagamma = i; // if this = -1, use the gamma factor at the bin-center for evaluating this, if this = i, use the mean gamma of the bin, weighted by the CR energy -- won't give exactly the same result here
                 target_for_cr_betagamma = -1; // the correction terms depend on these being evaluated at their bin-centered locations
-                double three_chi = return_cosmic_ray_anisotropic_closure_function_threechi(i,k);
-                int m; double grad_P_dot_B=0, gradpcr[3]={0}, F_dot_B=0, e0_cr=CellP[i].CosmicRayEnergyPred[k]*vol_i, p0_cr=(GAMMA_COSMICRAY(k)-1.)*e0_cr, vA_k=vA_eff*return_CRbin_nuplusminus_asymmetry(i,k), fcorr[3]={0}, beta_fac=return_CRbin_beta_factor(target_for_cr_betagamma,k);
-                for(m=0;m<3;m++) {gradpcr[m] = CellP[i].Gradients.CosmicRayPressure[k][m] * (All.cf_a3inv/All.cf_atime);}
-                for(m=0;m<3;m++) {grad_P_dot_B += bhat[m] * gradpcr[m]; F_dot_B += bhat[m] * CellP[i].CosmicRayFluxPred[k][m] * vol_i;}
+                double three_chi = return_cosmic_ray_anisotropic_closure_function_threechi(i,k, CellP);
+                double grad_P_dot_B=0, F_dot_B=0, e0_cr=CellP[i].CosmicRayEnergyPred[k]*vol_i, p0_cr=(GAMMA_COSMICRAY(k)-1.)*e0_cr, vA_k=vA_eff*return_CRbin_nuplusminus_asymmetry(i, k, CellP), beta_fac=return_CRbin_beta_factor(target_for_cr_betagamma,k);
+                Vec3<double> gradpcr = CellP[i].Gradients.CosmicRayPressure[k] * (All.cf_a3inv/All.cf_atime);
+                grad_P_dot_B = dot(bhat, gradpcr); F_dot_B = dot(bhat, CellP[i].CosmicRayFluxPred[k]) * vol_i;
                 if(F_dot_B < 0) {vA_k *= -1;} // needs to have appropriately-matched signage below //
                 double gamma_0=return_CRbin_gamma_factor(target_for_cr_betagamma,k), gamma_fac=gamma_0/(gamma_0-1.); // lorentz factor here, needed in next line, because the loss term here scales with -total- energy, not kinetic energy
                 if(beta_fac<0.1) {gamma_fac=2./(beta_fac*beta_fac) -0.5 - 0.125*beta_fac*beta_fac;} // avoid accidental nan
-                for(m=0;m<3;m++) {fcorr[m] = bhat[m] * (grad_P_dot_B + (gamma_fac*(F_dot_B/CosmicRayFluid_RSOL_Corrfac(k)) - three_chi*vA_k*(gamma_fac*e0_cr + p0_cr))*(beta_fac*beta_fac)/(3.*CellP[i].CosmicRayDiffusionCoeff[k])) / (CellP[i].Density*All.cf_a3inv);} // physical units
-                for(m=0;m<3;m++) {fcorr[m] += (1.-three_chi) * (gradpcr[m] - bhat[m]*grad_P_dot_B) / (CellP[i].Density*All.cf_a3inv);} // physical units
-                for(m=0;m<3;m++) {CellP[i].HydroAccel[m] += fcorr[m];} // add correction term back into hydro acceleration terms -- need to check that don't end up with nasty terms for badly-initialized/limited scattering rates above
+                Vec3<double> fcorr = bhat * (grad_P_dot_B + (gamma_fac*(F_dot_B/cosmicrayfluid_rsol_corrfac(k)) - three_chi*vA_k*(gamma_fac*e0_cr + p0_cr))*(beta_fac*beta_fac)/(3.*CellP[i].CosmicRayDiffusionCoeff[k])) / (CellP[i].Density*All.cf_a3inv); // physical units
+                fcorr += (1.-three_chi) * (gradpcr - bhat*grad_P_dot_B) / (CellP[i].Density*All.cf_a3inv); // physical units
+                CellP[i].HydroAccel += fcorr; // add correction term back into hydro acceleration terms -- need to check that don't end up with nasty terms for badly-initialized/limited scattering rates above
             }}
 #endif
 #if defined(CRFLUID_INJECTION_AT_SHOCKS)
@@ -1033,7 +1026,7 @@ void hydro_final_operations_and_cleanup(void)
             /* if we have winds, we decouple particles briefly if delaytime>0 */
             if(CellP[i].DelayTime > 0)
             {
-                for(k = 0; k < 3; k++) {CellP[i].HydroAccel[k] = 0;}//CellP[i].dMomentum[k] = 0;
+                CellP[i].HydroAccel = {};
                 CellP[i].DtInternalEnergy = 0; //CellP[i].dInternalEnergy = 0;
                 double windspeed = sqrt(2 * All.WindEnergyFraction * All.FactorSN * All.EgySpecSN / (1 - All.FactorSN) / All.WindEfficiency) * All.Time;
                 windspeed *= fac_mu;
@@ -1050,19 +1043,19 @@ void hydro_final_operations_and_cleanup(void)
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
                 CellP[i].DtMass = 0;
                 CellP[i].dMass = 0;
-                for(k = 0; k < 3; k++) CellP[i].GravWorkTerm[k] = 0;
+                CellP[i].GravWorkTerm = {};
 #endif
                 CellP[i].DtInternalEnergy = 0;//CellP[i].dInternalEnergy = 0;//manifest-indiv-timestep-debug//
-                for(k = 0; k < 3; k++) CellP[i].HydroAccel[k] = 0;//CellP[i].dMomentum[k] = 0;//manifest-indiv-timestep-debug//
+                CellP[i].HydroAccel = {};
 #ifdef MAGNETIC
-                for(k = 0; k < 3; k++) CellP[i].DtB[k] = 0;
+                CellP[i].DtB = {};
 #ifdef DIVBCLEANING_DEDNER
-                for(k = 0; k < 3; k++) CellP[i].DtB_PhiCorr[k] = 0;
+                CellP[i].DtB_PhiCorr = {};
                 CellP[i].DtPhi = 0;
 #endif
 #endif
 #ifdef SPH_BND_BFLD
-                for(k = 0; k < 3; k++) CellP[i].B[k] = 0;
+                CellP[i].B = {};
 #endif
             }
 #endif
@@ -1098,7 +1091,10 @@ void hydro_force_initial_operations_preloop(void)
 
     /* need to zero out all numbers that can be set -EITHER- by an active particle in the domain, or by one of the neighbors we will get sent */
     int i, k;
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+    for (int i : ActiveParticleList)
         if(P[i].Type==0)
         {
             CellP[i].MaxSignalVel = MIN_REAL_NUMBER;
@@ -1108,10 +1104,13 @@ void hydro_force_initial_operations_preloop(void)
 #ifdef ENERGY_ENTROPY_SWITCH_IS_ACTIVE
             CellP[i].MaxKineticEnergyNgb = MIN_REAL_NUMBER;
 #endif
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+            rt_diag_sc(RT_DIAG_SC_DTIE_DISCARD, CellP[i].DtInternalEnergy * P[i].Mass * 0.5 * get_particle_timestep_in_physical(i)); /* dropped here, as energy over a half-step; in split-cooling cells it includes the closing-kick rate the opening kick already applied */
+#endif
             CellP[i].DtInternalEnergy = 0; //CellP[i].dInternalEnergy = 0;//manifest-indiv-timestep-debug//
-            for(k=0;k<3;k++) {CellP[i].HydroAccel[k] = 0;} //CellP[i].dMomentum[k] = 0;//manifest-indiv-timestep-debug//
+            CellP[i].HydroAccel = {};
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
-            CellP[i].DtMass = 0; CellP[i].dMass = 0; for(k=0;k<3;k++) CellP[i].GravWorkTerm[k] = 0;
+            CellP[i].DtMass = 0; CellP[i].dMass = 0; CellP[i].GravWorkTerm = {};
 #endif
 #if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))
             for(k=0;k<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;k++) {CellP[i].Dyield[k] = 0;}
@@ -1119,27 +1118,30 @@ void hydro_force_initial_operations_preloop(void)
 #if defined(RT_SOLVER_EXPLICIT)
 #if defined(RT_EVOLVE_ENERGY)
             for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[i].Dt_Rad_E_gamma[k] = 0;}
+#ifdef TRANSPORT_SUBCYCLE
+            for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[i].Dt_Rad_E_gamma_Work[k] = 0;}
+#endif
 #endif
 #if defined(RT_EVOLVE_FLUX)
-            for(k=0;k<N_RT_FREQ_BINS;k++) {int k_dir; for(k_dir=0;k_dir<3;k_dir++) {CellP[i].Dt_Rad_Flux[k][k_dir] = 0;}}
+            for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[i].Dt_Rad_Flux[k] = {};}
 #endif
 #if defined(RT_INFRARED)
             CellP[i].Dt_Rad_E_gamma_T_weighted_IR = 0;
 #endif
 #if defined(RT_EVOLVE_FLUX)
-            for(k=0;k<N_RT_FREQ_BINS;k++) {int k_dir; for(k_dir=0;k_dir<3;k_dir++) {CellP[i].Dt_Rad_Flux[k][k_dir] = 0;}}
+            for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[i].Dt_Rad_Flux[k] = {};}
 #endif
 #if defined(RT_EVOLVE_INTENSITIES)
             for(k=0;k<N_RT_FREQ_BINS;k++) {int k_dir; for(k_dir=0;k_dir<N_RT_INTENSITY_BINS;k_dir++) {CellP[i].Dt_Rad_Intensity[k][k_dir] = 0;}}
 #endif
 #endif
 #ifdef MAGNETIC
-            CellP[i].divB = 0; for(k=0;k<3;k++) {CellP[i].Face_Area[k] = 0;}
+            CellP[i].divB = 0; CellP[i].Face_Area = {};
 #ifdef DIVBCLEANING_DEDNER
-            for(k=0;k<3;k++) {CellP[i].DtB_PhiCorr[k] = 0;}
+            CellP[i].DtB_PhiCorr = {};
 #endif
 #ifndef HYDRO_SPH
-            for(k=0;k<3;k++) {CellP[i].DtB[k] = 0;}
+            CellP[i].DtB = {};
 #ifdef DIVBCLEANING_DEDNER
             CellP[i].DtPhi = 0;
 #endif
@@ -1180,16 +1182,32 @@ void hydro_force_initial_operations_preloop(void)
 void hydro_force(void)
 {
     CPU_Step[CPU_MISC] += measure_time(); double t00_truestart = my_second();
+    double t_preloop_start = my_second();
     hydro_force_initial_operations_preloop(); /* do initial pre-processing operations as needed before main hydro force loop */
+    double t_preloop = timediff(t_preloop_start, my_second());
+    double t_malloc_start = my_second();
     #include "../system/code_block_xchange_perform_ops_malloc.h" /* this calls the large block of code which contains the memory allocations for the MPI/OPENMP/Pthreads parallelization block which must appear below */
+    double t_malloc = timediff(t_malloc_start, my_second());
+    double t_xchange_start = my_second();
     #include "../system/code_block_xchange_perform_ops.h" /* this calls the large block of code which actually contains all the loops, MPI/OPENMP/Pthreads parallelization */
+    double t_xchange_all = timediff(t_xchange_start, my_second());
+    double t_demalloc_start = my_second();
     #include "../system/code_block_xchange_perform_ops_demalloc.h" /* this de-allocates the memory for the MPI/OPENMP/Pthreads parallelization block which must appear above */
     MBARY_STEP("pre_diff_unpack");
+    double t_demalloc = timediff(t_demalloc_start, my_second());
+    double t_postloop_start = my_second();
     hydro_final_operations_and_cleanup(); /* do final operations on results */
     MBARY_STEP("post_diff_unpack");
+    double t_postloop = timediff(t_postloop_start, my_second());
     /* collect timing information */
     double t1; t1 = WallclockTime = my_second(); timeall = timediff(t00_truestart, t1);
     CPU_Step[CPU_HYDCOMPUTE] += timecomp; CPU_Step[CPU_HYDWAIT] += timewait; CPU_Step[CPU_HYDCOMM] += timecomm;
-    CPU_Step[CPU_HYDMISC] += timeall - (timecomp + timewait + timecomm);
+    double hydmisc_total = timeall - (timecomp + timewait + timecomm);
+    double t_xchange_serial = t_xchange_all - (timecomp + timewait + timecomm); /* serial overhead inside xchange loop */
+    CPU_Step[CPU_HYDMISC] += hydmisc_total;    
+    //    if(ThisTask == 0) {
+      //        printf("  hydro_force breakdown: preloop=%.4f malloc=%.4f xchange_serial=%.4f demalloc=%.4f postloop=%.4f hydmisc_total=%.4f\n",
+      //               t_preloop, t_malloc, t_xchange_serial, t_demalloc, t_postloop, hydmisc_total);
+    //    }
 }
 #include "../system/code_block_xchange_finalize.h" /* de-define the relevant variables and macros to avoid compilation errors and memory leaks */

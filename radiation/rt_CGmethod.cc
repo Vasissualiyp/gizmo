@@ -36,11 +36,11 @@ static double **ZVec, **XVec, **QVec, **DVec, **Residue, **Diag, **Diag2;
 static struct rt_cg_data_in
 {
     int NodeList[NODELISTLENGTH];
-    MyDouble Pos[3];
+    Vec3<MyDouble> Pos;
     MyFloat Mass;
     MyFloat Density;
     MyFloat KernelRadius;
-    MyFloat ET[N_RT_FREQ_BINS][6];
+    SymmetricTensor2<MyFloat> ET[N_RT_FREQ_BINS];
     MyDouble RT_DiffusionCoeff[N_RT_FREQ_BINS];
     //MyDouble Lambda[N_RT_FREQ_BINS];
 }
@@ -68,12 +68,12 @@ void *rt_diffusion_cg_evaluate_secondary(void *p, double **matrixmult_in, double
 void particle2in_rt_cg(struct rt_cg_data_in *in, int i)
 {
     int k;
-    for(k=0; k<3; k++) {in->Pos[k] = P[i].Pos[k];}
-    int kET; for(k=0;k<N_RT_FREQ_BINS;k++) for(kET=0; kET<6; kET++) {in->ET[k][kET] = CellP[i].ET[k][kET];}
+    in->Pos = P[i].Pos;
+    for(k=0;k<N_RT_FREQ_BINS;k++) {in->ET[k] = CellP[i].ET[k];}
     in->KernelRadius = P[i].KernelRadius;
     in->Mass = P[i].Mass;
     in->Density = CellP[i].Density;
-    for(k=0; k<N_RT_FREQ_BINS; k++) in->RT_DiffusionCoeff[k] = rt_diffusion_coefficient(i,k);
+    for(k=0; k<N_RT_FREQ_BINS; k++) in->RT_DiffusionCoeff[k] = rt_diffusion_coefficient(i,k, CellP);
 }
 
 /* internal product of two vectors (for all gas particles) */
@@ -110,9 +110,10 @@ for(k=0;k<N_RT_FREQ_BINS;k++) memset(x[k], 0, N_gas * sizeof(double));}
  to do the weights/matrix calculation on all particles */
 void rt_diffusion_cg_solve(void)
 {
+    force_tree_check_walkable("rt_diffusion_cg"); /* hand-rolled neighbour loop: not covered by the template's entry check */
     PRINT_STATUS("start CG iteration for radiative transfer (diffusion equation)...");
     int k, j; double alpha_cg, beta, sum, rel, res, maxrel, glob_maxrel, DQ;
-    double dt = (All.Radiation_Ti_endstep - All.Radiation_Ti_begstep) * UNIT_INTEGERTIME_IN_PHYSICAL(-1);
+    double dt = (All.Radiation_Ti_endstep - All.Radiation_Ti_begstep) * unit_integertime_in_physical(-1);
     
     /* initialization for the CG method */
     MALLOC_CG(ZVec); MALLOC_CG(XVec); MALLOC_CG(QVec); MALLOC_CG(DVec); MALLOC_CG(Residue); MALLOC_CG(Diag); MALLOC_CG(Diag2); // allocate and zero all the arrays
@@ -214,14 +215,14 @@ void rt_diffusion_cg_matrix_multiply(double **matrixmult_in, double **matrixmult
     long long n_exported = 0;
     long long NTaskTimesNumPart;
     NTaskTimesNumPart = maxThreads * NumPart;
-    Ngblist = (int *) mymalloc("Ngblist", NTaskTimesNumPart * sizeof(int));
+    Ngblist.resize(NTaskTimesNumPart);
     size_t MyBufferSize = All.BufferSize;
     All.BunchSize = (long) ((MyBufferSize * 1024 * 1024) / (sizeof(struct data_index) + sizeof(struct data_nodelist) +
                                                              sizeof(struct rt_cg_data_in) + sizeof(struct rt_cg_data_out) + sizemax(sizeof(struct rt_cg_data_in),sizeof(struct rt_cg_data_out))));
     DataIndexTable = (struct data_index *) mymalloc("DataIndexTable", All.BunchSize * sizeof(struct data_index));
     DataNodeList = (struct data_nodelist *) mymalloc("DataNodeList", All.BunchSize * sizeof(struct data_nodelist));
     
-    NextParticle = FirstActiveParticle;	/* begin with this index */
+    NextParticle = 0;	/* begin with this index */
     memset(ProcessedFlag, 0, All.MaxPart * sizeof(unsigned char));
     BufferCollisionFlag = 0; /* set to zero before operations begin */
     do
@@ -249,24 +250,25 @@ void rt_diffusion_cg_matrix_multiply(double **matrixmult_in, double **matrixmult
             int processed_particles = 0;
             int first_unprocessedparticle = -1;
             NextParticle = save_NextParticle; /* figure out where we are */
-            while(NextParticle >= 0)
+            while(NextParticle < (int)ActiveParticleList.size())
             {
                 if(NextParticle == last_nextparticle) {break;}
+                int pindex = ActiveParticleList[NextParticle];
 #ifndef _OPENMP
-                if(ProcessedFlag[NextParticle] != 1) {break;}
+                if(ProcessedFlag[pindex] != 1) {break;}
 #else
-                if(ProcessedFlag[NextParticle] == 0 && first_unprocessedparticle < 0) {first_unprocessedparticle = NextParticle;}
-                if(ProcessedFlag[NextParticle] == 1)
+                if(ProcessedFlag[pindex] == 0 && first_unprocessedparticle < 0) {first_unprocessedparticle = NextParticle;}
+                if(ProcessedFlag[pindex] == 1)
 #endif
                 {
                     processed_particles++;
-                    ProcessedFlag[NextParticle] = 2;
+                    ProcessedFlag[pindex] = 2;
                 }
-                NextParticle = NextActiveParticle[NextParticle];
+                NextParticle++;
             }
 #ifdef _OPENMP
             if(first_unprocessedparticle >= 0) {NextParticle = first_unprocessedparticle;} /* reset the neighbor list properly for the next group since we can get 'jumps' with openmp active */
-            if(processed_particles == 0 && NextParticle == save_NextParticle && NextParticle > -1) {
+            if(processed_particles == 0 && NextParticle == save_NextParticle && NextParticle < (int)ActiveParticleList.size()) {
                 BufferCollisionFlag++; if(BufferCollisionFlag < 2) {continue;}} /* we overflowed without processing a single particle, but this could be because of a collision, try once with the serialized approach, but if it fails then, we're truly stuck */
             else if(processed_particles && BufferCollisionFlag) {BufferCollisionFlag = 0;} /* we had a problem in a previous iteration but things worked, reset to normal operations */
 #endif
@@ -352,7 +354,7 @@ void rt_diffusion_cg_matrix_multiply(double **matrixmult_in, double **matrixmult
 #endif
             rt_diffusion_cg_evaluate_secondary(&mainthreadid, matrixmult_in, matrixmult_out, matrixmult_sum);
         }
-        if(NextParticle < 0) {ndone_flag = 1;} else {ndone_flag = 0;}
+        if(NextParticle >= (int)ActiveParticleList.size()) {ndone_flag = 1;} else {ndone_flag = 0;}
         MPI_Allreduce(&ndone_flag, &ndone, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         /* get the result */
         for(ngrp = 1; ngrp < (1 << PTask); ngrp++)
@@ -389,15 +391,15 @@ void rt_diffusion_cg_matrix_multiply(double **matrixmult_in, double **matrixmult
     /* free memory */
     myfree(DataNodeList);
     myfree(DataIndexTable);
-    myfree(Ngblist);
+    
 
     
     /* do final operations on results */
-    {double dt = (All.Radiation_Ti_endstep - All.Radiation_Ti_begstep) * UNIT_INTEGERTIME_IN_PHYSICAL(-1); int i;
+    {double dt = (All.Radiation_Ti_endstep - All.Radiation_Ti_begstep) * unit_integertime_in_physical(-1); int i;
     for(i = 0; i < N_gas; i++)
         if(P[i].Type == 0) {
             for(k = 0; k < N_RT_FREQ_BINS; k++) {
-                double fac_i = dt * rt_absorption_rate(i,k); 
+                double fac_i = dt * rt_absorption_rate(i,k, P, CellP); 
                 if((1 + fac_i + matrixmult_sum[k][i]) < 0) {printf("1 + matrixmult_sum + rate= %g   matrixmult_sum=%g rate=%g i =%d\n", 1 + fac_i + matrixmult_sum[k][i], matrixmult_sum[k][i], fac_i, i); endrun(11111111);}
                 /* the "1" here accounts for the fact that we must start from the previous photon number (the matrix includes only the "dt" term); 
                     the fac_i term here accounts for sinks [here, the rate of photon absorption]; the in*sum part below accounts for the re-arrangement 
@@ -422,7 +424,7 @@ int rt_diffusion_cg_evaluate(int target, int mode, double **matrixmult_in, doubl
     if(local.KernelRadius<=0) return 0; // zero-extent kernel, no particles //
     double hinv, hinv3, hinv4, h2=local.KernelRadius*local.KernelRadius;
     kernel_hinv(local.KernelRadius, &hinv, &hinv3, &hinv4);
-    double dt = (All.Radiation_Ti_endstep - All.Radiation_Ti_begstep) * UNIT_INTEGERTIME_IN_PHYSICAL(-1);    
+    double dt = (All.Radiation_Ti_endstep - All.Radiation_Ti_begstep) * unit_integertime_in_physical(-1);    
     /* Now start the actual operations for this particle */
     if(mode == 0) {startnode = All.MaxPart; /* root node */} else {startnode = rt_cg_DataGet[target].NodeList[0]; startnode = Nodes[startnode].u.d.nextnode;/* open it */}
     while(startnode >= 0)
@@ -436,9 +438,9 @@ int rt_diffusion_cg_evaluate(int target, int mode, double **matrixmult_in, doubl
                 j = ngblist[n]; /* since we use the -threaded- version above of ngb-finding, its super-important this is the lower-case ngblist here! */
                 if(P[j].Type != 0) continue; // require a gas particle //
                 if(P[j].Mass <= 0) continue; // require the particle has mass //
-                double dp[3]; for(k=0; k<3; k++) {dp[k] = local.Pos[k] - P[j].Pos[k];}
-                NEAREST_XYZ(dp[0],dp[1],dp[2],1); /* find the closest image in the given box size */
-                double r2=0; for(k=0;k<3;k++) {r2 += dp[k]*dp[k];}
+                Vec3<double> dp = local.Pos - P[j].Pos;
+                nearest_xyz(dp); /* find the closest image in the given box size */
+                double r2 = dp.norm_sq();
                 if(r2<=0) continue; // same particle //
                 if((r2>h2)||(r2>P[j].KernelRadius*P[j].KernelRadius)) continue; // outside kernel //
                 // calculate kernel quantities //
@@ -459,11 +461,9 @@ int rt_diffusion_cg_evaluate(int target, int mode, double **matrixmult_in, doubl
                     for(k=0;k<N_RT_FREQ_BINS;k++)
                     {
                 
-                        double ET_ij[6];
-                        int kET; for(kET=0;kET<6;kET++) {ET_ij[kET] = 0.5 * (local.ET[k][kET] + CellP[j].ET[k][kET]);}
-                        double tensor = (ET_ij[0]*dp[0]*dp[0] + ET_ij[1]*dp[1]*dp[1] + ET_ij[2]*dp[2]*dp[2]
-                                         + 2.*ET_ij[3]*dp[0]*dp[1] + 2.*ET_ij[4]*dp[1]*dp[2] + 2.*ET_ij[5]*dp[2]*dp[0]) / r2;
-                        double kappa_ij = 0.5*(local.RT_DiffusionCoeff[k] + rt_diffusion_coefficient(j,k));
+                        SymmetricTensor2<double> ET_ij; for(int kk=0;kk<6;kk++) {ET_ij.data[kk] = 0.5 * (local.ET[k].data[kk] + CellP[j].ET[k].data[kk]);}
+                        double tensor = dot(dp, ET_ij.matvec(dp)) / r2;
+                        double kappa_ij = 0.5*(local.RT_DiffusionCoeff[k] + rt_diffusion_coefficient(j,k, CellP));
                         double fac = tensor_norm * tensor * kappa_ij;
                         out.matrixmult_out[k] -= fac * matrixmult_in[k][j];
                         out.matrixmult_sum[k] += fac;

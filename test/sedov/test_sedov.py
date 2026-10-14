@@ -13,6 +13,8 @@ import h5py
 
 from meshoid import Meshoid
 from gizmo.test import (
+    variant_output_dir,
+    assert_energy_conserved,
     build_and_run_test,
     default_mpi_ranks,
     flush_colorbar,
@@ -27,7 +29,7 @@ def plot_sedov_density_slice(coords, rho, output_dir="."):
     box_center = 3.0
     M = Meshoid(coords)
     center = np.array([box_center, box_center, box_center])
-    rho_slice = M.Slice(np.log10(rho), res=1024, plane="z", center=center, size=4.0, order=1)
+    rho_slice = M.Slice(np.log10(rho), res=1024, plane="z", center=center, size=4.0, order=0)
     fig, ax = plt.subplots(figsize=(6, 6))
     im = ax.imshow(rho_slice.T, origin="lower", cmap="inferno", extent=[-2, 2, -2, 2])
     flush_colorbar(im, ax=ax, label="log10(Density)")
@@ -38,6 +40,9 @@ def plot_sedov_density_slice(coords, rho, output_dir="."):
     plt.close(fig)
 
 
+# Sedov is the control for the wakeup kick-reversal work: a strong adiabatic shock generates many hydro
+# wakeups, but with no sinks, spawning or merging the reversal never fires, so it conserves here and any
+# candidate mitigation must leave the L1 error against the exact Sedov-Taylor solution untouched.
 @pytest.mark.parametrize(
     "num_mpi_ranks,num_omp_threads",
     [(default_mpi_ranks(), default_omp_threads())],
@@ -101,3 +106,7 @@ def test_sedov(num_mpi_ranks, num_omp_threads):
             np.abs(rho_exact_interp[good])
         )
         assert L1_rho < 0.3, f"Density profile L1 error {L1_rho:.4f} exceeds tolerance"
+
+    # Energy conservation: Sedov deposits its blast energy in the ICs with no source afterwards, so the
+    # total must be constant. Checked separately, since a failure shows up in the profile only indirectly.
+    assert_energy_conserved(test_name, tol=0.1)

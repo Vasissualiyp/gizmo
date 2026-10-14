@@ -23,9 +23,9 @@
 /* this structure defines the variables that need to be sent -from- the 'searching' element */
 struct INPUT_STRUCT_NAME
 {
-    int NodeList[NODELISTLENGTH]; MyDouble Pos[3]; MyFloat Vel[3], KernelRadius, Mass, Sink_Mass, Dt, Density, Mdot; MyIDType ID;
+    int NodeList[NODELISTLENGTH]; Vec3<MyDouble> Pos; Vec3<MyFloat> Vel; MyFloat KernelRadius, Mass, Sink_Mass, Dt, Density, Mdot; MyIDType ID;
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS)
-    MyFloat Jgas_in_Kernel[3];
+    Vec3<MyFloat> Jgas_in_Kernel;
 #endif
 #if defined(SINK_GRAVCAPTURE_GAS)
     MyFloat mass_to_swallow_edd;
@@ -52,7 +52,7 @@ struct INPUT_STRUCT_NAME
 static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
 {
     int k, j_tempinfo; j_tempinfo=P[i].IndexMapToTempStruc; /* link to the location in the shared structure where this is stored */
-    for(k=0;k<3;k++) {in->Pos[k]=P[i].Pos[k]; in->Vel[k]=P[i].Vel[k];} /* good example - always needed */
+    in->Pos=P[i].Pos; in->Vel=P[i].Vel; /* good example - always needed */
     in->KernelRadius = P[i].KernelRadius; in->Mass = P[i].Mass; in->Sink_Mass = P[i].Sink_Mass; in->ID = P[i].ID; in->Density = P[i].DensityAroundParticle; in->Mdot = P[i].Sink_Mdot;
 #ifdef SINK_GRAVCAPTURE_FIXEDSINKRADIUS
     in->SinkRadius = P[i].SinkRadius;
@@ -63,15 +63,15 @@ static inline void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int l
 #ifdef SINK_ALPHADISK_ACCRETION
     in->Sink_Mass_Reservoir = P[i].Sink_Mass_Reservoir;
 #endif
-    in->Dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(i);
+    in->Dt = get_particle_feedback_timestep_in_physical(i);
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
     in->Dt = P[i].dt_since_last_gas_search;
 #endif
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS)
 #if defined(SINK_FOLLOW_ACCRETED_ANGMOM)
-    for(k=0;k<3;k++) {in->Jgas_in_Kernel[k] = P[i].Sink_Specific_AngMom[k];}
+    in->Jgas_in_Kernel = P[i].Sink_Specific_AngMom;
 #else
-    for(k=0;k<3;k++) {in->Jgas_in_Kernel[k] = SinkTempInfo[j_tempinfo].Jgas_in_Kernel[k];}
+    in->Jgas_in_Kernel = SinkTempInfo[j_tempinfo].Jgas_in_Kernel;
 #endif
 #endif
 #if defined(SINK_GRAVCAPTURE_GAS)
@@ -93,7 +93,7 @@ struct OUTPUT_STRUCT_NAME
     double Sink_angle_weighted_kernel_sum;
 #endif
 #ifdef SINK_REPOSITION_ON_POTMIN
-    double Sink_PotentialMinimumOfNeighbors, Sink_PotentialMinimumOfNeighborsPos[3];
+    double Sink_PotentialMinimumOfNeighbors; Vec3<double> Sink_PotentialMinimumOfNeighborsPos;
 #endif
 }
 *DATARESULT_NAME, *DATAOUT_NAME; /* dont mess with these names, they get filled-in by your definitions automatically */
@@ -107,8 +107,8 @@ static inline void OUTPUTFUNCTION_NAME(struct OUTPUT_STRUCT_NAME *out, int i, in
     ASSIGN_ADD_PRESET(SinkTempInfo[target].Sink_angle_weighted_kernel_sum, out->Sink_angle_weighted_kernel_sum, mode);
 #endif
 #ifdef SINK_REPOSITION_ON_POTMIN
-    if(mode==0) {P[i].Sink_PotentialMinimumOfNeighbors=out->Sink_PotentialMinimumOfNeighbors; for(k=0;k<3;k++) {P[i].Sink_PotentialMinimumOfNeighborsPos[k]=out->Sink_PotentialMinimumOfNeighborsPos[k];}
-        } else {if(out->Sink_PotentialMinimumOfNeighbors < P[i].Sink_PotentialMinimumOfNeighbors) {P[i].Sink_PotentialMinimumOfNeighbors=out->Sink_PotentialMinimumOfNeighbors; for(k=0;k<3;k++) {P[i].Sink_PotentialMinimumOfNeighborsPos[k]=out->Sink_PotentialMinimumOfNeighborsPos[k];}}}
+    if(mode==0) {P[i].Sink_PotentialMinimumOfNeighbors=out->Sink_PotentialMinimumOfNeighbors; P[i].Sink_PotentialMinimumOfNeighborsPos=out->Sink_PotentialMinimumOfNeighborsPos;
+        } else {if(out->Sink_PotentialMinimumOfNeighbors < P[i].Sink_PotentialMinimumOfNeighbors) {P[i].Sink_PotentialMinimumOfNeighbors=out->Sink_PotentialMinimumOfNeighbors; P[i].Sink_PotentialMinimumOfNeighborsPos=out->Sink_PotentialMinimumOfNeighborsPos;}}
 #endif
 }
 
@@ -122,7 +122,7 @@ int sink_feed_evaluate(int target, int mode, int *exportflag, int *exportnodecou
     /* initialize variables before loop is started */
     int startnode, numngb, listindex = 0, j, k, n; struct INPUT_STRUCT_NAME local; struct OUTPUT_STRUCT_NAME out; memset(&out, 0, sizeof(struct OUTPUT_STRUCT_NAME)); /* define variables and zero memory and import data for local target*/
     if(mode == 0) {INPUTFUNCTION_NAME(&local, target, loop_iteration);} else {local = DATAGET_NAME[target];} /* imports the data to the correct place and names */
-    double h_i = local.KernelRadius, wk, dwk, vrel, vesc, dpos[3], dvel[3], f_accreted; f_accreted=1;
+    double h_i = local.KernelRadius, wk, dwk, vrel, vesc, f_accreted; f_accreted=1; Vec3<double> dpos={}, dvel={};
     if((local.Mass<0)||(h_i<=0)) {return 0;}
     double w, p, r2, r, u, sink_radius=SinkParticle_GravityKernelRadius, h_i2 = h_i * h_i, hinv = 1 / h_i, hinv3 = hinv * hinv * hinv, ags_h_i = SinkParticle_GravityKernelRadius; p=0; w=0;
 #ifdef SINK_REPOSITION_ON_POTMIN
@@ -132,7 +132,7 @@ int sink_feed_evaluate(int target, int mode, int *exportflag, int *exportnodecou
     ags_h_i = local.AGS_KernelRadius;
 #endif
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS)
-    double J_dir[3]; for(k=0;k<3;k++) {J_dir[k] = local.Jgas_in_Kernel[k];}
+    Vec3<double> J_dir = local.Jgas_in_Kernel;
 #endif
 #if defined(SINK_GRAVCAPTURE_GAS) && defined(SINK_ENFORCE_EDDINGTON_LIMIT) && !defined(SINK_ALPHADISK_ACCRETION)
     double meddington = sink_eddington_mdot(local.Sink_Mass), medd_max_accretable = All.SinkEddingtonFactor * meddington * local.Dt, eddington_factor = local.mass_to_swallow_edd / medd_max_accretable;   /* if <1 no problem, if >1, need to not set some swallowIDs */
@@ -147,8 +147,8 @@ int sink_feed_evaluate(int target, int mode, int *exportflag, int *exportnodecou
     f_accreted = All.Sink_accreted_fraction; if((All.SinkFeedbackFactor > 0) && (All.SinkFeedbackFactor != 1.)) {f_accreted /= All.SinkFeedbackFactor;} else {if(All.Sink_outflow_velocity > 0) {f_accreted = 1./(1. + fabs(1.*SINK_WIND_KICK)*All.SinkRadiativeEfficiency*C_LIGHT_CODE/(All.Sink_outflow_velocity));}}
 #endif
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS)
-    double norm=0; for(k=0;k<3;k++) {norm+=J_dir[k]*J_dir[k];}
-    if(norm>0) {norm=1/sqrt(norm); for(k=0;k<3;k++) {J_dir[k]*=norm;}} else {J_dir[0]=J_dir[1]=0; J_dir[2]=1;}
+    double norm = J_dir.norm_sq();
+    if(norm>0) {J_dir *= 1./sqrt(norm);} else {J_dir = {0, 0, 1};}
 #endif
 #ifdef SINK_GRAVCAPTURE_FIXEDSINKRADIUS
     sink_radius = local.SinkRadius;
@@ -164,17 +164,16 @@ int sink_feed_evaluate(int target, int mode, int *exportflag, int *exportnodecou
                 j = ngblist[n]; /* since we use the -threaded- version above of ngb-finding, its super-important this is the lower-case ngblist here! */
                 if(P[j].Mass > 0)
                 {
-                    for(k=0;k<3;k++) {dpos[k] = P[j].Pos[k] - local.Pos[k]; dvel[k]=P[j].Vel[k]-local.Vel[k];}
-                    NEAREST_XYZ(dpos[0],dpos[1],dpos[2],-1); r2=0; for(k=0;k<3;k++) {r2 += dpos[k]*dpos[k];}
+                    dpos = P[j].Pos - local.Pos; dvel = P[j].Vel - local.Vel;
+                    nearest_xyz(dpos,-1); r2=dpos.norm_sq();
                     NGB_SHEARBOX_BOUNDARY_VELCORR_(local.Pos,P[j].Pos,dvel,-1); /* wrap velocities for shearing boxes if needed */
                     double heff_j = DMAX( P[j].KernelRadius , ForceSoftening_KernelRadius(j) );
                     if(r2 < h_i2 || r2 < heff_j*heff_j)
                     {
-                        vrel=0; for(k=0;k<3;k++) {vrel += dvel[k]*dvel[k];}
+                        vrel=dvel.norm_sq();
                         r=sqrt(r2); vrel=sqrt(vrel)/All.cf_atime;  /* relative velocity in physical units. do this once and use below */
 #if defined(MAGNETIC) && defined(GRAIN_LORENTZFORCE) /* need to project grain velocities, shouldn't include gyro motion */
-                        if((1<<P[j].Type) & GRAIN_PTYPES) {vrel=0; double bmag2=0; for(k=0;k<3;k++) {vrel+=dvel[k]*P[j].Gas_B[k]; bmag2+=P[j].Gas_B[k]*P[j].Gas_B[k];}
-                            vrel = (fabs(vrel)/sqrt(bmag2)) / All.cf_atime;}
+                        if((1<<P[j].Type) & GRAIN_PTYPES) {Vec3<double> B_vec = P[j].Gas_B; vrel = (fabs(dot(dvel, B_vec))/sqrt(B_vec.norm_sq())) / All.cf_atime;}
 #endif
                         vesc=sink_vesc(j, local.Mass, r, ags_h_i);
                         
@@ -195,7 +194,7 @@ int sink_feed_evaluate(int target, int mode, int *exportflag, int *exportnodecou
                         if(potential_function < out.Sink_PotentialMinimumOfNeighbors)
                         if( (P[j].Type != 0) && (P[j].Type != 5) )   // allow stars or dark matter but exclude gas, it's too messy! also exclude BHs, since we don't want to over-merge them
                         {
-                            out.Sink_PotentialMinimumOfNeighbors=potential_function; for(k=0;k<3;k++) {out.Sink_PotentialMinimumOfNeighborsPos[k] = P[j].Pos[k];}
+                            out.Sink_PotentialMinimumOfNeighbors=potential_function; out.Sink_PotentialMinimumOfNeighborsPos = P[j].Pos;
                         }
 #endif
 			
@@ -203,10 +202,20 @@ int sink_feed_evaluate(int target, int mode, int *exportflag, int *exportnodecou
                         
                         if(P[j].Type == 5)  /* we may have a sink particle merger -- check below if allowed */
                         {
-                            if(((local.ID != P[j].ID) || (r2>0)) && (SwallowID_j == 0) && (P[j].Sink_Mass < local.Sink_Mass)) /* we'll assume most massive BH swallows the other - simplifies analysis and ensures unique results */
+                            /* most massive sink swallows the other, which keeps the result unique and order-independent. The
+                                comparison must break exact ties: with a strict '<' neither direction passes, so the block
+                                below -- including its own equal-mass tie-breaker on ID -- is unreachable and the pair can
+                                never merge. Ties are not exotic; every cell in a glass/grid IC has identical mass, so two
+                                sinks that have not yet accreted have bit-identical Sink_Mass. Break on ID in the same sense
+                                as the inner check (higher ID swallows) so the two agree. */
+                            if(((local.ID != P[j].ID) || (r2>0)) && (SwallowID_j == 0) &&
+                               ((P[j].Sink_Mass < local.Sink_Mass) || ((P[j].Sink_Mass == local.Sink_Mass) && (P[j].ID < local.ID))))
                             {
 #ifdef SINGLE_STAR_SINK_DYNAMICS
                                 int allow_sink_merger = 1; /* flag here b/c we have different options */
+#ifdef DISABLE_SINK_MERGERS
+                                allow_sink_merger = 0;
+#endif
                                 if(r >= 1.0001*P[j].Min_Distance_to_Sink) {allow_sink_merger = 0;} // not the closest sink!
                                 if(r >= heff_j) {allow_sink_merger = 0;} // beyond MAX[search/kernel/softening] radius: heff_j = DMAX( P[j].KernelRadius , ForceSoftening_KernelRadius(j) )
                                 if(P[j].Mass > local.Mass) {allow_sink_merger = 0;} // always merge from more massive eating lower
@@ -262,7 +271,7 @@ int sink_feed_evaluate(int target, int mode, int *exportflag, int *exportnodecou
                             if((vrel < vesc))
                             { /* bound */
 #ifdef SINK_GRAVCAPTURE_FIXEDSINKRADIUS
-                                double spec_mom=0; for(k=0;k<3;k++) {spec_mom += dvel[k]*dpos[k];} // delta_x.delta_v
+                                double spec_mom=dot(dvel,dpos); // delta_x.delta_v
                                 spec_mom = (r2*vrel*vrel - spec_mom*spec_mom*All.cf_a2inv); // specific angular momentum^2 = r^2(delta_v)^2 - (delta_v.delta_x)^2;
 				                if(spec_mom < All.G * (local.Mass + P[j].Mass) * sink_radius)  // check Bate 1995 angular momentum criterion (in addition to bounded-ness)
 #endif
@@ -326,7 +335,7 @@ int sink_feed_evaluate(int target, int mode, int *exportflag, int *exportnodecou
 #if defined(SINK_CALC_LOCAL_ANGLEWEIGHTS) /* calculate the angle-weighting for the photon momentum */
                             if((local.Dt>0)&&(r>0)&&(SwallowID_j==0)&&(P[j].Mass>0)&&(P[j].Type==0))
                             { /* cos_theta with respect to disk of BH is given by dot product of r and Jgas */
-                                norm=0; for(k=0;k<3;k++) {norm+=(dpos[k]/r)*J_dir[k];}
+                                norm = dot(dpos/r, J_dir);
                                 out.Sink_angle_weighted_kernel_sum += sink_fb_angleweight_localcoupling(j,norm,r,h_i);
                             }
 #endif

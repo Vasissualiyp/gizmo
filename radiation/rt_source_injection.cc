@@ -32,7 +32,7 @@
 /*! Structure for communication during the kernel computation. Holds data that is sent to other processors  */
 static struct INPUT_STRUCT_NAME
 {
-    MyDouble Pos[3]; MyFloat KernelRadius, KernelSum_Around_RT_Source, Luminosity[N_RT_FREQ_BINS], Vel[3];
+    Vec3<MyDouble> Pos; MyFloat KernelRadius, KernelSum_Around_RT_Source, Luminosity[N_RT_FREQ_BINS]; Vec3<MyFloat> Vel;
     int NodeList[NODELISTLENGTH];
 #if defined(RT_REPROCESS_INJECTED_PHOTONS) && defined(RT_CHEM_PHOTOION)
     MyDouble Dt;
@@ -45,21 +45,21 @@ static struct INPUT_STRUCT_NAME
 void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
 {
     int k;
-    for(k=0; k<3; k++) {in->Pos[k] = P[i].Pos[k];}
+    in->Pos = P[i].Pos;
     in->KernelRadius = P[i].KernelRadius;
     //if(P[i].Type==0) {in->KernelSum_Around_RT_Source = CellP[i].Density;} else {in->KernelSum_Around_RT_Source = P[i].DensityAroundParticle;}
     in->KernelSum_Around_RT_Source = P[i].KernelSum_Around_RT_Source;
     /* luminosity is set to zero here for gas particles because their self-illumination is handled trivially in a single loop, earlier */
     double lum[N_RT_FREQ_BINS];
-    int active_check = rt_get_source_luminosity(i,0,lum);
+    int active_check = rt_get_source_luminosity(i,0,lum, P, CellP);
     double dt = 1; // make this do nothing unless flags below are set:
 #if defined(RT_INJECT_PHOTONS_DISCRETELY)
-    dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(i);
+    dt = get_particle_feedback_timestep_in_physical(i);
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
     if(P[i].Type == 5) {dt = P[i].dt_since_last_gas_search;}
 #endif
 #if defined(RT_EVOLVE_FLUX)
-    for(k=0; k<3; k++) {if(P[i].Type==0) {in->Vel[k] = CellP[i].VelPred[k];} else {in->Vel[k] = P[i].Vel[k];}}
+    {int k; for(k=0; k<3; k++) {if(P[i].Type==0) {in->Vel[k] = CellP[i].VelPred[k];} else {in->Vel[k] = P[i].Vel[k];}}}
 #endif
 #endif
     for(k=0; k<N_RT_FREQ_BINS; k++) {if(P[i].Type==0 || active_check==0) {in->Luminosity[k]=0;} else {in->Luminosity[k] = lum[k] * dt;}}
@@ -94,8 +94,8 @@ void INPUTFUNCTION_NAME(struct INPUT_STRUCT_NAME *in, int i, int loop_iteration)
           printf("\n"); fflush(stdout);
         } } }
 #endif
-#ifdef RT_REINJECT_ACCRETED_PHOTONS // if this is enabled, we track how many photons the sink has accreted from gas cells and reinject them here, resetting the photon count
-    if(P[i].Type==5 && active_check) {in->Luminosity[N_RT_FREQ_BINS-1] += P[i].Sink_accreted_photon_energy; P[i].Sink_accreted_photon_energy = 0;} // nominally inject into the last, lowest-energy bin, intended for problems where optically-thick IR is getting advected into the sink
+#ifdef RT_REINJECT_ACCRETED_PHOTONS // if this is enabled, we track how many photons the sink has accreted from gas cells and reinject them here
+    if(P[i].Type==5 && active_check) {in->Luminosity[N_RT_FREQ_BINS-1] += P[i].Sink_accreted_photon_energy;} // do NOT reset here: this function is called twice per exported source (once for local eval, once for export packing), so resetting on the first call would give remote tasks zero reinjection energy; reset happens in a post-loop instead
 #endif
 #if defined(RT_REPROCESS_INJECTED_PHOTONS) && defined(RT_CHEM_PHOTOION)
     in->Dt = dt;
@@ -126,12 +126,12 @@ int rt_sourceinjection_active_check(int i)
     if(P[i].NumNgb <= 0) return 0;
     if(P[i].KernelRadius <= 0) return 0;
     if(P[i].Mass <= 0) return 0;
-    if(P[i].KernelSum_Around_RT_Source <= 0) return 0;
+    if(P[i].KernelSum_Around_RT_Source <= 0) {return 0;}
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
     if(P[i].Type == 5 && !P[i].do_gas_search_this_timestep) return 0;
 #endif
     double lum[N_RT_FREQ_BINS];
-    return rt_get_source_luminosity(i,-1,lum);
+    return rt_get_source_luminosity(i,-1,lum, P, CellP);
 }
 
 
@@ -140,15 +140,15 @@ void rt_source_injection_initial_operations_preloop(void);
 void rt_source_injection_initial_operations_preloop(void)
 {
     /* first, we do a loop over the gas particles themselves. these are trivial -- they don't need to share any information,
-     they just determine their own source functions. so we don't need to do any loops. and we can zero everything before the loop below. */
-    if(!(RT_SOURCES & 1)) return; // we skip this if gas cells don't have explicit source terms
-
+     they just determine their own source functions. so we don't need to do any loops. and we can zero everything before the loop below.
+     The zeroing is needed whether or not gas cells are sources: continuous (non-discrete) injection adds to Rad_Je. */
     int j;
     for(j=0;j<NumPart;j++) {
         if(P[j].Type==0) {
-            double lum[N_RT_FREQ_BINS]; int k;
-            for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[j].Rad_Je[k]=0;} // need to zero -before- calling injection //
-            int active_check = rt_get_source_luminosity(j,0,lum);
+            int k; for(k=0;k<N_RT_FREQ_BINS;k++) {CellP[j].Rad_Je[k]=0;} // need to zero -before- calling injection //
+            if(!(RT_SOURCES & 1)) {continue;} // gas cells have no explicit source terms
+            double lum[N_RT_FREQ_BINS];
+            int active_check = rt_get_source_luminosity(j,0,lum, P, CellP);
             /* here is where we would need to code some source luminosity for the gas */
             for(k=0;k<N_RT_FREQ_BINS;k++) if(active_check) {CellP[j].Rad_Je[k]=lum[k];}
         }
@@ -190,9 +190,9 @@ int rt_sourceinjection_evaluate(int target, int mode, int *exportflag, int *expo
                 j = ngblist[n]; /* since we use the -threaded- version above of ngb-finding, its super-important this is the lower-case ngblist here! */
                 if(P[j].Type != 0) {continue;} // require a gas particle //
                 if(P[j].Mass <= 0) {continue;} // require the particle has mass //
-                double dp[3]; for(k=0; k<3; k++) {dp[k] = local.Pos[k] - P[j].Pos[k];}
-                NEAREST_XYZ(dp[0],dp[1],dp[2],1); /* find the closest image in the given box size  */
-                double r2=0, r, wk; for(k=0;k<3;k++) {r2 += dp[k]*dp[k];}
+                Vec3<double> dp = local.Pos - P[j].Pos;
+                nearest_xyz(dp); /* find the closest image in the given box size  */
+                double r2 = dp.norm_sq(), r, wk;
                 if(r2<=0) {continue;} // same particle //
 #ifdef RT_SINK_ANGLEWEIGHT_PHOTON_INJECTION
                 if((All.TimeStep > 0) && (r2>=h2) && (r2 >= P[j].KernelRadius*P[j].KernelRadius)) {continue;} // outside kernel //
@@ -232,7 +232,7 @@ int rt_sourceinjection_evaluate(int target, int mode, int *exportflag, int *expo
                 for(k=0;k<N_RT_FREQ_BINS;k++)
                 {
                     double dE=0; dE = wk * local.Luminosity[k]; int kv; kv=0;
-                    double dfluxes[3]; dfluxes[0]=dfluxes[1]=dfluxes[2]=0;
+                    Vec3<double> dfluxes = {};
 
 #if !defined(RT_INJECT_PHOTONS_DISCRETELY)
                     #pragma omp atomic
@@ -242,17 +242,19 @@ int rt_sourceinjection_evaluate(int target, int mode, int *exportflag, int *expo
 
 #if defined(RT_INJECT_PHOTONS_DISCRETELY_ADD_MOMENTUM_FOR_LOCAL_EXTINCTION) || defined(RT_REPROCESS_INJECTED_PHOTONS)
                     // add discrete photon momentum from un-resolved absorption //
-                    double x_abs = 2. * CellP[j].Rad_Kappa[k] * (CellP[j].Density*All.cf_a3inv) * (DMAX(2.*Get_Particle_Size(j), DMAX(local.KernelRadius, r))) * All.cf_atime; // effective optical depth through particle
+                    double x_abs = 2. * CellP[j].Rad_Kappa[k] * (CellP[j].Density*All.cf_a3inv) * (DMAX(2.*P[j].Get_Particle_Size(), DMAX(local.KernelRadius, r))) * All.cf_atime; // effective optical depth through particle
                     double slabfac_x = x_abs * slab_averaging_function(x_abs); // 1-exp(-x)
                     if(isnan(slabfac_x)||(slabfac_x<=0)) {slabfac_x=0;} else if(slabfac_x>1) {slabfac_x=1;}
 #if !defined(RT_DISABLE_RAD_PRESSURE) && defined(RT_INJECT_PHOTONS_DISCRETELY_ADD_MOMENTUM_FOR_LOCAL_EXTINCTION)
-                    double dv = -slabfac_x * dE / (C_LIGHT_CODE_REDUCED(j) * P[j].Mass); // total absorbed momentum (needs multiplication by dp[kv]/r for directionality)
+                    double dv = -slabfac_x * dE / (C_LIGHT_CODE_REDUCED * P[j].Mass); // total absorbed momentum (needs multiplication by dp[kv]/r for directionality)
                     for(kv=0;kv<3;kv++) {
                         double dv_tmp = dv*(dp[kv]/r)*All.cf_atime;
                         #pragma omp atomic
                         P[j].Vel[kv] += dv_tmp;
                         #pragma omp atomic
                         CellP[j].VelPred[kv] += dv_tmp;
+                        #pragma omp atomic
+                        P[j].dp[kv] += dv_tmp * P[j].Mass;
                     } // applies direction and converts to code units
 #endif
 #endif
@@ -264,15 +266,15 @@ int rt_sourceinjection_evaluate(int target, int mode, int *exportflag, int *expo
                     if(RT_BAND_IS_IONIZING(k)){
                         double stellum=0;
                         if(local.Dt > 0) {
-#if (RT_CHEM_PHOTOION==1)			  
+#if (RT_CHEM_PHOTOION==1)
                             stellum = local.Luminosity[RT_FREQ_BIN_H0];
-#else			    
+#else
                             int k2; for(k2=RT_FREQ_BIN_H0; k2 < RT_FREQ_BIN_H0 + 4; k2++) {stellum += local.Luminosity[k2];} // add up total ionizing photon energy
-#endif			    
-                            stellum *= 1. / (C_LIGHT_CODE_REDUCED(j)/C_LIGHT_CODE) / local.Dt * UNIT_LUM_IN_CGS; // convert energy to luminosity in cgs
+#endif
+                            stellum *= 1. / (C_LIGHT_CODE_REDUCED/C_LIGHT_CODE) / local.Dt * UNIT_LUM_IN_CGS; // convert energy to luminosity in cgs
                         }
                         double RHII = 4.01e-9*pow(stellum,0.333)*pow(local.Density*All.cf_a3inv*UNIT_DENSITY_IN_CGS,-0.66667) / UNIT_LENGTH_IN_CGS;
-                        if(DMAX(r, Get_Particle_Size(j))*All.cf_atime < RHII) {do_donation = 0;} // don't inject ionizing photons outside the Stromgren radius
+                        if(DMAX(r, P[j].Get_Particle_Size())*All.cf_atime < RHII) {do_donation = 0;} // don't inject ionizing photons outside the Stromgren radius
                     }
 #endif
 #ifdef RT_INFRARED
@@ -282,8 +284,8 @@ int rt_sourceinjection_evaluate(int target, int mode, int *exportflag, int *expo
 #endif // RT_REPROCESS_INJECTED_PHOTONS
 
 #if defined(RT_EVOLVE_FLUX) && defined(RT_INJECT_PHOTONS_DISCRETELY_ADD_MOMENTUM_FOR_LOCAL_EXTINCTION) /* when we use these flags, we add the 'full' optically-thin flux directly to the neighbor cells. a more general formulation allows these fluxes to build up self-consistently, since we don't know a-priori what these 'should' be */
-                    double dflux = -dE * C_LIGHT_CODE_REDUCED(j) / r;
-                    for(kv=0;kv<3;kv++) {dfluxes[kv] += dflux*dp[kv];}
+                    double dflux = -dE * C_LIGHT_CODE_REDUCED / r;
+                    dfluxes += dflux*dp;
 #endif
 
                     
@@ -291,6 +293,12 @@ int rt_sourceinjection_evaluate(int target, int mode, int *exportflag, int *expo
                     /* now add the actual photon energies */
                     #pragma omp atomic
                     CellP[j].Rad_E_gamma[k] += dE; // dump discretely (noisier, but works smoothly with large timebin hierarchy)
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+                    rt_diag_add(RT_DIAG_INJECTED, k, dE);
+#ifdef RT_REPROCESS_INJECTED_PHOTONS
+                    if(donation_bin > -1) {rt_diag_add(RT_DIAG_INJECTED, donation_bin, dE_donation);}
+#endif
+#endif
 #ifdef RT_EVOLVE_ENERGY
                     #pragma omp atomic
                     CellP[j].Rad_E_gamma_Pred[k] += dE;
@@ -319,9 +327,9 @@ int rt_sourceinjection_evaluate(int target, int mode, int *exportflag, int *expo
 #endif
 
 #if defined(RT_EVOLVE_FLUX) // add relativistic corrections here, which should be there in general. however we will ignore [here] the 'back-reaction' term, since we're assuming the source is a star or something like that, where this would be negligible. gas self gain/loss is handled separately.
-                    {int kv; for(kv=0;kv<3;kv++) {dfluxes[kv] += dE * (RSOL_CORRECTION_FACTOR_FOR_VELOCITY_TERMS(j)*local.Vel[kv]/All.cf_atime);}}
+                    {int kv; for(kv=0;kv<3;kv++) {dfluxes[kv] += dE * (RSOL_CORRECTION_FACTOR_FOR_VELOCITY_TERMS*local.Vel[kv]/All.cf_atime);}}
 #ifdef GRAIN_RDI_TESTPROBLEM_LIVE_RADIATION_INJECTION
-                    double qtau=(0.75*All.Grain_Q_at_MaxGrainSize)/((All.Grain_Internal_Density/UNIT_DENSITY_IN_CGS)*(All.Grain_Size_Max/UNIT_LENGTH_IN_CGS)), e0=(P[j].Mass/CellP[j].Density)*All.Vertical_Grain_Accel/qtau,tau_tot=All.Dust_to_Gas_Mass_Ratio*qtau,flux_egy_0=C_LIGHT_CODE_REDUCED(j)*DMAX(CellP[j].Rad_E_gamma[k],CellP[j].Rad_E_gamma_Pred[k])/(1.+3.*tau_tot),f0=DMAX(flux_egy_0,DMAX(C_LIGHT_CODE_REDUCED(j)*e0,DMAX(CellP[j].Rad_Flux[k][2],CellP[j].Rad_Flux_Pred[k][2])));
+                    double qtau=(0.75*All.Grain_Q_at_MaxGrainSize)/((All.Grain_Internal_Density/UNIT_DENSITY_IN_CGS)*(All.Grain_Size_Max/UNIT_LENGTH_IN_CGS)), e0=(P[j].Mass/CellP[j].Density)*All.Vertical_Grain_Accel/qtau,tau_tot=All.Dust_to_Gas_Mass_Ratio*qtau,flux_egy_0=C_LIGHT_CODE_REDUCED*DMAX(CellP[j].Rad_E_gamma[k],CellP[j].Rad_E_gamma_Pred[k])/(1.+3.*tau_tot),f0=DMAX(flux_egy_0,DMAX(C_LIGHT_CODE_REDUCED*e0,DMAX(CellP[j].Rad_Flux[k][2],CellP[j].Rad_Flux_Pred[k][2])));
                     dfluxes[0]=0; dfluxes[1]=0; dfluxes[2]=f0; /* for now, for this special problem setup, we have everything hard-coded here to ensure it obeys the desired flux boundary condition */
                     {
                         #pragma omp atomic
@@ -337,7 +345,7 @@ int rt_sourceinjection_evaluate(int target, int mode, int *exportflag, int *expo
                         #pragma omp atomic
                         CellP[j].Rad_Flux_Pred[k][2]=0;
                     }
-                    //{double dflux=dE*C_LIGHT_CODE_REDUCED(j); dfluxes[2] += dflux;}
+                    //{double dflux=dE*C_LIGHT_CODE_REDUCED; dfluxes[2] += dflux;}
 #endif
                     {int kv; for(kv=0;kv<3;kv++) {
                         #pragma omp atomic
@@ -375,6 +383,9 @@ void rt_source_injection(void)
     #include "../system/code_block_xchange_perform_ops_malloc.h" /* this calls the large block of code which contains the memory allocations for the MPI/OPENMP/Pthreads parallelization block which must appear below */
     #include "../system/code_block_xchange_perform_ops.h" /* this calls the large block of code which actually contains all the loops, MPI/OPENMP/Pthreads parallelization */
     #include "../system/code_block_xchange_perform_ops_demalloc.h" /* this de-allocates the memory for the MPI/OPENMP/Pthreads parallelization block which must appear above */
+#ifdef RT_REINJECT_ACCRETED_PHOTONS
+    {int n_tmp; for(n_tmp=0; n_tmp<NumPart; n_tmp++) {if(P[n_tmp].Type==5) {P[n_tmp].Sink_accreted_photon_energy = 0;}}} /* reset after all injection (local+remote) is complete */
+#endif
     CPU_Step[CPU_RTNONFLUXOPS] += measure_time(); /* collect timings and reset clock for next timing */
 }
 #include "../system/code_block_xchange_finalize.h" /* de-define the relevant variables and macros to avoid compilation errors and memory leaks */

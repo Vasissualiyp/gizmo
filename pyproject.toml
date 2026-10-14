@@ -12,8 +12,7 @@ classifiers = [
     "Programming Language :: Python :: 3",
     "Operating System :: OS Independent",
 ]
-dependencies = ["pytest","h5py","matplotlib","astropy","numpy", "scipy", "meshoid"]
-
+dependencies = ["pytest","pytest-timeout","h5py","matplotlib","astropy","numpy", "scipy", "meshoid"]
 license = "MIT"
 
 [project.urls]
@@ -22,3 +21,7 @@ Issues = "https://github.com/phopkins/gizmo/issues"
 
 [tool.setuptools.packages.find]
 where = ["python_src"]
+
+[tool.pytest.ini_options]
+timeout = 0  # opt-in: no global timeout. Use @pytest.mark.timeout(seconds) per test, or GIZMO_TEST_TIMEOUT=N for the subprocess timeout.
+python_files = ["test_*.py"]

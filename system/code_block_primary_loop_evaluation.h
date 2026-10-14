@@ -13,7 +13,7 @@ printf("Cannot compile the primary sub-loop without both CONDITION_FOR_EVALUATIO
 /* variable assignment */
 int i, j, *exportflag, *exportnodecount, *exportindex, *ngblist, thread_id = *(int *) p;
 /* define the pointers needed for each thread to speak back regarding what needs processing */
-ngblist = Ngblist + thread_id * NumPart;
+ngblist = Ngblist.data() + thread_id * NumPart;
 exportflag = Exportflag + thread_id * NTask;
 exportnodecount = Exportnodecount + thread_id * NTask;
 exportindex = Exportindex + thread_id * NTask;
@@ -22,31 +22,36 @@ for(j = 0; j < NTask; j++) {exportflag[j] = -1;}
 #ifdef _OPENMP
 if(BufferCollisionFlag && thread_id) {return NULL;} /* force to serial for this subloop if threads simultaneously cross the Nexport bunchsize threshold */
 #endif
-/* now begin the actual loop */
+/* now begin the actual loop, grabbing batches of particles to reduce critical section overhead */
+#ifndef PRIMARY_LOOP_BATCH_SIZE
+#define PRIMARY_LOOP_BATCH_SIZE 8
+#endif
 while(1)
 {
-    int exitFlag = 0;
+    int batch[PRIMARY_LOOP_BATCH_SIZE], batch_count = 0;
 #ifdef _OPENMP
 #pragma omp critical(_nextlistprimblox_)
 #endif
     {
-        if(BufferFullFlag != 0 || NextParticle < 0)
+        while(batch_count < PRIMARY_LOOP_BATCH_SIZE && BufferFullFlag == 0 && NextParticle < (int)ActiveParticleList.size())
         {
-            exitFlag = 1;
-        }
-        else
-        {
-            i = NextParticle;
-            NextParticle = NextActiveParticle[NextParticle];
+            int idx = ActiveParticleList[NextParticle];
+            NextParticle++;
+            if(!ProcessedFlag[idx]) {batch[batch_count++] = idx;}
         }
     }
-    if(exitFlag) {break;}
-    if(ProcessedFlag[i]) {continue;}
-    CONDITION_FOR_EVALUATION
+    if(batch_count == 0) {break;}
+    int buffer_full = 0;
+    for(int b = 0; b < batch_count; b++)
     {
-        if(EVALUATION_CALL < 0) {break;} // export buffer has filled up //
+        i = batch[b];
+        CONDITION_FOR_EVALUATION
+        {
+            if(EVALUATION_CALL < 0) {buffer_full = 1; break;} // export buffer has filled up //
+        }
+        ProcessedFlag[i] = 1; /* particle successfully finished */
     }
-    ProcessedFlag[i] = 1; /* particle successfully finished */
+    if(buffer_full) {break;}
 }
 /* loop completed successfully */
 return NULL;

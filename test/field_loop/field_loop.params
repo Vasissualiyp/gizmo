@@ -8,10 +8,10 @@
 %
 InitCondFile                       field_loop_ics
 OutputDir                          output
-TimeMax                            2
+TimeMax                            0.21
 BoxSize                            1
 TimeOfFirstSnapshot                0.01
-TimeBetSnapshot                    1
+TimeBetSnapshot                    0.025
 MaxSizeTimestep                    0.1
 DesNumNgb                          20
 ErrTolIntAccuracy                  0.01

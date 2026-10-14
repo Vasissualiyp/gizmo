@@ -35,19 +35,22 @@ void do_first_halfstep_kick(void)
         apply_long_range_kick(tstart, tend);
     }
 #endif
-#ifdef HYDRO_MESHLESS_FINITE_VOLUME    
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) private(ti_step, tstart, tend)
+#endif
+#ifdef HYDRO_MESHLESS_FINITE_VOLUME
     /* as currently written with some revisions to MFV methods, should only update on active timesteps */
     for(i = 0; i < NumPart; i++)
     {
         if((TimeBinActive[P[i].TimeBin]) || (P[i].Type==0)) /* active OR gas, need to check each timestep to ensure manifest conservation */
 #else
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) /* 'full' kick for active particles */
-    {	    
+    for (int i : ActiveParticleList) /* 'full' kick for active particles */
+    {
 #endif
         {
             if(P[i].Mass > 0)
             {
-                ti_step = GET_PARTICLE_INTEGERTIME(i);
+                ti_step = P[i].integertime_step();
                 tstart = P[i].Ti_begstep;	/* beginning of step */
                 tend = P[i].Ti_begstep + ti_step / 2;	/* midpoint of step */
                 do_the_kick(i, tstart, tend, P[i].Ti_current, 0);
@@ -69,18 +72,21 @@ void do_second_halfstep_kick(void)
         apply_long_range_kick(tstart, tend);
     }
 #endif
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) private(ti_step, tstart, tend)
+#endif
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
     for(i = 0; i < NumPart; i++)
     {
         if((TimeBinActive[P[i].TimeBin]) || (P[i].Type==0)) /* active OR gas, need to check each timestep to ensure manifest conservation */
 #else
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) /* 'full' kick for active particles */
+    for (int i : ActiveParticleList) /* 'full' kick for active particles */
     {
 #endif
         {
             if(P[i].Mass > 0)
             {
-                ti_step = GET_PARTICLE_INTEGERTIME(i);
+                ti_step = P[i].integertime_step();
                 tstart = P[i].Ti_begstep + ti_step / 2;	/* midpoint of step */
                 tend = P[i].Ti_begstep + ti_step;	/* end of step */
                 do_the_kick(i, tstart, tend, P[i].Ti_current, 1);
@@ -105,8 +111,13 @@ int eligible_for_hermite(int i)
     if((1 << P[i].Type) & (GRAIN_PTYPES)) {return 0;} // not compatible with these flags for these types
 #endif
 #if defined(SINK_PARTICLES) || defined(GALSF)
-    if(P[i].StellarAge >= DMAX(All.Time - 2*(GET_PARTICLE_TIMESTEP_IN_PHYSICAL(i)*All.cf_hubble_a), 0)) {return 0;} // if we were literally born yesterday then let things settle down a bit with the less-accurate, but more-robust regular integration
-    if(P[i].AccretedThisTimestep) {return 0;}
+    if(P[i].StellarAge >= DMAX(All.Time - 2*(get_particle_timestep_in_physical(i)*All.cf_hubble_a), 0)) {return 0;} // if we were literally born yesterday then let things settle down a bit with the less-accurate, but more-robust regular integration
+    /* Accreting sinks stay Hermite-integrated. Falling back to KDK per particle lets the two
+       members of a pair use different schemes in the same step, so their mutual forces stop
+       being reciprocal and momentum is not conserved. Instead, accretion shifts the Hermite carry
+       state along with Pos/Vel (see sinks/sink.cc), so the predictor never works from a stale
+       base. Demoting both members together was rejected: demotion shortens the step, a one-way
+       ratchet on the hierarchy. */
 #endif
 #if (SINGLE_STAR_TIMESTEPPING > 0)
     if(P[i].SuperTimestepFlag >= 2) {return 0;}
@@ -125,50 +136,55 @@ int eligible_for_hermite(int i)
 // Note: the below routines only account for gravitational acceleration - only appropriate for stars or collisionless particles
 void do_hermite_prediction(void)
 {
-    int i,j; integertime ti_step, tstart=0, tend=0;
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {
-	if(eligible_for_hermite(i)) { /* check if we're actually eligible */	    
+    int i; integertime ti_step, tstart=0, tend=0;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) private(ti_step, tstart, tend)
+#endif
+    for (int i : ActiveParticleList) {
+	if(eligible_for_hermite(i)) { /* check if we're actually eligible */
 	    if(P[i].Mass > 0) { /* skip massless particles scheduled for deletion */
-		ti_step = GET_PARTICLE_INTEGERTIME(i);
+		ti_step = P[i].integertime_step();
 		tstart = P[i].Ti_begstep;    /* beginning of step */
 		tend = P[i].Ti_begstep + ti_step;    /* end of step */
             double dt_grav = get_gravkick_factor(tstart, tend, i, 0);
-		for(j=0; j<3; j++) {
 #ifdef PMGRID
             //Add the long-range kick from the first half-step, if necessary (since we are overwriting the previous kick operations with the Hermite scheme)
             if(All.PM_Ti_begstep == All.Ti_Current)	/* need to do long-range kick */
             {
                 double dt_grav_pm = get_gravkick_factor(All.PM_Ti_begstep, All.PM_Ti_begstep + (All.PM_Ti_endstep - All.PM_Ti_begstep)/2, i, 0);
-                P[i].OldVel[j] += P[i].GravPM[j] * dt_grav_pm;
+                P[i].OldVel += P[i].GravPM * dt_grav_pm;
             }
 #endif
-		    P[i].Pos[j] = P[i].OldPos[j] + dt_grav * (P[i].OldVel[j] + dt_grav/2 * (P[i].Hermite_OldAcc[j] + dt_grav/3 * P[i].OldJerk[j])) ;
-		    P[i].Vel[j] = P[i].OldVel[j] + dt_grav * (P[i].Hermite_OldAcc[j] + dt_grav/2 * P[i].OldJerk[j]);
-		}}}} // for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) 
+            P[i].Pos = P[i].OldPos + (P[i].OldVel + (P[i].Hermite_OldAcc + P[i].OldJerk * (dt_grav/3)) * (dt_grav/2)) * dt_grav;
+            P[i].Vel = P[i].OldVel + (P[i].Hermite_OldAcc + P[i].OldJerk * (dt_grav/2)) * dt_grav;
+		}}} // for (int i : ActiveParticleList)
 }
 
-void do_hermite_correction(void) // corrector step
+void do_hermite_correction(int final_pass) // corrector step; final_pass: last of the HERMITE_CORRECTOR_ITERATIONS passes
 {
-    int i,j; integertime ti_step, tstart=0, tend=0;    
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i]) {	
+    int i; integertime ti_step, tstart=0, tend=0;
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic) private(ti_step, tstart, tend)
+#endif
+    for (int i : ActiveParticleList) {
 	if(eligible_for_hermite(i)){
                 if(P[i].Mass > 0) {
-                    ti_step = GET_PARTICLE_INTEGERTIME(i);
+                    ti_step = P[i].integertime_step();
                     tstart = P[i].Ti_begstep;    /* beginning of step */
                     tend = P[i].Ti_begstep + ti_step;    /* end of step */
                     double dt_grav = get_gravkick_factor(tstart, tend, i, 0);
-                    for(j=0; j<3; j++) {
-                        P[i].Vel[j] = P[i].OldVel[j] + dt_grav * 0.5*(P[i].Hermite_OldAcc[j] + P[i].GravAccel[j]) + (P[i].OldJerk[j] - P[i].GravJerk[j]) * dt_grav * dt_grav/12;
-                        P[i].Pos[j] = P[i].OldPos[j] + dt_grav * 0.5*(P[i].Vel[j] + P[i].OldVel[j]) + (P[i].Hermite_OldAcc[j] - P[i].GravAccel[j]) * dt_grav * dt_grav/12;
+                    P[i].Vel = P[i].OldVel + (P[i].Hermite_OldAcc + P[i].GravAccel) * (dt_grav * 0.5) + (P[i].OldJerk - P[i].GravJerk) * (dt_grav * dt_grav / 12);
+                    P[i].Pos = P[i].OldPos + (P[i].Vel + P[i].OldVel) * (dt_grav * 0.5) + (P[i].Hermite_OldAcc - P[i].GravAccel) * (dt_grav * dt_grav / 12);
 #ifdef PMGRID
-                        //Add the long-range kick from the second half-step, if necessary (since we are overwriting the previous kick operations with the Hermite scheme)
-                        if(All.PM_Ti_endstep == All.Ti_Current)	/* need to do long-range kick */
-                        {
-                            double dt_grav_pm = get_gravkick_factor(All.PM_Ti_begstep + (All.PM_Ti_endstep - All.PM_Ti_begstep)/2, All.PM_Ti_endstep, i, 0);
-                            P[i].OldVel[j] += P[i].GravPM[j] * dt_grav_pm;
-                        }
+                    //Add the long-range kick from the second half-step, if necessary (since we are overwriting the previous kick operations with the Hermite scheme)
+                    //Final pass only: an intermediate corrected state is a force-evaluation point and, like the predicted state, carries no PM kick
+                    if(final_pass && All.PM_Ti_endstep == All.Ti_Current)	/* need to do long-range kick */
+                    {
+                        double dt_grav_pm = get_gravkick_factor(All.PM_Ti_begstep + (All.PM_Ti_endstep - All.PM_Ti_begstep)/2, All.PM_Ti_endstep, i, 0);
+                        P[i].Vel += P[i].GravPM * dt_grav_pm;
+                    }
 #endif
-		    }}}} //     for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+		}}} //     for (int i : ActiveParticleList)
 }
 #endif // HERMITE_INTEGRATION
 
@@ -176,21 +192,18 @@ void do_hermite_correction(void) // corrector step
 #ifdef PMGRID
 void apply_long_range_kick(integertime tstart, integertime tend)
 {
-    int i, j;
-    double dvel[3], dt_gravkick = get_gravkick_factor(tstart, tend, -1, 0);
+    int i;
+    double dt_gravkick = get_gravkick_factor(tstart, tend, -1, 0);
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
     for(i = 0; i < NumPart; i++)
     {
         if(P[i].Mass > 0)
         {
-#ifdef KETJU_REGULARIZATION
-            if(P[i].KetjuIntegrated) continue; /* KETJU particles: gravity handled by MSTAR */
-#endif
-            for(j = 0; j < 3; j++)	/* do the kick, only collisionless particles */
-            {
-                dvel[j] = P[i].GravPM[j] * dt_gravkick;
-                P[i].Vel[j] += dvel[j];
-                P[i].dp[j] += P[i].Mass * dvel[j];
-            }
+            Vec3<double> dvel = P[i].GravPM * dt_gravkick; /* do the kick, only collisionless particles */
+            P[i].Vel += dvel;
+            P[i].dp += dvel * P[i].Mass;
         }
     }
 }
@@ -199,8 +212,10 @@ void apply_long_range_kick(integertime tstart, integertime tend)
 
 void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurrent, int mode)
 {
-    int j;
-    double dp[3], dt_entr, dt_gravkick, dt_hydrokick;
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+    rt_diag_kick_mode = mode;
+#endif
+    Vec3<double> dp; double dt_entr, dt_gravkick, dt_hydrokick;
     double mass_old, mass_pred, mass_new;
     mass_old = mass_pred = mass_new = P[i].Mass;
 
@@ -230,7 +245,7 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
             double dMass=0; // fraction of delta_conserved to couple per kick step (each 'kick' is 1/2-timestep) // double dv[3], v_old[3], dMass, ent_old=0, d_inc = 0.5;
             if(mode != 0) // update the --conserved-- variables of each particle //
             {
-                dMass = ((tend - tstart) * UNIT_INTEGERTIME_IN_PHYSICAL(i)) * CellP[i].DtMass; if(dMass * CellP[i].dMass < 0) {dMass = 0;} // slope-limit: no opposite reconstruction! //
+                dMass = ((tend - tstart) * unit_integertime_in_physical(i)) * CellP[i].DtMass; if(dMass * CellP[i].dMass < 0) {dMass = 0;} // slope-limit: no opposite reconstruction! //
                 if((fabs(dMass) > fabs(CellP[i].dMass))) {dMass = CellP[i].dMass;} // try to get close to what the time-integration scheme would give //
                 CellP[i].dMass -= dMass;
             } else {dMass = CellP[i].dMass;}
@@ -245,7 +260,7 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
                 P[i].Vel[j] = (mass_old*P[i].Vel[j] + dp[j]*All.cf_atime) / mass_new; // call after tabulating dP[j] //
             } // kick for gas internal energy/entropy
             e_old += d_inc * CellP[i].dInternalEnergy; // for(j = 0; j< 3; j++) e_old -= 0.5*mass_new * (P[i].Vel[j]/All.cf_atime)*(P[i].Vel[j]/All.cf_atime); // increment of total (thermal+kinetic) energy; subtract off the new kinetic energy //
-            CellP[i].InternalEnergy = e_old / mass_new; check_particle_for_temperature_minimum(i); // obtain the new internal energy per unit mass, check floor // */
+            CellP[i].InternalEnergy = e_old / mass_new; CellP[i].enforce_temperature_floor(); // obtain the new internal energy per unit mass, check floor // */
              
             // at the end of this kick, need to re-zero the dInternalEnergy, and other conserved-variable gas/fluid quantities set in the hydro loop, to avoid double-counting them
             if(mode==0) {CellP[i].dMass=0;} /* CellP[i].dInternalEnergy=0; CellP[i].dMomentum[0]=CellP[i].dMomentum[1]=CellP[i].dMomentum[2]=0; */
@@ -257,20 +272,23 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
     if(TimeBinActive[P[i].TimeBin])
     {
         /* get the timestep (physical units for dt_entr and dt_hydrokick) */
-        dt_entr = dt_hydrokick = (tend - tstart) * UNIT_INTEGERTIME_IN_PHYSICAL(i);
+        dt_entr = dt_hydrokick = (tend - tstart) * unit_integertime_in_physical(i);
         dt_gravkick = get_gravkick_factor(tstart, tend, i, 0);
         
         if(P[i].Type==0)
         {
-            double grav_acc[3], dEnt_Gravity = 0;
-            for(j = 0; j < 3; j++) {grav_acc[j] = All.cf_a2inv * P[i].GravAccel[j];}
+            Vec3<double> grav_acc; double dEnt_Gravity = 0;
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+            double rt_diag_u0 = CellP[i].InternalEnergy;
+#endif
+            grav_acc = P[i].GravAccel * All.cf_a2inv;
 #ifdef PMGRID
-            for(j = 0; j < 3; j++) {grav_acc[j] += All.cf_a2inv * P[i].GravPM[j];}
+            grav_acc += P[i].GravPM * All.cf_a2inv;
 #endif
 
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
             /* calculate the contribution to the energy change from the mass fluxes in the gravitation field */
-            for(j=0;j<3;j++) {dEnt_Gravity += -(CellP[i].GravWorkTerm[j] * All.cf_atime * dt_hydrokick) * grav_acc[j];}
+            dEnt_Gravity += -dot(CellP[i].GravWorkTerm, grav_acc) * All.cf_atime * dt_hydrokick;
 #endif
             double du_tot = CellP[i].DtInternalEnergy * dt_hydrokick + dEnt_Gravity;
 #if defined(COOLING) && !defined(COOLING_OPERATOR_SPLIT)
@@ -291,12 +309,12 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
              and they are dynamically irrelevant, in exchange for avoiding potentially much more
              serious errors if this tripped when the B-fields were important */
             double e_thermal,e_kinetic,e_potential;
-            e_potential=0; for(j=0;j<3;j++) {e_potential += grav_acc[j]*grav_acc[j];}
-            e_potential = P[i].Mass * sqrt(e_potential) * (Get_Particle_Size(i)*All.cf_atime); // = M*|a_grav|*h (physical)
+            e_potential = grav_acc.norm_sq();
+            e_potential = P[i].Mass * sqrt(e_potential) * (P[i].Get_Particle_Size()*All.cf_atime); // = M*|a_grav|*h (physical)
             e_kinetic = 0.5 * P[i].Mass * All.cf_a2inv * CellP[i].MaxKineticEnergyNgb;
             e_thermal = DMAX(0.5*CellP[i].InternalEnergy, dEnt) * P[i].Mass;
 #ifdef MAGNETIC
-            for(j=0;j<3;j++) {e_thermal += 0.5*CellP[i].B[j]*CellP[i].B[j]*CellP[i].Density/(All.cf_atime*P[i].Mass);}
+            e_thermal += 0.5*CellP[i].B.norm_sq()*CellP[i].Density/(All.cf_atime*P[i].Mass);
 #endif
             int do_entropy = 0;
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
@@ -310,7 +328,7 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
             //  both are not needed. we find slightly cleaner results on that test keeping the gravity and removing the KE switch
             
             // also check for flows which are totally dominated by the adiabatic component of their temperature evolution //
-            // double mach = fabs(CellP[i].MaxSignalVel/Get_Gas_effective_soundspeed_i(i) - 2.0); //
+            // double mach = fabs(CellP[i].MaxSignalVel/CellP[i].effective_soundspeed() - 2.0); //
             // if(mach < 1.1) {do_entropy=1;} // (actually, this switch tends to do more harm than good!) //
             //do_entropy = 0; // seems unstable in tests like interacting blastwaves... //
             if(do_entropy)
@@ -318,15 +336,12 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
                 /* use the pure-SPH entropy equation, which is exact up to the mass flux, for adiabatic flows */
                 CellP[i].DtInternalEnergy = -(CellP[i].Pressure/CellP[i].Density) * P[i].Particle_DivVel*All.cf_a2inv;
 #ifdef MAGNETIC
-                for(j=0;j<3;j++)
-                {
-                    CellP[i].DtB[j] = (1./3.) * CellP[i].B[j]*All.cf_atime * P[i].Particle_DivVel*All.cf_a2inv;
-                }
+                CellP[i].DtB = CellP[i].B * ((1./3.) * All.cf_atime * P[i].Particle_DivVel*All.cf_a2inv);
 #ifdef DIVBCLEANING_DEDNER
                 CellP[i].DtPhi = (1./3.) * (CellP[i].Phi*All.cf_a3inv) * P[i].Particle_DivVel*All.cf_a2inv; // cf_a3inv from mass-based phi-fluxes
 #endif
 #endif
-                if(All.ComovingIntegrationOn) {CellP[i].DtInternalEnergy -= 3*(GAMMA(i)-1) * CellP[i].InternalEnergyPred * All.cf_hubble_a;}
+                if(All.ComovingIntegrationOn) {CellP[i].DtInternalEnergy -= 3*(CellP[i].gamma_eos_value()-1) * CellP[i].InternalEnergyPred * All.cf_hubble_a;}
                 dEnt = CellP[i].InternalEnergy + CellP[i].DtInternalEnergy * dt_hydrokick; /* gravity term not included here, as it makes this unstable */
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
                 CellP[i].dMass = CellP[i].DtMass = 0;
@@ -336,9 +351,9 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
             
 #ifdef HYDRO_EXPLICITLY_INTEGRATE_VOLUME
             CellP[i].Density_ExplicitInt *= exp(-DMIN(1.5,DMAX(-1.5,P[i].Particle_DivVel*All.cf_a2inv * dt_hydrokick))); /*!< explicitly integrated volume/density variable to be used if integrating the SPH-like form of the continuity directly */
-            if(CellP[i].FaceClosureError > 0) {double drho2=0; int k; for(k=0;k<3;k++) {drho2+=CellP[i].Gradients.Density[k]*CellP[i].Gradients.Density[k];} /* the evolved density evolves back to the explicit density on a relaxation time of order the sound-crossing or tension wave-crossing time across the density gradient length */
+            if(CellP[i].FaceClosureError > 0) {double drho2 = CellP[i].Gradients.Density.norm_sq(); /* the evolved density evolves back to the explicit density on a relaxation time of order the sound-crossing or tension wave-crossing time across the density gradient length */
                 if(drho2>0 && CellP[i].Density_ExplicitInt>0 && CellP[i].Density>0) {
-                    double Lgrad = CellP[i].Density / sqrt(drho2); Lgrad=DMAX(Lgrad,P[i].KernelRadius); double cs_eff_forrestoringforce=Get_Gas_effective_soundspeed_i(i); /* gradient scale length and sound speed */
+                    double Lgrad = CellP[i].Density / sqrt(drho2); Lgrad=DMAX(Lgrad,P[i].KernelRadius); double cs_eff_forrestoringforce=CellP[i].effective_soundspeed(); /* gradient scale length and sound speed */
 #if defined(EOS_TILLOTSON)
                     cs_eff_forrestoringforce=DMIN(cs_eff_forrestoringforce , sqrt(All.Tillotson_EOS_params[CellP[i].CompositionType][10] / CellP[i].Density)); /* speed of deviatoric waves, which is most relevant, if defined */
 #endif
@@ -348,72 +363,72 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
 #endif
 
 #ifdef RADTRANSFER /* block here to deal with tricky cases where radiation energy density is -much- larger than thermal, re-distribute the energy that would have taken us negative in gas back into radiation */
-            int kfreq; double erad_tot=0,emin=0,enew=0,demin=0,dErad=0,rsol_fac=C_LIGHT_CODE_REDUCED(i)/C_LIGHT_CODE;  for(kfreq=0;kfreq<N_RT_FREQ_BINS;kfreq++) {erad_tot+=CellP[i].Rad_E_gamma[kfreq];}
+            int kfreq; double erad_tot=0,emin=0,enew=0,demin=0,dErad=0,rsol_fac=C_LIGHT_CODE_REDUCED/C_LIGHT_CODE;  for(kfreq=0;kfreq<N_RT_FREQ_BINS;kfreq++) {erad_tot+=CellP[i].Rad_E_gamma[kfreq];}
             if(erad_tot > 0) // do some checks if this helps or hurts (identical setup in predict) - seems relatively ok for now, in new form
             {
                 demin=0.025*CellP[i].InternalEnergy; emin=0.025*(erad_tot/rsol_fac + CellP[i].InternalEnergy*P[i].Mass); enew=DMAX(erad_tot/rsol_fac + dEnt*P[i].Mass, emin);
                 dEnt=(enew - erad_tot/rsol_fac) / P[i].Mass; if(dEnt < demin) {dErad=rsol_fac*(dEnt-demin); dEnt=demin;}
                 if(dErad<-0.975*erad_tot) {dErad=-0.975*erad_tot;} CellP[i].InternalEnergy = dEnt; for(kfreq=0;kfreq<N_RT_FREQ_BINS;kfreq++) {CellP[i].Rad_E_gamma[kfreq] *= 1 + dErad/erad_tot;}
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+                rt_diag_sc(RT_DIAG_SC_KICK_DERAD, dErad);
+#endif
             } else {
                 if(dEnt < 0.5*CellP[i].InternalEnergy) {CellP[i].InternalEnergy *= 0.5;} else {CellP[i].InternalEnergy = dEnt;}
             }
 #else
             if(dEnt < 0.5*CellP[i].InternalEnergy) {CellP[i].InternalEnergy *= 0.5;} else {CellP[i].InternalEnergy = dEnt;}
 #endif
-            check_particle_for_temperature_minimum(i); /* if we've fallen below the minimum temperature, force the 'floor' */
+            CellP[i].enforce_temperature_floor(); /* if we've fallen below the minimum temperature, force the 'floor' */
+#if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(RT_INFRARED)
+            rt_diag_sc(RT_DIAG_SC_KICK_DU, (CellP[i].InternalEnergy - rt_diag_u0) * P[i].Mass);
+#endif
         }
         
         /* now, kick for non-gas/fluid quantities (accounting for momentum conservation if masses are changing) */
-        for(j = 0; j < 3; j++)
+        dp = {};
+        if(P[i].Type==0)
         {
-            dp[j] = 0;
-            if(P[i].Type==0)
-            {
-                dp[j] += mass_pred * CellP[i].HydroAccel[j] * All.cf_atime * dt_hydrokick; // convert to code units
+            dp += P[i].GravAccel * (mass_pred * dt_gravkick);
+            dp += CellP[i].HydroAccel * (mass_pred * All.cf_atime * dt_hydrokick); // convert to code units
 #ifdef TURB_DRIVING
-                dp[j] += mass_pred * CellP[i].TurbAccel[j] * dt_gravkick;
+            dp += CellP[i].TurbAccel * (mass_pred * dt_gravkick);
 #endif
 #ifdef RT_RAD_PRESSURE_OUTPUT
-                dp[j] += mass_pred * CellP[i].Rad_Accel[j] * All.cf_atime * dt_hydrokick;
+            dp += CellP[i].Rad_Accel * (mass_pred * All.cf_atime * dt_hydrokick);
 #endif
-            }
-            /* KETJU chain members feel ONLY the external field, and it is already sitting in GravAccel:
-             * the tree walk excludes member<->member forces (KetjuRegionTag), so GravAccel for a member
-             * IS its external (non-member) acceleration. Crucially we use the LIVE GravAccel, not a frozen
-             * copy — it is recomputed member-excluded at BOTH the start-of-step gravity (before the first
-             * half-kick) and the post-drift gravity (before the second half-kick, at the MSTAR-evolved
-             * positions via the velocity trick). So the CoM sees a_ext(t) on the first half-kick and
-             * a_ext(t+dt) on the second: a proper 2nd-order KDK leapfrog in the external field. For an
-             * isolated region GravAccel = 0 -> pure MSTAR. Members kick exactly like every other particle. */
-            dp[j] += mass_pred * P[i].GravAccel[j] * dt_gravkick;
+        } else {
+            dp += P[i].GravAccel * (mass_pred * dt_gravkick);
+        }
 #if (SINGLE_STAR_TIMESTEPPING > 0)  //if we're super-timestepping, the above accounts for the change in COM velocity. Now we do the internal binary velocity change
 #ifdef KETJU_REGULARIZATION
-            if((P[i].Type == 5) && (P[i].SuperTimestepFlag>=2) && !P[i].KetjuIntegrated) {dp[j] += mass_pred * (P[i].COM_GravAccel[j]-P[i].GravAccel[j]) * dt_gravkick;}
+        if((P[i].Type == 5) && (P[i].SuperTimestepFlag>=2) && !P[i].KetjuIntegrated) {dp += (P[i].COM_GravAccel - P[i].GravAccel) * (mass_pred * dt_gravkick);}
 #else
-            if((P[i].Type == 5) && (P[i].SuperTimestepFlag>=2)) {dp[j] += mass_pred * (P[i].COM_GravAccel[j]-P[i].GravAccel[j]) * dt_gravkick;}
+        if((P[i].Type == 5) && (P[i].SuperTimestepFlag>=2)) {dp += (P[i].COM_GravAccel - P[i].GravAccel) * (mass_pred * dt_gravkick);}
 #endif
 #endif
 #ifdef HERMITE_INTEGRATION
-            // we augment this to a whole-step kick for the initial Hermite prediction step, which is done alongside the first half-step kick.
-            if((1<<P[i].Type) & HERMITE_INTEGRATION)
+        // we augment this to a whole-step kick for the initial Hermite prediction step, which is done alongside the first half-step kick.
+        if((1<<P[i].Type) & HERMITE_INTEGRATION)
+        {
+            if(mode == 0)
             {
-                if(mode == 0)
-                {
-                    P[i].OldVel[j] = P[i].Vel[j];
-                    P[i].OldPos[j] = P[i].Pos[j];
-                    P[i].OldJerk[j] = P[i].GravJerk[j];
-                    P[i].Hermite_OldAcc[j] = P[i].GravAccel[j]; // this is the value from the first Hermite tree pass for this timestep
-                }
+                P[i].OldVel = P[i].Vel;
+                P[i].OldPos = P[i].Pos;
+                P[i].OldJerk = P[i].GravJerk;
+                P[i].Hermite_OldAcc = P[i].GravAccel; // this is the value from the first Hermite tree pass for this timestep
+#ifdef HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
+                P[i].dt_crit_prev = P[i].dt_crit_last; // criterion at the start of this step, for the next step choice
+#endif
             }
-#endif	    
-            P[i].Vel[j] += dp[j] / mass_new; /* correctly accounts for mass change if its allowed */
         }
+#endif
+        P[i].Vel += dp * (1.0 / mass_new); /* correctly accounts for mass change if its allowed */
 
 #ifdef DILATION_FOR_STELLAR_KINEMATICS_ONLY
         double a_fac = return_timestep_dilation_factor(i,0);
         if(a_fac > 1.) {
             double cfac = dt_gravkick * (1. - 1./a_fac);
-            for(j=0;j<3;j++) {P[i].Vel[j] += P[i].acc_of_nearest_special[j]*cfac;} /* add back in the mean kick of the surrounding stuff to dilate only the local dynamics */
+            P[i].Vel += P[i].acc_of_nearest_special * cfac; /* add back in the mean kick of the surrounding stuff to dilate only the local dynamics */
         }
 #endif
 
@@ -435,9 +450,9 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
                 //for(j=0;j<3;j++) {P[i].Vel[j] *= exp(-0.15);} // coefficient is constant per-timestep: adjust to make as aggressive or weak as desired //
 #endif
 
-                for(j=0; j<3; j++) {CellP[i].VelPred[j] = P[i].Vel[j];}//(mass_old*v_old[j] + dp[j]) / mass_new;
+                CellP[i].VelPred = P[i].Vel; //(mass_old*v_old[j] + dp[j]) / mass_new;
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
-                P[i].Mass = CellP[i].MassTrue; //mass_old + CellP[i].DtMass * dt_hydrokick;
+                P[i].Mass = CellP[i].MassTrue; CellP[i].Mass = P[i].Mass; //mass_old + CellP[i].DtMass * dt_hydrokick;
 #endif
                 CellP[i].InternalEnergyPred = CellP[i].InternalEnergy; //ent_old + CellP[i].DtInternalEnergy * dt_entr;
 #ifdef HYDRO_EXPLICITLY_INTEGRATE_VOLUME
@@ -447,7 +462,7 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
         }
         
         /* set the momentum shift so we know how to move the tree! */
-        for(j=0;j<3;j++) {P[i].dp[j] += dp[j];}
+        P[i].dp += dp;
 #ifdef DM_FUZZY
         do_dm_fuzzy_drift_kick(i, dt_entr, 0); /* kicks for fuzzy-dm integration */
 #endif
@@ -466,7 +481,7 @@ void set_predicted_quantities_for_extra_physics(int i)
         int k, kf; k=0, kf=0;
 #if defined(MAGNETIC)
 #ifndef MHD_ALTERNATIVE_LEAPFROG_SCHEME
-        for(k=0;k<3;k++) {CellP[i].BPred[k] = CellP[i].B[k];}
+        CellP[i].BPred = CellP[i].B;
 #if defined(DIVBCLEANING_DEDNER)
         CellP[i].PhiPred = CellP[i].Phi;
 #endif
@@ -476,7 +491,7 @@ void set_predicted_quantities_for_extra_physics(int i)
         for(kf=0;kf<N_CR_PARTICLE_BINS;kf++)
         {
             CellP[i].CosmicRayEnergyPred[kf] = CellP[i].CosmicRayEnergy[kf];
-            for(k=0;k<3;k++) {CellP[i].CosmicRayFluxPred[kf][k] = CellP[i].CosmicRayFlux[kf][k];}
+            CellP[i].CosmicRayFluxPred[kf] = CellP[i].CosmicRayFlux[kf];
 #ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
             for(k=0;k<2;k++) {CellP[i].CosmicRayAlfvenEnergyPred[kf][k] = CellP[i].CosmicRayAlfvenEnergy[kf][k];}
 #endif
@@ -488,20 +503,20 @@ void set_predicted_quantities_for_extra_physics(int i)
         {
             CellP[i].Rad_E_gamma_Pred[kf] = CellP[i].Rad_E_gamma[kf];
 #if defined(RT_EVOLVE_FLUX)
-            for(k=0;k<3;k++) CellP[i].Rad_Flux_Pred[kf][k] = CellP[i].Rad_Flux[kf][k];
+            CellP[i].Rad_Flux_Pred[kf] = CellP[i].Rad_Flux[kf];
 #endif
         }
-        rt_eddington_update_calculation(i);
+        rt_eddington_update_calculation(i, CellP);
 #endif
 #ifdef RT_EVOLVE_INTENSITIES
         for(kf=0;kf<N_RT_FREQ_BINS;kf++) {for(k=0;k<N_RT_INTENSITY_BINS;k++) {CellP[i].Rad_Intensity_Pred[kf][k] = CellP[i].Rad_Intensity[kf][k];}}
 #endif
 
 #ifdef EOS_ELASTIC
-        for(k=0;k<3;k++) {for(kf=0;kf<3;kf++) {CellP[i].Elastic_Stress_Tensor_Pred[k][kf]=CellP[i].Elastic_Stress_Tensor[k][kf];}}
+        CellP[i].Elastic_Stress_Tensor_Pred = CellP[i].Elastic_Stress_Tensor;
 #endif
         
-        set_eos_pressure(i);
+        set_eos_pressure(i, P, CellP);
     }
 }
 
@@ -513,17 +528,15 @@ void do_kick_for_extra_physics(int i, integertime tstart, integertime tend, doub
 #ifdef MAGNETIC
 #ifndef MHD_ALTERNATIVE_LEAPFROG_SCHEME
     double BphysVolphys_to_BcodeVolCode = 1 / All.cf_atime;
-    for(j = 0; j < 3; j++) {CellP[i].B[j] += CellP[i].DtB[j] * dt_entr * BphysVolphys_to_BcodeVolCode;} // fluxes are always physical, convert to code units //
+    CellP[i].B += CellP[i].DtB * (dt_entr * BphysVolphys_to_BcodeVolCode); // fluxes are always physical, convert to code units //
 #ifdef DIVBCLEANING_DEDNER
     double PhiphysVolphys_to_PhicodeVolCode = 1 / All.cf_a3inv; // for mass-based phi-fluxes (otherwise is just "1")
     /* phi units are [vcode][Bcode]=a^3 * vphys*Bphys */
     if(CellP[i].Density > 0)
     {
         /* now we're going to check for physically reasonable phi values */
-        double cs_phys = Get_Gas_effective_soundspeed_i(i);
-        double b_phys = 0.0;
-        for(j = 0; j < 3; j++) {b_phys += Get_Gas_BField(i,j)*Get_Gas_BField(i,j);}
-        b_phys = sqrt(b_phys)*All.cf_a2inv;
+        double cs_phys = CellP[i].effective_soundspeed();
+        double b_phys = sqrt(CellP[i].Bfield().norm_sq())*All.cf_a2inv;
         double vsig1 = sqrt(cs_phys*cs_phys + b_phys*b_phys/(CellP[i].Density*All.cf_a3inv));
         double vsig2 = 0.5 * fabs(CellP[i].MaxSignalVel);
         double vsig_max = DMAX( DMAX(vsig1,vsig2) , All.FastestWaveSpeed );
@@ -573,19 +586,23 @@ void do_kick_for_extra_physics(int i, integertime tstart, integertime tend, doub
 #endif
     
 #ifdef COSMIC_RAY_FLUID
-    CosmicRay_Update_DriftKick(i,dt_entr,0);
+#ifndef TRANSPORT_SUBCYCLE
+    CosmicRay_Update_DriftKick(i,dt_entr,0,P,CellP);
 #endif
-    
+#endif
+
 #ifdef RADTRANSFER
-    rt_update_driftkick(i,dt_entr,0);
+#ifndef TRANSPORT_SUBCYCLE  /* when subcycling, RT kicks are handled in the subcycle loop */
+    rt_update_driftkick(i,dt_entr,0,P,CellP);
+#endif
 #ifdef GRAIN_RDI_TESTPROBLEM_LIVE_RADIATION_INJECTION
-    if(P[i].Pos[2] > DMIN(19., DMAX(1.1*All.Time*C_LIGHT_CODE_REDUCED(i), DMIN(18.*boxSize_X + (All.Vertical_Grain_Accel*All.Dust_to_Gas_Mass_Ratio - All.Vertical_Gravity_Strength)*All.Time*All.Time/2., 19.)))) {for(j=0;j<N_RT_FREQ_BINS;j++) {CellP[i].Rad_E_gamma[j]*=0.5; CellP[i].Rad_E_gamma_Pred[j]*=0.5;
+    if(P[i].Pos[2] > DMIN(19., DMAX(1.1*All.Time*C_LIGHT_CODE_REDUCED, DMIN(18.*boxSize_X + (All.Vertical_Grain_Accel*All.Dust_to_Gas_Mass_Ratio - All.Vertical_Gravity_Strength)*All.Time*All.Time/2., 19.)))) {for(j=0;j<N_RT_FREQ_BINS;j++) {CellP[i].Rad_E_gamma[j]*=0.5; CellP[i].Rad_E_gamma_Pred[j]*=0.5;
 #ifdef RT_EVOLVE_FLUX
         if(CellP[i].Rad_Flux[j][2] < 0) {CellP[i].Rad_Flux[j][2]=-CellP[i].Rad_Flux[j][2]; CellP[i].Rad_Flux_Pred[j][2]=CellP[i].Rad_Flux[j][2];}
 #endif
     }}
 #endif
-#endif
+#endif // RADTRANSFER
 
 #ifdef EOS_ELASTIC
     elastic_body_update_driftkick(i,dt_entr,0);
@@ -613,11 +630,15 @@ void apply_special_boundary_conditions(int i, double mass_for_dp, int mode)
 #ifdef RT_EVOLVE_FLUX
                 if(P[i].Type==0) {int kf; for(kf=0;kf<N_RT_FREQ_BINS;kf++) {if(CellP[i].Rad_Flux[kf][j]<0) {CellP[i].Rad_Flux[kf][j]=-CellP[i].Rad_Flux[kf][j]; CellP[i].Rad_Flux_Pred[kf][j]=CellP[i].Rad_Flux[kf][j];}}}
 #endif
-#ifdef COSMIC_RAY_FLUID  /* CR flux only exists with the CR fluid; guard added 2026-07-04 (BOX_OUTFLOW_Z tallbox build w/o CRs — upstream left this unguarded, unlike the RT line above) */
+
+#ifdef COSMIC_RAY_FLUID
                 if(P[i].Type==0) {int kf; for(kf=0;kf<N_CR_PARTICLE_BINS;kf++) {if(CellP[i].CosmicRayFlux[kf][j]<0) {CellP[i].CosmicRayFlux[kf][j]=-CellP[i].CosmicRayFlux[kf][j]; CellP[i].CosmicRayFluxPred[kf][j]=CellP[i].CosmicRayFlux[kf][j];}}}
 #endif
             }
-            if(special_boundary_condition_xyz_def_outflow[j] == 0 || special_boundary_condition_xyz_def_outflow[j] == -1) {P[i].Mass=0; if(mode==1) {P[i].dp[0]=P[i].dp[1]=P[i].dp[2]=0;}}
+            if(special_boundary_condition_xyz_def_outflow[j] == 0 || special_boundary_condition_xyz_def_outflow[j] == -1) {P[i].Mass=0; if(P[i].Type==0) {CellP[i].Mass=0;} if(mode==1) {P[i].dp[0]=P[i].dp[1]=P[i].dp[2]=0;}
+#pragma omp atomic write
+                TreeMomentsStaleFlag=1; /* reached from the OpenMP-parallel drift; every thread writes the same value, but keep it a defined write */
+            }
         }
         else if (P[i].Pos[j] >= box_upper[j])
         {
@@ -628,11 +649,14 @@ void apply_special_boundary_conditions(int i, double mass_for_dp, int mode)
 #ifdef RT_EVOLVE_FLUX
                 if(P[i].Type==0) {int kf; for(kf=0;kf<N_RT_FREQ_BINS;kf++) {if(CellP[i].Rad_Flux[kf][j]>0) {CellP[i].Rad_Flux[kf][j]=-CellP[i].Rad_Flux[kf][j]; CellP[i].Rad_Flux_Pred[kf][j]=CellP[i].Rad_Flux[kf][j];}}}
 #endif
-#ifdef COSMIC_RAY_FLUID  /* CR flux only exists with the CR fluid; guard added 2026-07-04 (BOX_OUTFLOW_Z tallbox build w/o CRs — upstream left this unguarded, unlike the RT line above) */
+#ifdef COSMIC_RAY_FLUID
                 if(P[i].Type==0) {int kf; for(kf=0;kf<N_CR_PARTICLE_BINS;kf++) {if(CellP[i].CosmicRayFlux[kf][j]>0) {CellP[i].CosmicRayFlux[kf][j]=-CellP[i].CosmicRayFlux[kf][j]; CellP[i].CosmicRayFluxPred[kf][j]=CellP[i].CosmicRayFlux[kf][j];}}}
 #endif
             }
-            if(special_boundary_condition_xyz_def_outflow[j] == 0 || special_boundary_condition_xyz_def_outflow[j] == 1) {P[i].Mass=0; if(mode==1) {P[i].dp[0]=P[i].dp[1]=P[i].dp[2]=0;}}
+            if(special_boundary_condition_xyz_def_outflow[j] == 0 || special_boundary_condition_xyz_def_outflow[j] == 1) {P[i].Mass=0; if(P[i].Type==0) {CellP[i].Mass=0;} if(mode==1) {P[i].dp[0]=P[i].dp[1]=P[i].dp[2]=0;}
+#pragma omp atomic write
+                TreeMomentsStaleFlag=1; /* reached from the OpenMP-parallel drift; every thread writes the same value, but keep it a defined write */
+            }
         }
     }
 #endif

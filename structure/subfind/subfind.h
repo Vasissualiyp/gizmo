@@ -8,6 +8,8 @@
 #ifndef SUBFIND_H_HASBEENREAD
 #define SUBFIND_H_HASBEENREAD
 
+#include "../../math_types/vec3.h"
+
 
 
 typedef struct
@@ -48,8 +50,7 @@ int subfind_force_treeevaluate_potential(int target, int mode, int *nexport, int
 void subfind_density(int j);
 void Subfind_DensityOtherProps_Loop(void);
 int Subfind_RvirMvir_evaluate(int target, int mode, int *nexport, int *nsend_local);
-double subfind_ovderdens_treefind(MyDouble *searchcenter, MyFloat rkern, int target, int *startnode,
-				  int mode, int *nexport, int *nsend_local);
+double subfind_ovderdens_treefind(Vec3<double>& searchcenter, MyFloat rkern, int target, int *startnode, int mode, int *nexport, int *nsend_local);
 void subfind_save_densities(int num);
 void subfind_save_local_densities(int num);
 void subfind_setup_smoothinglengths(int j);
@@ -70,8 +71,8 @@ void subfind_potential_compute(int num, struct unbind_data * d, int phase, doubl
 void subfind_process_group_collectively(int num);
 int subfind_col_unbind(struct unbind_data *d, int num, int *num_non_gas);
 void subfind_col_determine_sub_halo_properties(struct unbind_data *d, int num, double *mass,
-					       double *pos, double *vel, double *cm, double *veldisp,
-					       double *vmax, double *vmaxrad, double *spin, MyIDType *mostboundid,
+					       Vec3<double> *pos, Vec3<double> *vel, Vec3<double> *cm, double *veldisp,
+					       double *vmax, double *vmaxrad, Vec3<double> *spin, MyIDType *mostboundid,
 					       double *halfmassrad, double *submasstab);
 void subfind_col_determine_R200(double hmr, double center[3],
 				double *m_Mean200, double *r_Mean200,
@@ -81,9 +82,9 @@ int subfind_loctree_treebuild(int npart, struct unbind_data *mp);
 void subfind_loctree_update_node_recursive(int no, int sib, int father);
 double subfind_loctree_treeevaluate_potential(int target);
 void subfind_loctree_copyExtent(void);
-double subfind_locngb_treefind(MyDouble *xyz, int desngb, double hguess);
+double subfind_locngb_treefind(Vec3<double>& xyz, int desngb, double hguess);
 void subfind_loctree_findExtent(int npart, struct unbind_data *mp);
-int subfind_locngb_treefind_variable(MyDouble *searchcenter, double hguess);
+int subfind_locngb_treefind_variable(Vec3<double>& searchcenter, double hguess);
 size_t subfind_loctree_treeallocate(int maxnodes, int maxpart);
 void subfind_loctree_treefree(void);
 void subfind_find_nearesttwo(void);
@@ -91,8 +92,8 @@ int subfind_nearesttwo_evaluate(int target, int mode, int *nexport, int *nsend_l
 int subfind_process_group_serial(int gr, int offset);
 int subfind_unbind(struct unbind_data *ud, int len, int *len_non_gas);
 void subfind_determine_sub_halo_properties(struct unbind_data *ud, int num, double *mass,
-					   double *pos, double *vel, double *cm, double *veldisp,
-					   double *vmax, double *vmaxrad, double *spin, MyIDType *mostboundid, 
+					   Vec3<double> *pos, Vec3<double> *vel, Vec3<double> *cm, double *veldisp,
+					   double *vmax, double *vmaxrad, Vec3<double> *spin, MyIDType *mostboundid,
                                            double *halfmassrad, double *mass_tab);
 int subfind_compare_P_origindex(const void *a, const void *b);
 int subfind_compare_P_GrNr_DM_Density(const void *a, const void *b);
@@ -165,10 +166,10 @@ extern struct subgroup_properties
   double SubVmax;
   double SubVmaxRad;
   double SubHalfMass;
-  double Pos[3];
-  double CM[3];
-  double Vel[3];
-  double Spin[3];
+  Vec3<double> Pos;
+  Vec3<double> CM;
+  Vec3<double> Vel;
+  Vec3<double> Spin;
   double MassTab[6];
 } *SubGroup;
 

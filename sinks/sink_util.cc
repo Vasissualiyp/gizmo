@@ -27,7 +27,7 @@ void sink_start(void)
 
     /* count the num BHs on this task */
     N_active_loc_Sink=0;
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         if(sink_isactive(i))
         {
@@ -47,7 +47,7 @@ void sink_start(void)
     memset( &SinkTempInfo[0], 0, N_active_loc_Sink * sizeof(struct sink_temp_particle_data) );
 
     Nbh=0;
-    for(i = FirstActiveParticle; i >= 0; i = NextActiveParticle[i])
+    for (int i : ActiveParticleList)
     {
         if(sink_isactive(i))
         {
@@ -172,7 +172,7 @@ void sink_properties_loop(void) /* Note, normalize_temp_info_struct is now done 
     for(i=0; i<N_active_loc_Sink; i++)
     {
         n = SinkTempInfo[i].index;
-        dt = GET_PARTICLE_FEEDBACK_TIMESTEP_IN_PHYSICAL(n);
+        dt = get_particle_feedback_timestep_in_physical(n);
 #ifdef SINK_INTERACT_ON_GAS_TIMESTEP
         dt = P[n].dt_since_last_gas_search;
 #endif

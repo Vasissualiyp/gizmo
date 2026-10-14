@@ -121,6 +121,7 @@ void init(void)
     set_softenings();
 
     All.NumCurrentTiStep = 0;	/* setup some counters */
+    All.DomainFacWork = 0.5; All.DomainFacLoad = 0.5; All.DomainFacWorkGas = 0.0; /* seed adaptive load-balance weights (restarts restore them from All) */
     All.SnapshotFileCount = 0;
     if(RestartFlag == 2)
     {
@@ -163,7 +164,7 @@ void init(void)
 #ifdef SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM
     for(i = 0; i < SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM; i++)
     {
-        All.SpecialParticle_Position_ForRefinement[i][0]=All.SpecialParticle_Position_ForRefinement[i][1]=All.SpecialParticle_Position_ForRefinement[i][2]=0;
+        All.SpecialParticle_Position_ForRefinement[i] = {};
         All.Mass_Accreted_By_SpecialParticle[i]=0; All.Mass_of_SpecialParticle[i]=0;
     }
 #endif
@@ -185,7 +186,7 @@ void init(void)
     for(i = 0; i < NumPart; i++) {for(j = 0; j < GRAVCOSTLEVELS; j++) {P[i].GravCost[j] = 0;}}
 
     if(All.ComovingIntegrationOn)	/*  change to new velocity variable */
-        {for(i=0;i<NumPart;i++) {for(j=0;j<3;j++) {P[i].Vel[j] *= sqrt(All.Time)*All.Time;}}}
+        {for(i=0;i<NumPart;i++) {P[i].Vel *= sqrt(All.Time)*All.Time;}}
 
 #ifdef DM_SIDM
     init_self_interactions();
@@ -225,7 +226,7 @@ void init(void)
         {int ksp0; for(ksp0=0;ksp0<NUM_RESOLVEDISM_ELEMENTS;ksp0++) P[i].SpawnEjZ[ksp0]=0;}
 #endif
 
-        for(j = 0; j < 3; j++) {P[i].GravAccel[j] = 0;}
+        P[i].GravAccel = {};
 
 #ifdef COMPUTE_TIDAL_TENSOR_IN_GRAVTREE /* init tidal tensor for first output (not used for calculation) */
         for(j=0;j<3;j++) {int kt; for(kt=0;kt<3;kt++) {P[i].tidal_tensorps[j][kt]=0;}}
@@ -244,7 +245,7 @@ void init(void)
         
 
 #ifdef PMGRID
-        for(j = 0; j < 3; j++) {P[i].GravPM[j] = 0;}
+        P[i].GravPM = {};
 #endif
         P[i].Ti_begstep = 0;
         P[i].Ti_current = (integertime)0;
@@ -255,7 +256,12 @@ void init(void)
         P[i].Potential = 0;
 #endif
 #ifdef GALSF
-        if(RestartFlag == 0) {P[i].StellarAge = 0;}
+        if(RestartFlag == 0) {
+#if defined(INPUT_READ_SINKPROPS) && defined(SINGLE_STAR_SINK_DYNAMICS)
+            if(P[i].Type != 5) /* sink particles have their age read from the IC */
+#endif
+            {P[i].StellarAge = 0;}
+        }
 #ifdef GALSF_SFR_IMF_VARIATION
         if(RestartFlag == 0) {P[i].IMF_Mturnover = 2.0;} /* gives a solar-type IMF for our calculations in current code */
 #endif
@@ -268,7 +274,7 @@ void init(void)
 #endif
         
 #ifdef SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION
-        if(RestartFlag == 0) {P[i].ProtoStellarStage = 0;}
+        if(RestartFlag == 0 && P[i].ProtoStellarStage <= 0) {P[i].ProtoStellarStage = 0;} /* only reset if not already set from IC (via INPUT_READ_SINKPROPS) */
 #endif
         /* (GALSF_RESOLVEDISM_DUST init MOVED below the Metallicity[] construction —
          * it reads P[i].Metallicity[0], which is only built ~150 lines further down.
@@ -284,13 +290,38 @@ void init(void)
             P[i].GradRho[1]=0;
             P[i].GradRho[2]=1;
 #endif
+#ifdef SINK_WIND_SPAWN
+            /* spawn reservoirs for sinks read from a fresh IC rather than formed in-run, which would
+               otherwise hold whatever was in the malloc slot: fresh-IC reads skip every block above
+               IO_U, so nothing has assigned these. Any snapshot-reading mode (RestartFlag >= 2) reads
+               both reservoirs back -- or zero-fills when the datasets are absent -- so zeroing there
+               would clobber restored mass already debited from the sink. */
+            if(RestartFlag == 0)
+            {
+                P[i].unspawned_wind_mass = 0;
+#ifdef SINGLE_STAR_FB_JETS
+                P[i].unspawned_jet_mass = 0;
+#endif
+            }
+#endif
+#ifdef HERMITE_INTEGRATION
+            /* the retained start-of-step state, normally written by the first half-step kick; seed it
+               here so anything that reads it before that kick -- the IO_HERMITE_SYNC output blocks of a
+               snapshot written straight after the ICs are read -- predicts from the actual state rather
+               than from whatever the allocator left behind */
+            P[i].OldPos = P[i].Pos; P[i].OldVel = P[i].Vel;
+            P[i].Hermite_OldAcc = {}; P[i].OldJerk = {};
+#ifdef HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
+            P[i].dt_crit_last = P[i].dt_crit_prev = 0; /* no criterion history: the default step rule until there is one */
+#endif
+#endif
 #if defined(SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION)
 #if defined(SINGLE_STAR_FB_SNE)
             P[i].Mass_final = P[i].Mass; // best guess, only matters if we restart in the middle of spawning an SN
 #endif
 #if defined(SINGLE_STAR_FB_WINDS)
-            P[i].wind_mode = 0; // this will make single_star_wind_mdot reset it
-            double nx[3],ny[3],nz[3]; int kw; get_random_orthonormal_basis(P[i].ID,nx,ny,nz); for(kw=0;kw<3;kw++) {P[i].Wind_direction[kw] = nx[kw]; P[i].Wind_direction[kw+3] = ny[kw];}
+            P[i].wind_mode = 0; P[i].wind_mode_time = All.Time; // wind_mode=0 triggers reset on first call; time initialised for hysteresis
+            Vec3<double> nx,ny,nz; int kw; get_random_orthonormal_basis(P[i].ID,nx,ny,nz); for(kw=0;kw<3;kw++) {P[i].Wind_direction[kw] = nx[kw]; P[i].Wind_direction[kw+3] = ny[kw];}
 #endif
 #endif
 #if defined(GALSF_FB_FIRE_RT_LOCALRP)
@@ -334,7 +365,12 @@ void init(void)
         }
 
 #if defined(INIT_STELLAR_METALS_AGES_DEFINED) && defined(GALSF)
-        if(RestartFlag == 0) {P[i].StellarAge = -2.0 * All.InitStellarAgeinGyr / (UNIT_TIME_IN_GYR) * get_random_number(P[i].ID + 3);}
+        if(RestartFlag == 0) {
+#if defined(INPUT_READ_SINKPROPS) && defined(SINGLE_STAR_SINK_DYNAMICS)
+            if(P[i].Type != 5) /* sink particles have their age read from the IC */
+#endif
+            {P[i].StellarAge = -2.0 * All.InitStellarAgeinGyr / (UNIT_TIME_IN_GYR) * get_random_number(P[i].ID + 3);}
+        }
 #endif
         
 #ifdef GRAIN_FLUID
@@ -353,11 +389,11 @@ void init(void)
                     pow(P[i].Grain_Size/All.Grain_Size_Min,All.Grain_Size_Spectrum_Powerlaw) * log(All.Grain_Size_Max/All.Grain_Size_Min);}
 #ifdef GRAIN_RDI_TESTPROBLEM /* initialize various quantities for test problems from parameters set in the ICs */
                 P[i].Mass *= All.Dust_to_Gas_Mass_Ratio;
-                int k, non_gdir=1; double A[3]={0}, B[3]={0}, A_cross_B[3]={0}, amag, rho_gas_expected, cs_gas_expected, acc_ang=All.Vertical_Grain_Accel_Angle * M_PI/180., tS0, a0, ct=1, tau2=0, ct2=0, w0, agamma=9.*M_PI/128.; B[2]=1; if(GRAV_DIRECTION_RDI==1) {non_gdir=2;}
+                int k, non_gdir=1; Vec3<double> A={}, B={}, A_cross_B={}; double amag, rho_gas_expected, cs_gas_expected, acc_ang=All.Vertical_Grain_Accel_Angle * M_PI/180., tS0, a0, ct=1, tau2=0, ct2=0, w0, agamma=9.*M_PI/128.; B[2]=1; if(GRAV_DIRECTION_RDI==1) {non_gdir=2;}
                 rho_gas_expected = 1.*UNIT_DENSITY_IN_CGS, cs_gas_expected = 1.*UNIT_VEL_IN_CGS; /* guess for the gas density here [set custom for e.g. stratified problems */
                 tS0 = ((0.626657 * sqrt(GAMMA_DEFAULT) * P[i].Grain_Size * All.Grain_Internal_Density) / (rho_gas_expected * cs_gas_expected)) / UNIT_TIME_IN_CGS; /* stopping time [Epstein] for driftvel->0 [cgs->code units] */
                 A[GRAV_DIRECTION_RDI]=cos(acc_ang)*All.Vertical_Grain_Accel - All.Vertical_Gravity_Strength; A[0]=sin(acc_ang)*All.Vertical_Grain_Accel; /* define angles/direction of external acceleration */
-                amag=sqrt(A[0]*A[0]+A[1]*A[1]+A[2]*A[2]+MIN_REAL_NUMBER); A[0]/=amag; A[1]/=amag; A[2]/=amag;
+                amag=sqrt(A.norm_sq()+MIN_REAL_NUMBER); A /= amag;
                 a0 = (tS0 * amag / (1.+All.Dust_to_Gas_Mass_Ratio)) / (cs_gas_expected/UNIT_VEL_IN_CGS) ; /* acc * tS0 / (1+mu) -- we're assuming that the code unit velocity equals the sound speed, for simplicity here */
 #ifdef GRAIN_RDI_TESTPROBLEM_ACCEL_DEPENDS_ON_SIZE
                 a0 *= All.Grain_Size_Max / P[i].Grain_Size;
@@ -372,9 +408,9 @@ void init(void)
 #endif
                 w0=sqrt((sqrt(1.+4.*agamma*a0*a0)-1.)/(2.*agamma)); // exact solution if no Lorentz forces and Epstein drag //
 #ifdef GRAIN_LORENTZFORCE
-                double Bmag, tL_i=0, tau2_0=0, f_tau_guess2=0; B[0]=All.BiniX; B[1]=All.BiniY; B[2]=All.BiniZ; Bmag=sqrt(B[0]*B[0]+B[1]*B[1]+B[2]*B[2]); B[0]/=Bmag; B[1]/=Bmag; B[2]/=Bmag;
+                double Bmag, tL_i=0, tau2_0=0, f_tau_guess2=0; B = {All.BiniX, All.BiniY, All.BiniZ}; Bmag=B.norm(); B /= Bmag;
                 tL_i = (All.Grain_Charge_Parameter*sqrt(rho_gas_expected/UNIT_DENSITY_IN_CGS)/((All.Grain_Internal_Density/UNIT_DENSITY_IN_CGS)*(All.Grain_Size_Max/UNIT_LENGTH_IN_CGS))) * pow(All.Grain_Size_Max/P[i].Grain_Size,2) * Bmag; // 1/t_Lorentz in code units
-                ct=A[0]*B[0]+A[1]*B[1]+A[2]*B[2]; ct2=ct*ct; tau2_0=pow(tS0*tL_i,2); // variables for below //
+                ct=dot(A,B); ct2=ct*ct; tau2_0=pow(tS0*tL_i,2); // variables for below //
                 for(k=0;k<20;k++)
                 {
                    tau2 = tau2_0 / (1. + agamma*w0*w0); // guess tau [including velocity dependence] //
@@ -383,8 +419,8 @@ void init(void)
                 }
 #endif
                 w0 /= sqrt((1.+tau2)*(1.+tau2*ct2)); // ensures normalization to unity with convention below //
-                A_cross_B[0]=A[1]*B[2]-A[2]*B[1]; A_cross_B[1]=A[2]*B[0]-A[0]*B[2]; A_cross_B[2]=A[0]*B[1]-A[1]*B[0];
-                for(k=0;k<3;k++) {P[i].Vel[k] = w0 * (A[k] + sqrt(tau2)*A_cross_B[k] + tau2*ct*B[k]) * (cs_gas_expected/UNIT_VEL_IN_CGS);}
+                A_cross_B = cross(A, B);
+                P[i].Vel = (A + A_cross_B*sqrt(tau2) + B*(tau2*ct)) * (w0 * (cs_gas_expected/UNIT_VEL_IN_CGS));
 #ifdef BOX_SHEARING
                 // now add linearly the NHS drift solution for our shearing box setup
                 double v00 = -All.Pressure_Gradient_Accel / (2. * BOX_SHEARING_OMEGA_BOX_CENTER);
@@ -396,12 +432,12 @@ void init(void)
 #endif
 #endif // closes rdi_testproblem
             }
-            P[i].Gas_Density = P[i].Gas_InternalEnergy = P[i].Gas_Velocity[0]=P[i].Gas_Velocity[1]=P[i].Gas_Velocity[2]=0; P[i].Grain_AccelTimeMin = MAX_REAL_NUMBER;
+            P[i].Gas_Density = P[i].Gas_InternalEnergy = 0; P[i].Gas_Velocity = {}; P[i].Grain_AccelTimeMin = MAX_REAL_NUMBER;
 #if defined(GRAIN_BACKREACTION)
-            P[i].Grain_DeltaMomentum[0]=P[i].Grain_DeltaMomentum[1]=P[i].Grain_DeltaMomentum[2]=0;
+            P[i].Grain_DeltaMomentum = {};
 #endif
 #if defined(GRAIN_LORENTZFORCE)
-            P[i].Gas_B[0]=P[i].Gas_B[1]=P[i].Gas_B[2]=0;
+            P[i].Gas_B = {};
 #endif
         } // closes check on restartflag and particle type
 #endif // closes grain_fluid
@@ -539,7 +575,7 @@ void init(void)
 #if (SINGLE_STAR_SINK_FORMATION & 8)
         P[i].Sink_Ngb_Flag = 0;
 #endif
-#ifdef SINGLE_STAR_FB_TIMESTEP_LIMIT
+#ifdef SINGLE_STAR_FB_TIMESTEPLIMIT
  // start with a large value (> plausible values v_ejecta or v_wind) as a conservative choice when starting up a simulation with an active feedback-emmiting star - this will get updated to a more reasonable value once the particle walks the gravity tree, but need this to ensure the first timestep is stable.
         P[i].MaxFeedbackVel = 1e4 / UNIT_VEL_IN_KMS;
 #endif
@@ -565,6 +601,7 @@ void init(void)
                 P[i].Sink_Mass = P[i].Mass;
 #endif
 #ifdef SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION // properly initialize luminosity
+                if(P[i].ProtoStellarRadius_inSolar <= 0) {P[i].ProtoStellarRadius_inSolar = ps_radius_MS_in_solar(P[i].Sink_Mass);} /* initialize protostellar radius if not set */
                 singlestar_subgrid_protostellar_evolution_update_track(i,0,0);
 #if (SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION == 2)
                 P[i].ZAMS_Mass = P[i].Sink_Mass;
@@ -616,15 +653,22 @@ void init(void)
     {
         CellP[i].InternalEnergyPred = CellP[i].InternalEnergy;
 
-        for(j = 0; j < 3; j++)
-        {
-            CellP[i].VelPred[j] = P[i].Vel[j];
-            CellP[i].HydroAccel[j] = 0;
-        }
+        CellP[i].VelPred = P[i].Vel;
+        CellP[i].HydroAccel = {};
 
         P[i].Particle_DivVel = 0;
         CellP[i].ConditionNumber = 1;
         CellP[i].DtInternalEnergy = 0;
+        if(RestartFlag == 0)
+        {
+            /* first-guess temperature: gamma_eos_value() -- and through it the H2 partition series --
+               reads this before the first EOS solve has written it, and a fresh IC read leaves it as
+               malloc garbage (a binary IC cannot even probe for the block). A huge garbage value is
+               exactly what lets the rotational series run away. Neutral-atomic ideal-gas estimate;
+               the first set_eos_pressure() replaces it with the solved value. Snapshot restarts read
+               the written Temperature back, so they are left alone. */
+            CellP[i].Temperature = 1.22 * (GAMMA_DEFAULT-1.) * U_TO_TEMP_UNITS * CellP[i].InternalEnergy;
+        }
         CellP[i].FaceClosureError = 0;
 #ifdef FB_G17_BOUNDARY_INJECTION
         CellP[i].FBinjFlag = 0; /* gizmo2017-mimicry FB-receiver flag starts clear */
@@ -632,11 +676,12 @@ void init(void)
 #ifdef ENERGY_ENTROPY_SWITCH_IS_ACTIVE
         CellP[i].MaxKineticEnergyNgb = 0;
 #endif
+        CellP[i].Mass = P[i].Mass;
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
         CellP[i].dMass = 0;
         CellP[i].DtMass = 0;
         CellP[i].MassTrue = P[i].Mass;
-        for(j=0;j<3;j++) CellP[i].GravWorkTerm[j] = 0;
+        CellP[i].GravWorkTerm = {};
 #endif
 
 #if defined(ADAPTIVE_GRAVSOFT_FORGAS) || defined(AGS_KERNELRADIUS_CALCULATION_IS_ACTIVE)
@@ -676,11 +721,11 @@ void init(void)
 #ifdef OUTPUT_TURB_DIFF_DYNAMIC_ERROR
         CellP[i].TD_DynDiffCoeff_error = 0;
 #endif
+        if (RestartFlag != 7) {
+            CellP[i].Velocity_bar = {};
+            CellP[i].Velocity_hat = {};
+        }
         for (u = 0; u < 3; u++) {
-            if (RestartFlag != 7) {
-                CellP[i].Velocity_bar[u] = 0;
-                CellP[i].Velocity_hat[u] = 0;
-            }
             for (v = 0; v < 3; v++) {
                 CellP[i].VelShear_bar[u][v] = 0;
             }
@@ -733,6 +778,13 @@ void init(void)
             CellP[i].Rad_Flux_AGN = 0;
 #endif
         }
+#if defined(COOL_MOLECFRAC_NONEQM)
+        if(RestartFlag == 2) /* the snapshot stores the fraction per neutral H; rebuild the total from it */
+        {
+            CellP[i].MolecularMassFraction_perNeutralH = DMIN(1,DMAX(0,CellP[i].MolecularMassFraction_perNeutralH));
+            CellP[i].MolecularMassFraction = DMIN(1,DMAX(0, 1.-CellP[i].Ne/1.25)) * CellP[i].MolecularMassFraction_perNeutralH;
+        }
+#endif
 #ifdef GALSF_SUBGRID_WINDS
         if(RestartFlag == 0) {CellP[i].DelayTime = 0;}
 #if (GALSF_SUBGRID_WIND_SCALING==1)
@@ -814,11 +866,8 @@ void init(void)
             CellP[i].B[2]=CellP[i].BPred[2] = All.BiniZ;
         }
 #endif /*MHD_B_SET_IN_PARAMS*/
-        for(j = 0; j < 3; j++)
-        {
-            CellP[i].BPred[j] *= a2_fac * gauss2gizmo;
-            CellP[i].B[j] = CellP[i].BPred[j];
-        }
+        CellP[i].BPred *= a2_fac * gauss2gizmo;
+        CellP[i].B = CellP[i].BPred;
 #if defined(SPH_TP12_ARTIFICIAL_RESISTIVITY)
         CellP[i].Balpha = 0.0;
 #endif
@@ -887,6 +936,7 @@ void init(void)
 
     Flag_FullStep = 1;		/* to ensure that Peano-Hilbert order is done */
     TreeReconstructFlag = 1;
+    DomainReconstructFlag = 1;	/* fresh start: both the decomposition and the build are owed */
 
 #ifdef SINK_WIND_SPAWN
     Max_Unspawned_MassUnits_fromSink = 0;
@@ -949,25 +999,25 @@ void init(void)
     density();
     for(i = 0; i < N_gas; i++)	/* initialize gas/fluid cell properties */
     {
-        int k=0;
+        int k __attribute__((unused)) = 0;
         CellP[i].InternalEnergyPred = CellP[i].InternalEnergy;
         CellP[i].recent_refinement_flag = 0; // always initialize to zero, no recent refinements
 
         // re-match the predicted and initial velocities and B-field values, just to be sure //
-        for(j=0;j<3;j++) CellP[i].VelPred[j]=P[i].Vel[j];
+        CellP[i].VelPred = P[i].Vel;
 #if defined(HYDRO_MESHLESS_FINITE_VOLUME) && (HYDRO_FIX_MESH_MOTION==0)
-        for(j=0;j<3;j++) {CellP[i].ParticleVel[j] = 0;} // set these to zero and forget them, for the rest of the run //
+        CellP[i].ParticleVel = {}; // set these to zero and forget them, for the rest of the run //
 #endif
 
 #ifdef MAGNETIC
-        for(j=0;j<3;j++) {CellP[i].B[j] = CellP[i].BPred[j] * P[i].Mass / CellP[i].Density;} // convert to the conserved unit V*B //
-        for(j=0;j<3;j++) {CellP[i].BPred[j]=CellP[i].B[j]; CellP[i].DtB[j]=0; CellP[i].BField_prerefinement[j]=0;}
+        CellP[i].B = CellP[i].BPred * (P[i].Mass / CellP[i].Density); // convert to the conserved unit V*B //
+        CellP[i].BPred = CellP[i].B; CellP[i].DtB = {}; CellP[i].BField_prerefinement = {};
 #endif
 #ifdef COSMIC_RAY_FLUID
         for(k=0;k<N_CR_PARTICLE_BINS;k++)
         {
             CellP[i].CosmicRayEnergyPred[k]=CellP[i].CosmicRayEnergy[k]; CellP[i].CosmicRayDiffusionCoeff[k]=0; CellP[i].DtCosmicRayEnergy[k]=0;
-            for(j=0;j<3;j++) {CellP[i].CosmicRayFlux[k][j]=0; CellP[i].CosmicRayFluxPred[k][j]=0;}
+            CellP[i].CosmicRayFlux[k] = {}; CellP[i].CosmicRayFluxPred[k] = {};
 #ifdef CRFLUID_EVOLVE_SCATTERINGWAVES
             for(j=0;j<2;j++) {CellP[i].CosmicRayAlfvenEnergy[k][j]=0; CellP[i].CosmicRayAlfvenEnergyPred[k][j]=0; CellP[i].DtCosmicRayAlfvenEnergy[k][j]=0;}
 #endif
@@ -976,20 +1026,21 @@ void init(void)
 #if defined(EOS_ELASTIC)
         if(RestartFlag != 1)
         {
-            for(k=0;k<3;k++) {for(j=0;j<3;j++) {CellP[i].Dt_Elastic_Stress_Tensor[j][k] = CellP[i].Elastic_Stress_Tensor_Pred[j][k] = CellP[i].Elastic_Stress_Tensor[j][k] = 0;}}
+            CellP[i].Dt_Elastic_Stress_Tensor = CellP[i].Elastic_Stress_Tensor_Pred = CellP[i].Elastic_Stress_Tensor = {};
         } else {
-            for(k=0;k<3;k++) {for(j=0;j<3;j++) {CellP[i].Elastic_Stress_Tensor_Pred[j][k] = CellP[i].Elastic_Stress_Tensor[j][k]; CellP[i].Dt_Elastic_Stress_Tensor[j][k] = 0;}}
+            CellP[i].Elastic_Stress_Tensor_Pred = CellP[i].Elastic_Stress_Tensor; CellP[i].Dt_Elastic_Stress_Tensor = {};
         }
 #endif
         CellP[i].DtInternalEnergy = 0;
 #if defined(COOLING) && !defined(COOLING_OPERATOR_SPLIT)
         CellP[i].CoolingIsOperatorSplitThisTimestep = 1; /* default to more conservative split */
 #endif
+        CellP[i].Mass = P[i].Mass;
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
         CellP[i].dMass = 0;
         CellP[i].DtMass = 0;
         CellP[i].MassTrue = P[i].Mass;
-        for(j=0;j<3;j++) CellP[i].GravWorkTerm[j] = 0;
+        CellP[i].GravWorkTerm = {};
 #endif
 #if defined(ADAPTIVE_GRAVSOFT_FORGAS) || defined(AGS_KERNELRADIUS_CALCULATION_IS_ACTIVE)
         P[i].AGS_zeta = 0;
@@ -1014,7 +1065,7 @@ void init(void)
         {int kf; for(kf=0;kf<N_RT_FREQ_BINS;kf++) {CellP[i].Rad_E_gamma[kf]=0;}}
 #endif
 #if defined(RT_USE_GRAVTREE_SAVE_RAD_FLUX)
-        {int kf; for(kf=0;kf<N_RT_FREQ_BINS;kf++) {for(j=0;j<3;j++) {CellP[i].Rad_Flux[kf][j]=0;}}}
+        {int kf; for(kf=0;kf<N_RT_FREQ_BINS;kf++) {CellP[i].Rad_Flux[kf] = {};}}
 #endif
 #if defined(COSMIC_RAY_SUBGRID_LEBRON)
         CellP[i].SubGrid_CosmicRayEnergyDensity = 0;
@@ -1151,13 +1202,6 @@ void init(void)
     }
     
 
-#if defined(COOL_MOLECFRAC_NONEQM)
-    if(RestartFlag == 2) // should have read in CellP[i].MolecularMassFraction_perNeutralH
-    {
-        CellP[i].MolecularMassFraction_perNeutralH = DMIN(1,DMAX(0,CellP[i].MolecularMassFraction_perNeutralH));
-        CellP[i].MolecularMassFraction = DMIN(1,DMAX(0, 1.-CellP[i].Ne/1.25)) * CellP[i].MolecularMassFraction_perNeutralH;
-    }
-#endif
     
 
 #ifdef CHIMES_INITIALISE_IN_EQM
@@ -1187,10 +1231,10 @@ void init(void)
 	      initialise_gas_abundances(&(ChimesGasVars[i]), &ChimesGlobalVars);
 
 #ifdef CHIMES_TURB_DIFF_IONS
-	      chimes_update_turbulent_abundances(i, 1);
+	      chimes_update_turbulent_abundances(i, 1, P, CellP);
 #endif
 
-	      chimes_update_gas_vars(i);
+	      chimes_update_gas_vars(i, P, CellP);
 
 	      // Evolve the chemistry for (1 / nH) Myr (limited to 1 Gyr) ten times at fixed temperature.
 	      ChimesGasVars[i].hydro_timestep = (ChimesFloat) DMIN(3.16e13 / ChimesGasVars[i].nH_tot, 3.16e16);
@@ -1200,7 +1244,7 @@ void init(void)
 
 
 #ifdef CHIMES_TURB_DIFF_IONS
-	      chimes_update_turbulent_abundances(i, 1);
+	      chimes_update_turbulent_abundances(i, 1, P, CellP);
 #endif
 	    }
 #ifdef _OPENMP
@@ -1248,6 +1292,11 @@ void setup_smoothinglengths(void)
 #endif
         {
                 no = Father[i];
+                /* Negative means the treebuild never reached this particle (see
+                 * force_treebuild_single), so there is no parent node to size the kernel from.
+                 * Start from the root rather than indexing Nodes with -1; the guess is crude but
+                 * finite, and gets refined iteratively. */
+                if(no < 0) {no = All.MaxPart;}
                 while(2 * All.DesNumNgb * P[i].Mass > Nodes[no].u.d.mass)
                 {
                     p = Nodes[no].u.d.father;
@@ -1269,7 +1318,20 @@ void setup_smoothinglengths(void)
 #endif
 #ifndef SELFGRAVITY_OFF
                     double soft = All.ForceSoftening[P[i].Type];
-                    if(soft != 0) {if((P[i].KernelRadius>100.*soft)||(P[i].KernelRadius<=0.01*soft)||(Nodes[no].u.d.mass<=0)||(Nodes[no].len<=0)) {P[i].KernelRadius = soft;}}
+                    int ags_active_flag = 0;
+#ifdef ADAPTIVE_GRAVSOFT_FORGAS
+                    if(P[i].Type == 0) {ags_active_flag = 1;}
+#endif
+#ifdef ADAPTIVE_GRAVSOFT_FORALL
+                    if((ADAPTIVE_GRAVSOFT_FORALL) & (1 << P[i].Type)) {ags_active_flag = 1;}
+#endif
+                    if(ags_active_flag) {
+                        /* adaptive softening: fixed softening is just a floor and can be arbitrarily small,
+                           so only reset KernelRadius if the tree data itself is degenerate */
+                        if((Nodes[no].u.d.mass<=0)||(Nodes[no].len<=0)) {P[i].KernelRadius = 0.05 * All.BoxSize;}
+                    } else {
+                        if(soft != 0) {if((P[i].KernelRadius>100.*soft)||(P[i].KernelRadius<=0.01*soft)||(Nodes[no].u.d.mass<=0)||(Nodes[no].len<=0)) {P[i].KernelRadius = soft;}}
+                    }
 #else
                     if((Nodes[no].u.d.mass<=0)||(Nodes[no].len<=0)) {
 #if (defined(BOX_PERIODIC) || defined(BOX_SHEARING) || defined(BOX_DEFINED_SPECIAL_XYZ_BOUNDARY_CONDITIONS_ARE_ACTIVE) || defined(BOX_LONG_X) || defined(BOX_LONG_Y) || defined(BOX_LONG_Z))
@@ -1336,6 +1398,7 @@ void ags_setup_smoothinglengths(void)
                 if(P[i].Type > 0)
                 {
                     no = Father[i];
+                    if(no < 0) {no = All.MaxPart;} /* orphaned by the treebuild; see init note above */
                     while(10 * All.AGS_DesNumNgb * P[i].Mass > Nodes[no].u.d.mass)
                     {
                         p = Nodes[no].u.d.father;
@@ -1376,6 +1439,7 @@ void disp_setup_smoothinglengths(void)
             if(P[i].Type == 0)
             {
                 no = Father[i];
+                if(no < 0) {no = All.MaxPart;} /* orphaned by the treebuild; see init note above */
                 while(10 * 2.0 * 64 * P[i].Mass > Nodes[no].u.d.mass)
                 {
                     p = Nodes[no].u.d.father;
@@ -1384,7 +1448,7 @@ void disp_setup_smoothinglengths(void)
                 }
                 CellP[i].KernelRadiusDM = pow(1.0/VOLUME_NORM_COEFF_FOR_NDIMS * 2.0 * 64 * P[i].Mass / Nodes[no].u.d.mass, 1.0/NUMDIMS) * Nodes[no].len;
                 double soft = All.ForceSoftening[P[i].Type];
-                if(soft != 0) {if((CellP[i].KernelRadiusDM >1000.*soft)||(P[i].KernelRadius<=0.01*soft)||(Nodes[no].u.d.mass<=0)||(Nodes[no].len<=0)) {CellP[i].KernelRadiusDM = soft;}}
+                if(soft != 0) {if((CellP[i].KernelRadiusDM >1000.*soft)||(CellP[i].KernelRadiusDM<=0.01*soft)||(Nodes[no].u.d.mass<=0)||(Nodes[no].len<=0)) {CellP[i].KernelRadiusDM = soft;}} /* lower clause tests the DM kernel it resets -- it read the gas kernel, so a degenerate small KernelRadiusDM was never clamped */
             }
         }
     }

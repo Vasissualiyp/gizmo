@@ -27,7 +27,7 @@
  */
 static struct densdata_in
 {
-  MyDouble Pos[3];
+  Vec3<MyDouble> Pos;
   MyFloat KernelRadius;
   int NodeList[NODELISTLENGTH];
 }
@@ -68,7 +68,7 @@ void subfind_density(int j_in)
 
   /* allocate buffers to arrange communication */
 
-  Ngblist = (int *) mymalloc("Ngblist", NumPart * sizeof(int));
+  Ngblist.resize(NumPart);
   Dist2list = (double *) mymalloc("Dist2list", NumPart * sizeof(double));
 
   All.BunchSize =
@@ -152,9 +152,7 @@ void subfind_density(int j_in)
 	    {
 	      place = DataIndexTable[j].Index;
 
-	      DensDataIn[j].Pos[0] = P[place].Pos[0];
-	      DensDataIn[j].Pos[1] = P[place].Pos[1];
-	      DensDataIn[j].Pos[2] = P[place].Pos[2];
+	      DensDataIn[j].Pos = P[place].Pos;
 	      DensDataIn[j].KernelRadius = P[place].DM_KernelRadius;
 
 	      memcpy(DensDataIn[j].NodeList,
@@ -365,7 +363,7 @@ void subfind_density(int j_in)
   myfree(DataIndexTable);
 
   myfree(Dist2list);
-  myfree(Ngblist);
+  
 }
 
 
@@ -390,12 +388,12 @@ int subfind_density_evaluate(int target, int mode, int *nexport, int *nsend_loca
 
   if(mode == 0)
     {
-      pos = P[target].Pos;
+      pos = P[target].Pos.data_ptr();
       h = P[target].DM_KernelRadius;
     }
   else
     {
-      pos = DensDataGet[target].Pos;
+      pos = DensDataGet[target].Pos.data_ptr();
       h = DensDataGet[target].KernelRadius;
     }
 
@@ -514,6 +512,9 @@ void subfind_setup_smoothinglengths(int j)
 #endif
 	{
 	  no = Father[i];
+	  /* Father[] is seeded to -1 per treebuild; negative means the tree never reached this
+	     particle, so start from the root rather than indexing Nodes with -1. */
+	  if(no < 0) {no = All.MaxPart;}
 
 	  /* Not a good guess for gas/stars component, need more thought ! */
 	  while(10 * All.DesLinkNgb * P[i].Mass > Nodes[no].u.d.mass)
