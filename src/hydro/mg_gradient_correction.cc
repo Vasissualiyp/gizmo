@@ -637,13 +637,14 @@ static int mg_solve_backend(double *x)
 /* ==================================================================================== */
 
 #if !defined(MHD_MODIFIED_GRADIENT_CG_ONLY) && !defined(MHD_MODIFIED_GRADIENT_USE_PARDISO)
+#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_HIP)
+#define MG_HYPRE_ON_DEVICE   /* a GPU-built HYPRE takes every array it is handed in device memory */
+#endif
 static int mg_solve_backend(double *x)
 {
+    static int hypre_initialized = 0;   /* HYPRE's handle (on a GPU build: device, streams, memory pools) is set up once per run */
+    if(!hypre_initialized) {HYPRE_Init(); hypre_initialized = 1;}
     HYPRE_BigInt ilower = (HYPRE_BigInt) MG_TaskRowOffsets[ThisTask], iupper = (HYPRE_BigInt)(MG_TaskRowOffsets[ThisTask] + N_gas - 1);
-#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_HIP)
-    HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE);
-    HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE);
-#endif
     /* all rows in one insertion: an unsolved row is the equation c_i = 0; a solved row drops
        the column of its piece's anchor unknown */
     std::vector<HYPRE_Int> ncols((size_t)DMAX(N_gas, 1));
@@ -669,11 +670,46 @@ static int mg_solve_backend(double *x)
         }
         ncols[i] = (HYPRE_Int)(pos - start);
     }
+    std::vector<HYPRE_Real> x_vals((size_t)DMAX(N_gas, 1), 0.0);
+    HYPRE_Int *ncols_in = ncols.data(); HYPRE_BigInt *rows_in = row_ids.data(), *cols_in = cols.data();
+    HYPRE_Real *vals_in = vals.data(), *rhs_in = MG_RhsSolved.data(), *x_in = x_vals.data();
+#ifdef MG_HYPRE_ON_DEVICE
+    /* the system is built on the host and copied to the device once; HYPRE assembles, sets up and solves
+       there, and the solution comes back once. HYPRE's global memory location and execution policy are
+       switched for this solve only and restored to whatever they were. */
+    const size_t n_rows_alloc = (size_t)DMAX(N_gas, 1), n_entries_alloc = DMAX(nnz, (size_t)1);
+    ncols_in = (HYPRE_Int *)    gizmo_gpu_alloc_device(n_rows_alloc * sizeof(HYPRE_Int), "mg_hypre_ncols");
+    rows_in  = (HYPRE_BigInt *) gizmo_gpu_alloc_device(n_rows_alloc * sizeof(HYPRE_BigInt), "mg_hypre_rows");
+    cols_in  = (HYPRE_BigInt *) gizmo_gpu_alloc_device(n_entries_alloc * sizeof(HYPRE_BigInt), "mg_hypre_cols");
+    vals_in  = (HYPRE_Real *)   gizmo_gpu_alloc_device(n_entries_alloc * sizeof(HYPRE_Real), "mg_hypre_values");
+    rhs_in   = (HYPRE_Real *)   gizmo_gpu_alloc_device(n_rows_alloc * sizeof(HYPRE_Real), "mg_hypre_rhs");
+    x_in     = (HYPRE_Real *)   gizmo_gpu_alloc_device(n_rows_alloc * sizeof(HYPRE_Real), "mg_hypre_solution");
+    int alloc_failed = (!ncols_in || !rows_in || !cols_in || !vals_in || !rhs_in || !x_in);
+    MPI_Allreduce(MPI_IN_PLACE, &alloc_failed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if(alloc_failed) {   /* every task skips the solve together, so no task waits in a HYPRE collective */
+        gizmo_gpu_free_device(ncols_in); gizmo_gpu_free_device(rows_in); gizmo_gpu_free_device(cols_in);
+        gizmo_gpu_free_device(vals_in); gizmo_gpu_free_device(rhs_in); gizmo_gpu_free_device(x_in);
+        if(ThisTask == 0) {PRINT_WARNING("MG: device memory for the HYPRE system could not be allocated on some task (task 0 needs %g MB)",
+                                         (double)(n_rows_alloc * (sizeof(HYPRE_Int) + sizeof(HYPRE_BigInt) + 2 * sizeof(HYPRE_Real))
+                                                  + n_entries_alloc * (sizeof(HYPRE_BigInt) + sizeof(HYPRE_Real))) / (1024. * 1024.));}
+        return -1;
+    }
+    gizmo_gpu_copy_to_device(ncols_in, ncols.data(), (size_t)N_gas * sizeof(HYPRE_Int));
+    gizmo_gpu_copy_to_device(rows_in, row_ids.data(), (size_t)N_gas * sizeof(HYPRE_BigInt));
+    gizmo_gpu_copy_to_device(cols_in, cols.data(), nnz * sizeof(HYPRE_BigInt));
+    gizmo_gpu_copy_to_device(vals_in, vals.data(), nnz * sizeof(HYPRE_Real));
+    gizmo_gpu_copy_to_device(rhs_in, MG_RhsSolved.data(), (size_t)N_gas * sizeof(HYPRE_Real));
+    gizmo_gpu_copy_to_device(x_in, x_vals.data(), (size_t)N_gas * sizeof(HYPRE_Real));
+    HYPRE_MemoryLocation prior_location; HYPRE_ExecutionPolicy prior_policy;
+    HYPRE_GetMemoryLocation(&prior_location); HYPRE_GetExecutionPolicy(&prior_policy);
+    HYPRE_SetMemoryLocation(HYPRE_MEMORY_DEVICE);
+    HYPRE_SetExecutionPolicy(HYPRE_EXEC_DEVICE);
+#endif
     HYPRE_IJMatrix A;
     HYPRE_IJMatrixCreate(MPI_COMM_WORLD, ilower, iupper, ilower, iupper, &A);
     HYPRE_IJMatrixSetObjectType(A, HYPRE_PARCSR);
     HYPRE_IJMatrixInitialize(A);
-    if(N_gas > 0) {HYPRE_IJMatrixSetValues(A, (HYPRE_Int) N_gas, ncols.data(), row_ids.data(), cols.data(), vals.data());}
+    if(N_gas > 0) {HYPRE_IJMatrixSetValues(A, (HYPRE_Int) N_gas, ncols_in, rows_in, cols_in, vals_in);}
     HYPRE_IJMatrixAssemble(A);
     HYPRE_ParCSRMatrix parcsr_A;
     HYPRE_IJMatrixGetObject(A, (void **)&parcsr_A);
@@ -681,10 +717,9 @@ static int mg_solve_backend(double *x)
     HYPRE_IJVector b_vec, x_vec;
     HYPRE_IJVectorCreate(MPI_COMM_WORLD, ilower, iupper, &b_vec); HYPRE_IJVectorSetObjectType(b_vec, HYPRE_PARCSR); HYPRE_IJVectorInitialize(b_vec);
     HYPRE_IJVectorCreate(MPI_COMM_WORLD, ilower, iupper, &x_vec); HYPRE_IJVectorSetObjectType(x_vec, HYPRE_PARCSR); HYPRE_IJVectorInitialize(x_vec);
-    std::vector<HYPRE_Real> x_vals((size_t)DMAX(N_gas, 1), 0.0);
     if(N_gas > 0) {
-        HYPRE_IJVectorSetValues(b_vec, (HYPRE_Int) N_gas, row_ids.data(), MG_RhsSolved.data());
-        HYPRE_IJVectorSetValues(x_vec, (HYPRE_Int) N_gas, row_ids.data(), x_vals.data());
+        HYPRE_IJVectorSetValues(b_vec, (HYPRE_Int) N_gas, rows_in, rhs_in);
+        HYPRE_IJVectorSetValues(x_vec, (HYPRE_Int) N_gas, rows_in, x_in);
     }
     HYPRE_IJVectorAssemble(b_vec); HYPRE_IJVectorAssemble(x_vec);
     HYPRE_ParVector par_b, par_x;
@@ -698,10 +733,11 @@ static int mg_solve_backend(double *x)
     HYPRE_PCGSetPrintLevel(solver, 0);
     HYPRE_BoomerAMGCreate(&precond);
     HYPRE_BoomerAMGSetPrintLevel(precond, 0);
-    HYPRE_BoomerAMGSetCoarsenType(precond, 6);  /* Falgout coarsening */
-#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_HIP)
-    HYPRE_BoomerAMGSetRelaxType(precond, 18);   /* L1-scaled hybrid GS (GPU-parallel) */
+#ifdef MG_HYPRE_ON_DEVICE
+    HYPRE_BoomerAMGSetCoarsenType(precond, 8);  /* PMIS coarsening (Falgout is not available in a device setup) */
+    HYPRE_BoomerAMGSetRelaxType(precond, 18);   /* l1-scaled Jacobi (GPU-parallel) */
 #else
+    HYPRE_BoomerAMGSetCoarsenType(precond, 6);  /* Falgout coarsening */
     HYPRE_BoomerAMGSetRelaxType(precond, 6);    /* symmetric Gauss-Seidel (CPU) */
 #endif
     HYPRE_BoomerAMGSetNumSweeps(precond, 1);
@@ -713,8 +749,7 @@ static int mg_solve_backend(double *x)
     HYPRE_ParCSRPCGSolve(solver, parcsr_A, par_b, par_x);
     HYPRE_Int num_iterations;
     HYPRE_PCGGetNumIterations(solver, &num_iterations);
-    if(N_gas > 0) {HYPRE_IJVectorGetValues(x_vec, (HYPRE_Int) N_gas, row_ids.data(), x_vals.data());}
-    for(int i = 0; i < N_gas; i++) {x[i] = MG_RowSolved[i] ? x_vals[i] : 0;}
+    if(N_gas > 0) {HYPRE_IJVectorGetValues(x_vec, (HYPRE_Int) N_gas, rows_in, x_in);}
     HYPRE_ClearAllErrors();   /* the outcome is judged by the true residual, not HYPRE's flags */
 
     HYPRE_ParCSRPCGDestroy(solver);
@@ -722,10 +757,14 @@ static int mg_solve_backend(double *x)
     HYPRE_IJMatrixDestroy(A);
     HYPRE_IJVectorDestroy(b_vec);
     HYPRE_IJVectorDestroy(x_vec);
-#if defined(HYPRE_USING_CUDA) || defined(HYPRE_USING_HIP)
-    HYPRE_SetMemoryLocation(HYPRE_MEMORY_HOST);
-    HYPRE_SetExecutionPolicy(HYPRE_EXEC_HOST);
+#ifdef MG_HYPRE_ON_DEVICE
+    HYPRE_SetMemoryLocation(prior_location);
+    HYPRE_SetExecutionPolicy(prior_policy);
+    gizmo_gpu_copy_to_host(x_vals.data(), x_in, (size_t)N_gas * sizeof(HYPRE_Real));
+    gizmo_gpu_free_device(ncols_in); gizmo_gpu_free_device(rows_in); gizmo_gpu_free_device(cols_in);
+    gizmo_gpu_free_device(vals_in); gizmo_gpu_free_device(rhs_in); gizmo_gpu_free_device(x_in);
 #endif
+    for(int i = 0; i < N_gas; i++) {x[i] = MG_RowSolved[i] ? x_vals[i] : 0;}
     return (int) num_iterations;
 }
 #endif
@@ -913,6 +952,9 @@ void mg_gradient_correction_calc(void)
     struct mg_solve_metrics metrics = {0, 0, 0, 0, 0, 0, 0, 0};
     if(!stop_code) {
         iterations = mg_solve_backend(x.data());
+        if(iterations < 0) {stop_code = 8806;}   /* the backend could not allocate its system (same on every task) */
+    }
+    if(!stop_code) {
         int nonfinite_loc = 0, nonfinite = 0;
         for(int i = 0; i < N_gas; i++) {if(!isfinite(x[i])) {nonfinite_loc = 1;}}
         MPI_Allreduce(&nonfinite_loc, &nonfinite, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);

@@ -442,6 +442,9 @@ extern "C" const char *gizmo_kokkos_mem_unknown_space_name(void);  /* first unre
 extern "C" void *gizmo_gpu_alloc_shared(size_t nbytes, const char *label);   /* SharedSpace/UVM: host- and device-readable */
 extern "C" void *gizmo_gpu_alloc_device(size_t nbytes, const char *label);   /* device-only memory */
 extern "C" void *gizmo_gpu_alloc_host(size_t nbytes, const char *label);     /* host memory obtained through Kokkos */
+extern "C" void  gizmo_gpu_free_device(void *ptr);                                              /* releases gizmo_gpu_alloc_device memory */
+extern "C" void  gizmo_gpu_copy_to_device(void *dst_device, const void *src_host, size_t nbytes); /* blocking bulk copies between */
+extern "C" void  gizmo_gpu_copy_to_host(void *dst_host, const void *src_device, size_t nbytes);   /* host and device-only memory (waits for all device work first) */
 /* 1 when the particle storage is CUDA managed memory, which MPI must not receive into directly: such receives go
    through host staging (MPI_Sendrecv_into_particle_storage, the ghost transport).  0 on HIP and host builds. */
 extern "C" int gizmo_particle_storage_needs_staged_mpi_receive(void);

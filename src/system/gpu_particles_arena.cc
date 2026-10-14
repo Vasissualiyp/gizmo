@@ -529,6 +529,26 @@ extern "C" void *gizmo_gpu_alloc_device(size_t nbytes, const char *label)
     catch(const std::exception &) { return NULL; }
 }
 
+extern "C" void gizmo_gpu_free_device(void *ptr)
+{
+    if(ptr) {Kokkos::kokkos_free<GIZMO_KOKKOS_DEVICE_SPACE>(ptr);}
+}
+
+extern "C" void gizmo_gpu_copy_to_device(void *dst_device, const void *src_host, size_t nbytes)
+{
+    if(nbytes == 0) {return;}
+    Kokkos::deep_copy(Kokkos::View<char*, GIZMO_KOKKOS_DEVICE_SPACE, Kokkos::MemoryTraits<Kokkos::Unmanaged>>((char *) dst_device, nbytes),
+                      Kokkos::View<const char*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>((const char *) src_host, nbytes));
+}
+
+extern "C" void gizmo_gpu_copy_to_host(void *dst_host, const void *src_device, size_t nbytes)
+{
+    if(nbytes == 0) {return;}
+    Kokkos::fence("gizmo_gpu_copy_to_host");   /* device-wide: the source may have been written by a library on its own stream */
+    Kokkos::deep_copy(Kokkos::View<char*, Kokkos::HostSpace, Kokkos::MemoryTraits<Kokkos::Unmanaged>>((char *) dst_host, nbytes),
+                      Kokkos::View<const char*, GIZMO_KOKKOS_DEVICE_SPACE, Kokkos::MemoryTraits<Kokkos::Unmanaged>>((const char *) src_device, nbytes));
+}
+
 extern "C" void *gizmo_gpu_alloc_host(size_t nbytes, const char *label)
 {
     try { return label ? Kokkos::kokkos_malloc<Kokkos::HostSpace>(label, nbytes)
