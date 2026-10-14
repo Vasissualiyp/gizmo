@@ -52,6 +52,7 @@ int  chemcxx_evolve(double timestep, double dl, double yn, double divv,
                     double* energy, double* abundances);
 double chemcxx_tdust(void);
 void chemcxx_set_tdust(double t);
+void chemcxx_get_lambda(double* lam, int nlam, double* lamchem, int nchem);
 }
 
 // the Fortran /coolr/ common -- we only need tdust here (in/out algebraic state)
@@ -107,9 +108,12 @@ void chem_evolve_cxx(double* timestep, double* dl, double* yn, double* divv,
 
     // refresh the per-cell context from the COMMONs that chem_commit_to_fortran
     // and CALC_PHOTO_WRAPPER just wrote (this is the R5 freeze point)
+    double tdust_cell = COOLR.tdust; /* this cell's carried dust temperature (CellP.DustTemp) */
     chemcxx_init(CHEMISTRYNETWORK);
+    chemcxx_set_tdust(tdust_cell);   /* init would otherwise restore the previous cell's tdust (one-zone carry) */
 
     int rc = chemcxx_evolve(*timestep, *dl, *yn, *divv, energy, abundances);
+    chemcxx_get_lambda(COOLR.lambda, 28, COOLR.lambda_chem, NRATES_CHEM); /* publish rates like the Fortran solver */
 
     // tdust rides outside the ODE vector (audit §3.1 item 2): publish the
     // driver's accepted value so chem_read_outputs() -> CellP.DustTemp sees it.

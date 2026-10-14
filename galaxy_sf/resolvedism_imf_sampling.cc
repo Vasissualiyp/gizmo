@@ -401,6 +401,7 @@ void resolvedism_update_ion_photon_energy(void)
 
 /* Global accumulators — allocated in assign_stellar_masses(), indexed by particle index */
 static double *IMF_MassAccreted = NULL;
+static std::vector<double> IMF_RmaxDonor; /* per particle: farthest donor distance over all removal passes */
 static double *IMF_MomAccreted = NULL;   /* [NumPart * 3] */
 #ifdef METALS
 static double *IMF_MetalAccreted = NULL;
@@ -444,6 +445,7 @@ struct imf_donor_entry { MyIDType ID; MyFloat dM; };
 struct OUTPUT_STRUCT_NAME
 {
     MyFloat mass_accreted;
+    MyFloat r_max_donor;   /* farthest cell that gave mass (comoving code length) */
     MyFloat mom_accreted[3];
 #ifdef METALS
     MyFloat metal_accreted;
@@ -472,6 +474,7 @@ void out2particle_resolvedismIMF(struct OUTPUT_STRUCT_NAME *out, int i, int mode
             IMF_ElemAccreted[i*NUM_RESOLVEDISM_ELEMENTS+k] += out->elem_accreted[k];
 #endif
         /* donor logging — mode 0 is single-threaded, safe to push_back */
+        if(IMF_AccretionMode == 1 && out->r_max_donor > IMF_RmaxDonor[i]) {IMF_RmaxDonor[i] = out->r_max_donor;}
         if(IMF_AccretionMode == 1) {
             for(int d = 0; d < out->n_donors; d++)
                 IMF_DonorLog.push_back({i, out->donors[d].ID, (double)out->donors[d].dM});
@@ -497,6 +500,7 @@ void out2particle_resolvedismIMF(struct OUTPUT_STRUCT_NAME *out, int i, int mode
         if(IMF_AccretionMode == 1) {
             #pragma omp critical (imf_donor_log)
             {
+                if(out->r_max_donor > IMF_RmaxDonor[i]) {IMF_RmaxDonor[i] = out->r_max_donor;}
                 for(int d = 0; d < out->n_donors; d++)
                     IMF_DonorLog.push_back({i, out->donors[d].ID, (double)out->donors[d].dM});
             }
@@ -558,16 +562,19 @@ int resolvedismIMF_evaluate(int target, int mode, int *exportflag, int *exportno
                 r2=0; for(k=0;k<3;k++) {r2 += dp[k]*dp[k];}
                 if(r2 < 0 || r2 >= h2) continue; /* allow r2==0: parent cell at same position */
 
+                double M_floor = 0.01 * All.MinMassForParticleMerger; /* keep donors far from empty (merged later if below threshold) */
+                if(Mass_j <= M_floor) continue;
                 if(IMF_AccretionMode == 0)
                 {
-                    /* --- COUNTING PASS: sum neighbor mass, no removal --- */
-                    out.mass_accreted += Mass_j;
+                    /* --- COUNTING PASS: sum available neighbor mass, no removal --- */
+                    out.mass_accreted += Mass_j - M_floor;
                 }
                 else
                 {
                     /* --- REMOVAL PASS: use correct f_acc --- */
-                    double dM = local.f_acc * Mass_j;
+                    double dM = local.f_acc * (Mass_j - M_floor);
                     if(dM > 0.5 * Mass_j) dM = 0.5 * Mass_j;
+                    if(dM > Mass_j - M_floor) dM = Mass_j - M_floor;
                     if(dM <= 0) continue;
 
                     double Vel_j[3];
@@ -655,11 +662,18 @@ int resolvedismIMF_evaluate(int target, int mode, int *exportflag, int *exportno
 #endif
                     #pragma omp atomic
                     P[j].Mass -= dM;
+#ifdef STELLA_SELFCHECK
+                    { static long n_don = 0, n_low = 0; n_don++;   /* donor drained below the accretion floor */
+                      if(P[j].Mass < (1 - 1.0e-9) * 0.01 * All.MinMassForParticleMerger && ++n_low <= 50)
+                          STELLA_CHECK("donor_mass_floor", 0, "donor ID=%llu M_left=%.3e M_merge=%.3e (code) n_low=%ld", (unsigned long long)P[j].ID, (double)P[j].Mass, All.MinMassForParticleMerger, n_low);
+                      if(n_don == 1 || n_don % 1000 == 0) STELLA_CHECK_RAN("donor_mass_floor", 1);}
+#endif
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
                     #pragma omp atomic
                     CellP[j].MassTrue -= dM;
 #endif
                     out.mass_accreted += dM;
+                    if(r2 > out.r_max_donor * out.r_max_donor) {out.r_max_donor = sqrt(r2);}
                     for(k=0;k<3;k++) out.mom_accreted[k] += dM * Vel_j[k];
                     /* record donor for mass tracing */
                     if(out.n_donors < IMF_MAX_DONORS) {
@@ -720,6 +734,7 @@ void assign_stellar_masses(void)
 
     /* Allocate accumulators (persist across iterations, zeroed each pass) */
     IMF_MassAccreted = (double *) mymalloc("IMF_MassAccreted", NumPart * sizeof(double));
+    IMF_RmaxDonor.assign(NumPart, 0.0);
     IMF_MomAccreted = (double *) mymalloc("IMF_MomAccreted", NumPart * 3 * sizeof(double));
 #ifdef METALS
     IMF_MetalAccreted = (double *) mymalloc("IMF_MetalAccreted", NumPart * sizeof(double));
@@ -863,6 +878,7 @@ void assign_stellar_masses(void)
     double *imf_nH = (double *)mymalloc("imf_nH", DMAX(nstars_local,1) * sizeof(double));
     double *imf_T = (double *)mymalloc("imf_T", DMAX(nstars_local,1) * sizeof(double));
     long long *imf_id = (long long *)mymalloc("imf_id", DMAX(nstars_local,1) * sizeof(long long));
+    std::vector<double> imf_rdon(DMAX(nstars_local,1), 0.0); /* farthest donor distance [physical kpc] */
     int nimf = 0;
 
     for(i = 0; i < NumPart; i++)
@@ -918,6 +934,7 @@ void assign_stellar_masses(void)
         imf_mdrawn[nimf] = M_drawn;
         imf_macc[nimf] = mass_acc * UNIT_MASS_IN_SOLAR;
         imf_racc[nimf] = P[i].KernelRadius;
+        imf_rdon[nimf] = IMF_RmaxDonor[i] * All.cf_atime * UNIT_LENGTH_IN_KPC;
         imf_zbirth[nimf] = P[i].BirthMetallicity;
         imf_id[nimf] = (long long)P[i].ID;
         imf_nH[nimf] = P[i].FormationDensity * UNIT_DENSITY_IN_CGS * HYDROGEN_MASSFRAC / PROTONMASS_CGS; /* already physical at formation */
@@ -975,6 +992,8 @@ void assign_stellar_masses(void)
             MPI_Gatherv(imf_mdrawn, nimf, MPI_DOUBLE, all_mdrawn, recvcounts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
             MPI_Gatherv(imf_macc, nimf, MPI_DOUBLE, all_macc, recvcounts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
             MPI_Gatherv(imf_racc, nimf, MPI_DOUBLE, all_racc, recvcounts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
+            std::vector<double> all_rdon(ThisTask == 0 ? DMAX(nimf_total,1) : 1, 0.0);
+            MPI_Gatherv(imf_rdon.data(), nimf, MPI_DOUBLE, all_rdon.data(), recvcounts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
             MPI_Gatherv(imf_zbirth, nimf, MPI_DOUBLE, all_zbirth, recvcounts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
             MPI_Gatherv(imf_nH, nimf, MPI_DOUBLE, all_nH, recvcounts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
             MPI_Gatherv(imf_T, nimf, MPI_DOUBLE, all_T, recvcounts, displs, MPI_DOUBLE, 0, MPI_COMM_WORLD);
@@ -982,9 +1001,9 @@ void assign_stellar_masses(void)
             if(ThisTask == 0) {
                 double worst_err = 0; int worst_idx = 0;
                 for(i = 0; i < nimf_total; i++) {
-                    fprintf(FdSFinfo, "%12.6f %9.4f %9.4f %9.4f %10lld %8.4f %8.4f %10.6f %10.4e %10.2f %10.2e\n",
+                    fprintf(FdSFinfo, "%12.6f %9.4f %9.4f %9.4f %10lld %8.4f %8.4f %10.6f %10.4e %10.2f %10.2e %10.6f\n",
                         All.Time, all_x[i], all_y[i], all_z[i], all_id[i],
-                        all_mdrawn[i], all_macc[i], all_racc[i], all_zbirth[i], all_T[i], all_nH[i]);
+                        all_mdrawn[i], all_macc[i], all_racc[i], all_zbirth[i], all_T[i], all_nH[i], all_rdon[i]);
                     double err = (all_mdrawn[i] > 0) ? fabs(all_macc[i] - all_mdrawn[i]) / all_mdrawn[i] : 0;
                     if(err > worst_err) {worst_err = err; worst_idx = i;}
                 }
@@ -1057,6 +1076,7 @@ void assign_stellar_masses(void)
 #endif
     myfree(IMF_MomAccreted); IMF_MomAccreted = NULL;
     myfree(IMF_MassAccreted); IMF_MassAccreted = NULL;
+    std::vector<double>().swap(IMF_RmaxDonor);
 
     if(ThisTask == 0 && iter > 1) printf("RESOLVEDISM IMF: accretion required %d passes\n", iter);
 }

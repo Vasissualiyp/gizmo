@@ -136,6 +136,9 @@ struct KetjuTaskGroup {
     }
 
     void free_comms() {
+        /* cached regions are file-scope statics destroyed after MPI_Finalize: freeing then aborts with nonzero status */
+        int finalized = 0; MPI_Finalized(&finalized);
+        if(finalized) { comm = MPI_COMM_NULL; group = MPI_GROUP_NULL; rank = MPI_UNDEFINED; size = 0; root = MPI_UNDEFINED; root_sim = MPI_UNDEFINED; return; }
         if(comm != MPI_COMM_NULL) { MPI_Comm_free(&comm); comm = MPI_COMM_NULL; }
         if(group != MPI_GROUP_NULL) { MPI_Group_free(&group); group = MPI_GROUP_NULL; }
         rank = MPI_UNDEFINED; size = 0; root = MPI_UNDEFINED; root_sim = MPI_UNDEFINED;
@@ -830,6 +833,39 @@ static int pair_forms_subsystem(const ketju_mpi_particle &a, const ketju_mpi_par
 /* Group eligible stars into subsystems by the pair-orbit predicate (union-find, same output
  * shape as merge_overlapping_regions). Deterministic from the globally-gathered centers, so
  * all ranks derive identical groups without communication. */
+/* Per-tag region bounding spheres for force_treeevaluate: a tagged target force-opens every node
+ * overlapping its region's sphere, so a same-region companion is never absorbed into an accepted
+ * multipole (member<->member force would otherwise be counted by the tree AND by MSTAR). Built from
+ * the globally gathered groups, identical on every rank. Index = tag-1. */
+int KetjuNumTagRegions = 0;
+double *KetjuTagCenter = NULL;   /* 3 * ntag */
+double *KetjuTagRadius = NULL;   /* ntag */
+
+static void ketju_update_tag_geometry(const std::vector<std::vector<ketju_mpi_particle>> &groups)
+{
+    int ntag = (int)groups.size();
+    static int alloc = 0;
+    if(ntag > alloc) {
+        free(KetjuTagCenter); free(KetjuTagRadius);
+        alloc = ntag + 256;
+        KetjuTagCenter = (double*)malloc(3 * alloc * sizeof(double));
+        KetjuTagRadius = (double*)malloc(alloc * sizeof(double));
+    }
+    for(int r = 0; r < ntag; r++) {
+        double c[3] = {0,0,0}; int n = (int)groups[r].size();
+        for(const ketju_mpi_particle &m : groups[r]) for(int k = 0; k < 3; k++) c[k] += m.Pos[k];
+        if(n > 0) for(int k = 0; k < 3; k++) c[k] /= n;
+        double rad2max = 0;
+        for(const ketju_mpi_particle &m : groups[r]) {
+            double d2 = 0; for(int k = 0; k < 3; k++) { double d = m.Pos[k] - c[k]; d2 += d * d; }
+            if(d2 > rad2max) rad2max = d2;
+        }
+        for(int k = 0; k < 3; k++) KetjuTagCenter[3*r + k] = c[k];
+        KetjuTagRadius[r] = 1.2 * sqrt(rad2max) + All.KetjuRegionRadius; /* pad for in-step drift */
+    }
+    KetjuNumTagRegions = ntag;
+}
+
 static std::vector<std::vector<ketju_mpi_particle>> build_orbit_regions(
     const std::vector<ketju_mpi_particle> &centers)
 {
@@ -2176,12 +2212,14 @@ static void move_particle_timebin(int i, int old_bin, int new_bin)
  * same detection as ketju_limit_timesteps/ketju_find_regions, so the tags agree with them. */
 void ketju_tag_regions(void)
 {
+    KetjuNumTagRegions = 0;
     for(int i = 0; i < NumPart; i++) {P[i].KetjuRegionTag = 0;}
     if(All.KetjuRegionRadius <= 0) return;
     if(All.KetjuMinBHMass <= 0 && All.KetjuMinStarMass <= 0) return;
     std::vector<ketju_mpi_particle> centers = gather_chain_centers();
     if(centers.empty()) return;
     std::vector<std::vector<ketju_mpi_particle>> region_centers = build_orbit_regions(centers);
+    ketju_update_tag_geometry(region_centers);
     for(size_t r = 0; r < region_centers.size(); r++) {
         if(region_centers[r].size() < 2) continue;  /* single stars are not chains */
         std::set<int> local_members = local_members_from_group(region_centers[r]);
@@ -2199,6 +2237,7 @@ void ketju_limit_timesteps(void)
     /* clear region tags AND per-member region timesteps before (re)assigning — a non-member must have
      * tag 0 (tree excludes nothing) and KetjuRegionTiStep 0 (get_timestep uses the normal criteria).
      * Done before the empty-centers early-out so nothing stale lingers. */
+    KetjuNumTagRegions = 0;
     for(int i = 0; i < NumPart; i++) {P[i].KetjuRegionTag = 0; P[i].KetjuRegionTiStep = 0;}
 
     /* gather chain center positions (cache for ketju_find_regions) */
@@ -2211,6 +2250,7 @@ void ketju_limit_timesteps(void)
      * merge_radius retained only as the length scale for the capture-buffer pass below */
     double merge_radius = 2.0 * All.KetjuRegionRadius;
     std::vector<std::vector<ketju_mpi_particle>> region_centers = build_orbit_regions(centers);
+    ketju_update_tag_geometry(region_centers);
 
     /* TNT region-adaptive timestep (ports get_region_max_timestep + set_limited_timesteps): bound each
      * region's host step by its EXTERNAL field and CoM motion, then put ALL its members on that single
@@ -2475,6 +2515,7 @@ void ketju_find_regions(void)
     /* group stars into subsystems by the BIFROST pair-orbit predicate (same grouping as
      * ketju_limit_timesteps computed earlier this step — deterministic from the shared centers) */
     std::vector<std::vector<ketju_mpi_particle>> region_centers = build_orbit_regions(centers);
+    ketju_update_tag_geometry(region_centers);
 
     /* build regions (first pass: find members, collect IDs, check staleness) */
     int n_regions = region_centers.size();

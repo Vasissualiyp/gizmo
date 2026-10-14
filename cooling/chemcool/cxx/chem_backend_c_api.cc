@@ -99,4 +99,11 @@ double chemcxx_tdust(void) { return g_cell.tdust; }
 void chemcxx_set_tdust(double t) { g_cell.tdust = t;
                                    g_carry_tdust = t; g_have_tdust = 1; }
 
+// last solve's per-process cooling rates (cool_func lambda) and chemistry rates, for COOLR publication
+void chemcxx_get_lambda(double* lam, int nlam, double* lamchem, int nchem)
+{
+    for (int k = 0; k < nlam && k < CHEM_NRATES; k++) lam[k] = g_cell.lambda[k];
+    for (int k = 0; k < nchem && k < CHEM_NRATES_CHEM_MAX; k++) lamchem[k] = g_cell.lambda_chem[k];
+}
+
 }  // extern "C"

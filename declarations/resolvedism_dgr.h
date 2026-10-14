@@ -19,12 +19,14 @@ static inline double resolvedism_cell_DGR_solar(int p)
         for(kd = 0; kd < NUM_RESOLVEDISM_DUST; kd++) {DGR_actual += CellP[p].Dust[kd];}
         dgr = DGR_actual / RESOLVEDISM_DGR_SOLAR_ABS;
     }
-#else
+#elif defined(CHEMCOOL)
 #ifdef METALS
     dgr = All.DGRnormalized * P[p].Metallicity[0] / All.SolarAbundances[0];
 #else
     dgr = All.DGRnormalized;
 #endif
+#else
+    dgr = 1.0; /* no chemistry: DGRnormalized not defined (pure N-body / non-Stella builds) */
 #endif
     if(dgr > 10.0) {dgr = 10.0;}
     if(dgr < 0) {dgr = 0;}

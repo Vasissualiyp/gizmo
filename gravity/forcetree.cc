@@ -7,6 +7,9 @@
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
 #include "../declarations/resolvedism_dgr.h"
+#ifdef KETJU_REGULARIZATION
+extern int KetjuNumTagRegions; extern double *KetjuTagCenter, *KetjuTagRadius; /* ketju_coupling.cc */
+#endif
 #include "../mesh/kernel.h"
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #include "healpix_utils.h"     /* HEALPix pixel geometry: shared by FUV-G0 (TREE_RAD) and standalone H2/CO column walks */
@@ -2552,6 +2555,18 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                 if(h < nop->maxsoft) // compare primary softening to node maximum
                 {
                     if(r2 < nop->maxsoft * nop->maxsoft) {no = nop->u.d.nextnode; continue;} // inside node maxsoft, continue down tree
+                }
+#endif
+#ifdef KETJU_REGULARIZATION
+                /* chain member: force-open nodes overlapping its region sphere so same-region companions reach leaf level (excluded there) */
+                if(target_ketju_tag > 0 && target_ketju_tag <= KetjuNumTagRegions)
+                {
+                    double dxk = nop->center[0] - KetjuTagCenter[3*(target_ketju_tag-1)+0];
+                    double dyk = nop->center[1] - KetjuTagCenter[3*(target_ketju_tag-1)+1];
+                    double dzk = nop->center[2] - KetjuTagCenter[3*(target_ketju_tag-1)+2];
+                    GRAVITY_NEAREST_XYZ(dxk,dyk,dzk,-1);
+                    double reach = KetjuTagRadius[target_ketju_tag-1] + 0.866025 * nop->len; /* node bounding radius = len*sqrt(3)/2 */
+                    if(dxk*dxk + dyk*dyk + dzk*dzk < reach*reach) {no = nop->u.d.nextnode; continue;}
                 }
 #endif
                 if(All.ErrTolTheta)    /* check Barnes-Hut opening criterion */
