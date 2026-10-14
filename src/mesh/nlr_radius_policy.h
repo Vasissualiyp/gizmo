@@ -105,6 +105,19 @@ typedef unsigned int mode_b_radius_policy_t;
      | MODE_B_RADIUS_NONGAS_KERNEL | MODE_B_RADIUS_NONGAS_AGS \
      | MODE_B_RADIUS_FORCE_SOFTENING)
 
+/* The part of `policy` that can act on a search whose neighbour types are
+ * `type_mask`: the gas bits mean nothing when the mask holds no gas, the
+ * non-gas bits nothing when it holds only gas.  Two policies describe the same
+ * search over that mask exactly when these agree. */
+KOKKOS_INLINE_FUNCTION
+mode_b_radius_policy_t nlr_radius_policy_for_mask(mode_b_radius_policy_t policy,
+                                                  unsigned int type_mask)
+{
+    if(!(type_mask & 1u))  {policy &= ~(MODE_B_RADIUS_GAS_KERNEL | MODE_B_RADIUS_GAS_AGS);}
+    if(!(type_mask & ~1u)) {policy &= ~(MODE_B_RADIUS_NONGAS_KERNEL | MODE_B_RADIUS_NONGAS_AGS);}
+    return policy;
+}
+
 /* Field-based form — device-callable.  Returns the j-side symmetric-pair-
  * search radius under `policy`, given j's type and the relevant radius fields.
  * Returns 0 when no policy bit selects a contributing source for j's type

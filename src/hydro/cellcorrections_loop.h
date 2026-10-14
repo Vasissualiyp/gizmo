@@ -134,6 +134,9 @@ struct CellcorrectionsSpec {
     static constexpr int                     search_mode        = MODE_B_SEARCH_SYMMETRIC;
     static constexpr unsigned int            neighbor_type_mask = (1u << 0);
     static constexpr mode_b_radius_policy_t  radius_policy      = MODE_B_RADIUS_DEFAULT;
+    /* The pair kernel drops every pair with r >= h_j, so a list searched
+     * wider (the corridor's under TURB_DIFF_DYNAMIC) gives the same sums. */
+    static constexpr bool accepts_wider_neighbor_list = true;
 
     /* Writeback policy. Pure i-side accumulate; no ghost-writeback. */
     static constexpr WritePattern   write_pattern    = WritePattern::ActiveReduceOnly;

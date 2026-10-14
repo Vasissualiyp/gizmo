@@ -36,6 +36,9 @@ struct neighbor_list_t {
     int *neighbors;         /* [total_pairs] neighbor particle indices into P[]/CellP[] */
     int num_active;         /* number of active particles (rows in CSR) */
     int64_t total_pairs;    /* total number of neighbor pairs stored */
+    int on_heap;            /* 0: offsets/neighbors are working-pool blocks (mymalloc), the usual case;
+                               1: plain heap blocks, for a list that must outlive the pool's last-in-first-out
+                               scope (the shared gas list kept for the transport sub-steps). Set by every builder. */
 };
 
 /* Search modes */
@@ -248,6 +251,7 @@ extern neighbor_list_t gizmo_sym_neighbor_list;
 extern int *gizmo_sym_active_indices;
 extern int gizmo_sym_num_active;
 extern int gizmo_sym_num_active_global;
+extern int gizmo_sym_active_indices_on_heap;  /* same meaning as neighbor_list_t::on_heap, for gizmo_sym_active_indices */
 void gizmo_sym_neighbor_list_free(void);
 void gizmo_sym_csr_free(void);   /* the shared list's host CSR and its device twin, leaving the active indices */
 

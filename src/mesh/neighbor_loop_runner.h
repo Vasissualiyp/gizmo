@@ -751,6 +751,19 @@ double nlr_spec_symmetric_j_radius_scale() {
     }
 }
 
+/* Optional Spec::accepts_wider_neighbor_list: the loop may consume a
+ * caller-built list (struct nlr_external_csr) searched wider than it needs --
+ * a larger neighbour-radius scale, larger per-row radii -- because its pair
+ * kernel rejects every pair outside its own support.  Set it only after reading
+ * that test in the kernel.  Absent means false: the list must match exactly. */
+template <typename Spec, typename = void>
+struct nlr_spec_accepts_wider_neighbor_list : std::false_type {};
+template <typename Spec>
+struct nlr_spec_accepts_wider_neighbor_list<Spec, std::void_t<decltype(Spec::accepts_wider_neighbor_list)>>
+    : std::integral_constant<bool, Spec::accepts_wider_neighbor_list> {};
+template <typename Spec>
+constexpr bool nlr_spec_accepts_wider_neighbor_list_v = nlr_spec_accepts_wider_neighbor_list<Spec>::value;
+
 /* RAII cleanup guard for the runner's DeviceContext. Construct one right
  * after Spec::populate_device_context returns; destruction at function exit
  * (any path) conditionally invokes Spec::cleanup_device_context if the Spec
@@ -903,10 +916,20 @@ struct NoIterScratch {};
  * circuit: if the global active total across the union is 0, caller MUST
  * skip run_neighbor_loop_iterative entirely; entering with num_subgroups = 0
  * is a caller bug (runner asserts num_subgroups >= 1 at entry). */
+struct nlr_external_csr;
 struct NlrSubgroup {
     unsigned int j_type_bitmask;       /* per-subgroup neighbor type mask */
     int         *active_indices;       /* host-staged; sub_actives for this bm */
     int          num_active_local;     /* may be 0 on this rank */
+    /* Caller-built neighbour list for this subgroup (see struct nlr_external_csr),
+     * or nullptr for the runner to build its own. All or none: either every
+     * subgroup carries one -- a zero-row list on a rank with no actives in it --
+     * or none does, on every rank. Accepted only by a single-pass loop
+     * (Spec::max_iters == 1): an iterating loop changes its radii between
+     * passes, which a list built once cannot follow. With lists the call runs
+     * Mode A on the caller's ghost pool: the caller must also pass
+     * dispatch_override = A, and the runner neither imports nor cleans up. */
+    const nlr_external_csr *external_csr;
     /* args.active_list is the ordered concatenation of the subgroups'
      * active_indices: entry k of subgroup sg is entry (sum of the earlier
      * subgroups' num_active_local) + k of the call's list. That is the slot a
@@ -1243,51 +1266,69 @@ enum class DispatchPath : int {
  * needs the enum to be visible at that point. */
 enum class NlrForceMode { None = 0, A = 1, B = 2 };
 
-/* External symmetric gas-gas CSR injection (hydro corridor support:
- * cellcorrections/gradients/hydro_force share one symmetric gas CSR per
- * step). When the caller has already built a symmetric gas CSR (e.g. the
- * gizmo_gradients_prep_symlist) that's intended to be SHARED across multiple
- * runner-Spec consumers in one step, it can be injected here instead of the
- * runner re-building it per call. The runner stages the host CSR into
- * Kokkos-managed memory for device dispatch but does NOT free the caller's
- * host buffers; the caller owns CSR lifetime across the whole corridor.
+/* Caller-built neighbour list (a "corridor": several loops in a row that search
+ * the same neighbours share one ghost import and one list -- the hydro corridor's
+ * gas list, the CBE corridor's per-subgroup lists).  The caller builds the list
+ * once and hands it to each loop instead of letting the runner rebuild it per
+ * call. The runner stages the host CSR into Kokkos memory but does NOT free the
+ * caller's host buffers; the caller owns the list across the whole corridor.
  *
- * Contract requirements (UNCONDITIONALLY enforced at runtime via endrun in
- * run_mode_a — external CSR is a sharp tool, violations cause silent
- * wrong-particle writeback because d_accums[aa] is later applied to
- * args.active_list[aa], not to ec->active_indices[aa]):
- *   - active_indices[] equals args.active_list[] elementwise (endrun 7308)
- *   - num_active equals args.num_active (endrun 7301)
- *   - offsets[0] == 0 and offsets[num_active] == total_pairs (7306/7307)
- *   - offsets monotonic non-decreasing per row (7309)
+ * WHAT THE LIST WAS BUILT FOR travels with it, and the runner checks it against
+ * the search the consuming loop would have made itself (UNCONDITIONALLY, at
+ * run time; a mismatch is a controlled stop, never a silent wrong neighbour set):
+ *   - type_mask      == the loop's effective neighbour-type mask          (7300)
+ *   - search_mode    == Spec::search_mode                                 (7300)
+ *   - radius_policy and Spec::radius_policy agree on that mask
+ *     (nlr_radius_policy_for_mask)                                        (7300)
+ *   - neighbor_radius_scale == the loop's neighbour-radius scale          (7300)
+ *   - query_radii[aa] == the loop's own search radius for row aa          (7300)
+ *   - pool_epoch == ghost_provenance_epoch() at NTask>1: the list indexes
+ *     the ghost import it was built against, and no other                 (7313)
+ * A loop whose pair kernel re-applies its own support test may take a list
+ * built WIDER than it needs (larger scale, larger query radii): it declares
+ * Spec::accepts_wider_neighbor_list (see nlr_spec_accepts_wider_neighbor_list).
+ * The rows themselves:
+ *   - num_active equals the loop's active count                           (7301)
+ *   - active_indices / offsets / query_radii non-null; neighbors non-null
+ *     iff total_pairs>0                                     (7302/7303/7304/7305)
+ *   - offsets[0] == 0 and offsets[num_active] == total_pairs         (7306/7307)
+ *   - active_indices[] equals the loop's active list elementwise: the kernel
+ *     accumulates for active_indices[aa] but the writeback applies row aa to
+ *     the loop's own entry aa                                             (7308)
+ *   - offsets monotonic non-decreasing per row                            (7309)
  *   - Symmetric pair structure: for every (a -> j), there exists (b -> i)
  *     where b is the home slot of j and i is in j's neighbor list
- *     (not runtime-checkable — caller-asserted invariant)
- *   - SidxCacheKind::GasOnly Specs only — other kinds rejected (endrun 7300)
- *   - active_indices / offsets non-null; neighbors non-null iff total_pairs>0
- *     (endrun 7302/7303/7304/7305)
+ *     (not runtime-checkable -- caller-asserted invariant)
  *
- * GHOST-POOL OWNERSHIP (load-bearing): a non-null external_csr means the CSR's
- * neighbor indices refer to the CALLER'S live particle+ghost pool — the caller
- * imported those ghosts and owns their lifetime. The runner therefore does NOT
- * run its own ghost import (a fresh import could renumber ghost slots, leaving
- * the CSR pointing at wrong particles) and does NOT run ghost_exchange_cleanup
- * (the pool outlives this call; the caller tears it down at the end of its
- * span). Ghost writeback + write-detector hooks still run normally — they read
- * the caller's live provenance maps. Enforced at runtime (endrun) at NTask>1:
+ * GHOST-POOL OWNERSHIP (load-bearing): a non-null list means its neighbour
+ * indices refer to the CALLER'S live particle+ghost pool -- the caller imported
+ * those ghosts and owns their lifetime. The runner therefore does NOT run its
+ * own ghost import (a fresh import could renumber ghost slots, leaving the list
+ * pointing at wrong particles) and does NOT run ghost_exchange_cleanup (the pool
+ * outlives this call; the caller tears it down at the end of its span). Ghost
+ * writeback + write-detector hooks still run normally -- they read the caller's
+ * live provenance maps. Enforced at runtime (endrun) at NTask>1:
  * ghost_pool_is_live() + non-null home_rank/home_index provenance +
  * args.num_total == NumPart (args must be built AFTER the caller's import).
  *
- * Mode B ignores external_csr entirely (request-driven walker does not need
- * a CSR). Only consumed by Mode A; dispatch to a Mode B path with a non-null
- * external_csr is a caller error (rejected at runtime). */
+ * A caller-built list is a Mode-A input: dispatch to a Mode B path with one
+ * supplied is a caller error (rejected at runtime). Non-iterative loops take it
+ * as args.external_csr; iterative ones, one per subgroup, as
+ * NlrSubgroup::external_csr. */
 struct nlr_external_csr {
-    int        *active_indices;  /* len num_active; MUST equal args.active_list */
+    int        *active_indices;  /* len num_active; MUST equal the loop's active list */
     int         num_active;
     int64_t    *offsets;         /* len (num_active+1); 64-bit row pointers */
     int        *neighbors;       /* len total_pairs; 32-bit local indices */
     int64_t     total_pairs;
     const char *owner_name;      /* diagnostic, e.g. "corridor:gradients" */
+    /* The search the list answers (checked against each consumer, above). */
+    unsigned int           type_mask;
+    int                    search_mode;
+    mode_b_radius_policy_t radius_policy;
+    double                 neighbor_radius_scale;  /* j-side scale of a SYMMETRIC search */
+    const double          *query_radii;            /* len num_active; row aa's search radius */
+    unsigned long long     pool_epoch;             /* ghost_provenance_epoch() it was built against */
     const gpu_neighbor_list_t *device = nullptr;
                                  /* optional: the same CSR already in device memory. Borrowed, read
                                   * in place and never freed by the runner; nullptr => the runner
@@ -1453,7 +1494,7 @@ struct NeighborLoopPlan {
         ModeD_DeviceFused /* the request/reply transport with the owner's walk
                           * and evaluation fused on the device; reads the
                           * arena, drifts only what the walk touches, imports
-                          * nothing. Chosen only in builds with NEIGHBOR_LOOP_MODE_D. */
+                          * nothing. Chosen by nlr_select_mode. */
         /* Future paths: add cases here AND to nlr_path_*() predicates below. */
     };
     Path path;
@@ -1494,9 +1535,10 @@ const char *nlr_path_label(NeighborLoopPlan::Path path);
  *                                     Hard-corridor invariant enforcement
  *
  * Execution path is chosen by the runner from a small enum (Mode A GPU NGL,
- * Mode B local, Mode B remote, future paths). Selection precedence:
+ * Mode B local, Mode B remote, Mode D, future paths). Selection precedence:
  * args.dispatch_override > threshold dispatch on num_active_global vs the
- * parameterfile NeighborLoopModeBThreshold pair > Spec::modeb_threshold_*.
+ * parameterfile NeighborLoopModeBThreshold pair > Spec::modeb_threshold_*,
+ * then Mode D against the NeighborLoopModeDThreshold pair (nlr_select_mode).
  * Future paths add a case to the dispatch + the path-predicate helpers
  * (nlr_path_uses_imported_ghosts, nlr_path_uses_gpu_arena, etc.) and never
  * add fields to the plan struct itself — path is the single-source-of-truth.
@@ -2003,22 +2045,51 @@ constexpr bool nlr_spec_has_reset_per_iter_device_context_v =
 /* ============================================================================
  * Dispatch threshold accessors
  *
- * Production dispatch policy lives in the constexpr Spec::modeb_threshold_sum
- * and Spec::modeb_threshold_max in each NeighborLoopSpec — these are
- * code-level dispatch policy constants for the loop, decided alongside the
- * physics. They are NOT user-tunable runtime parameters.
- *
- * The only runtime override is the parameterfile pair
- * NeighborLoopModeBThreshold{Sum,Max}, so the value a run used is recorded in
- * its parameter log. See the dispatch-policy block in
+ * The built-in Mode-B thresholds depend on the loop's search mode
+ * (nlr_default_modeb_thresholds); a Spec may override them with constexpr
+ * Spec::modeb_threshold_{sum,max}.  The runtime overrides are the parameterfile
+ * pairs NeighborLoopModeBThreshold{Sum,Max} and NeighborLoopModeDThreshold{Sum,Max};
+ * the resolved values are printed at startup.  See the dispatch-policy block in
  * mesh/neighbor_loop_runner.cc.
  *
- * Resolution precedence (parameterfile > Spec constexpr) is applied by the
- * _for() lookups.
+ * Resolution precedence (parameterfile > Spec constexpr > search-mode default)
+ * is applied by the _for() lookups and nlr_select_mode.
  * ========================================================================== */
 
 int  gizmo_nlr_modeb_threshold_sum_for(const char *loop_name, int spec_default);
 int  gizmo_nlr_modeb_threshold_max_for(const char *loop_name, int spec_default);
+/* The Mode-B rule at these GLOBAL active counts (summed, per-rank max), with
+ * the given defaults standing in where the parameterfile pair is unset: Mode B
+ * iff any rank has work and both counts are within the thresholds.  Shared by
+ * the runner and the corridors. */
+bool nlr_mode_b_rule(int sum_active, int max_active, int default_sum, int default_max);
+/* The built-in Mode-B thresholds (summed, per-rank max) for a loop of this
+ * search mode (MODE_B_SEARCH_ONEWAY / _SYMMETRIC), used where neither the
+ * parameterfile nor the Spec sets one.  The symmetric sum scales with NTask. */
+void nlr_default_modeb_thresholds(int search_mode, int *threshold_sum, int *threshold_max);
+/* The Mode-D lower bounds (summed, per-rank max) from the parameterfile pair
+ * NeighborLoopModeDThreshold{Sum,Max}; an unset bound is 0. */
+void gizmo_nlr_moded_thresholds(int *threshold_sum, int *threshold_max);
+
+/* The three ways the runner answers a neighbour query. */
+enum class NlrMode { A, B, D };
+/* The runner's adaptive mode for Spec at these GLOBAL active counts (summed,
+ * per-rank max): B by the Mode-B rule; else D when the loop can be answered by
+ * the fused device walk and both Mode-D lower bounds are met; else A.  D is a
+ * request: the caller still needs every rank able to walk on the device, and
+ * answers A otherwise.  The one rule both runner entries use; a caller
+ * deciding for a span of loops at once (a corridor) asks it for the loop whose
+ * choice it stands in for.  Instantiated in neighbor_loop_runner.cc for the
+ * Specs a caller asks about. */
+template <typename Spec>
+NlrMode nlr_select_mode(int sum_active, int max_active);
+/* The union ghost import a subgrouped Mode-A call of Spec makes (actives and
+ * their unpadded search radii, the OR of the subgroup masks); collective.  The
+ * iterative driver's recipe, for a caller importing in Spec's place.
+ * Instantiated in neighbor_loop_runner.cc for the Specs a caller imports for. */
+template <typename Spec>
+void nlr_import_union_ghosts(unsigned int mask_union, const std::vector<int> &actives,
+                             const std::vector<double> &radii, double ghost_safety_factor);
 
 /* NlrForceMode is defined above struct neighbor_loop_args because its
  * in-class default initializer for the dispatch_override field needs

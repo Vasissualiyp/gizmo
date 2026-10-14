@@ -12,8 +12,9 @@
  *
  * j-side writes removed with the j_is_active_for_fluxes sweep.
  *
- * Only used on the hydro pass (not the RT transport subcycle), so the local
- * struct is fixed as hydro_data_in.
+ * Called from the hydro pair kernel, on the hydro pass and on each transport
+ * sub-step (both through hydro_data_in), so the local struct is fixed as
+ * hydro_data_in.
  *
  * Requires allvars.h, kernel.h, hydro_structs.h, hydro_pair_types.h.
  *

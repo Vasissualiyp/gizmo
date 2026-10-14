@@ -671,7 +671,7 @@ void calculate_non_standard_physics(void)
     for(int transport_sub = 0; transport_sub < All.Transport_Subcycle_N; transport_sub++) {
     gizmo_exit_bad_stop_if_requested("run:transport_subcycle_substep");
     /* --- recompute transport fluxes every sub-step and apply kick --- */
-    transport_subcycle_exchange_fluxes();
+    transport_subcycle_exchange_fluxes(transport_sub);
     /* Reset DtInternalEnergy to hydro-pass value before each kick, so rt_update_driftkick's
        IR gas heating contribution doesn't accumulate across sub-steps. */
 #if defined(RT_INFRARED) && defined(COOLING)

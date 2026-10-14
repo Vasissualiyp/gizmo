@@ -35,6 +35,10 @@ void add_turb_accel(void);
 void log_turb_temp(void);
 double get_random_number(MyIDType id);
 double mpi_report_comittable_memory(long long BaseMem, int verbose);
+int report_node_memory_headroom(long long *avail_kb, long long *commit_headroom_kb);
+int gizmo_node_headroom_admits(long long bytes_this_rank);
+void gizmo_kept_list_grow(long long delta_bytes);
+void gizmo_kept_list_note_refused(long long bytes);
 long long report_comittable_memory(long long *MemTotal,
                                    long long *Committed_AS,
                                    long long *SwapTotal,
@@ -383,6 +387,7 @@ void gizmo_let_wire_note_failed(long long bytes);
 void report_memory_ledger(const char *when);
 void report_memory_ledger_on_growth(const char *when);
 int gizmo_memory_preflight(void);
+void gizmo_nlr_report_dispatch_thresholds(void);   /* rank 0 prints the resolved neighbour-loop Mode B/D thresholds */
 void gizmo_size_memory_arena(void);   /* sets All.WorkingMemoryPoolSize from what will draw on the pool, unless the parameter file asked for a size; call once, before mymalloc_init */
 #ifdef PMGRID
 /* Arena bytes the long-range mesh will want, for startup sizing, split into what it holds for the
@@ -748,15 +753,25 @@ void gizmo_reset_unmet_split_demand(void);
  * NumPart, the home-rank/home-index maps, and any built CSR stay valid. Returns
  * a ghost_refresh_status; on any GHOST_REFRESH_FAIL_* the caller must fall back
  * to a full ghost_exchange_cleanup() + reimport (fail-closed, never a silent
- * partial refresh). Production callers use ghost_refresh_values() only. */
+ * partial refresh). The outcome is collective: every rank refreshes or none
+ * does, so the fallback is entered by all ranks together. Production callers
+ * use ghost_refresh_values() only. */
 enum ghost_refresh_status {
     GHOST_REFRESH_OK              = 0,  /* in-place value refresh done */
     GHOST_REFRESH_SKIP_SERIAL,          /* NTask<=1: no remote ghosts, nothing to do */
     GHOST_REFRESH_FAIL_NO_POOL,         /* no live ghost pool (NumPart_before_ghost<0) */
     GHOST_REFRESH_FAIL_NO_PROVENANCE,   /* send provenance / comm maps absent */
-    GHOST_REFRESH_FAIL_POOL_MUTATED     /* live-pool counts inconsistent with provenance */
+    GHOST_REFRESH_FAIL_POOL_MUTATED,    /* live-pool counts inconsistent with provenance */
+    GHOST_REFRESH_FAIL_ON_PEER          /* this rank could refresh, another could not */
 };
 int ghost_refresh_values(void);
+/* Set the live ghost pool aside (NumPart back to local, provenance held privately), restore it
+ * (same slot layout, new provenance epoch, values to be refreshed by the caller), or drop it.
+ * Restore is local and returns 0 when the layout it needs is not there; callers decide
+ * collectively. */
+int ghost_pool_park(void);
+int ghost_pool_restore(void);
+void ghost_pool_discard_parked(void);
 /* Monotonic count of completed ghost imports. Read by the hydro corridor, which
  * fast-paths a value-refresh only when the live pool's epoch matches the one its
  * published CSR was built from — see hydro/hydro_corridor.cc. */
@@ -781,6 +796,10 @@ extern "C" {
  * supply pools keyed on it stop matching. Rank-local, O(1), frees nothing.
  * `reason` documents the call site. */
 void ghost_exchange_supply_identity_changed(const char *reason);
+/* Announce that gas cells left the gas set without leaving their slots (a swallow zeroed their
+ * mass). Rank-local, O(1). The topology stamp reads both epochs. */
+void ghost_exchange_gas_eligibility_changed(const char *reason);
+void ghost_exchange_topology_stamp(long long *identity_epoch, long long *eligibility_epoch);
 #ifdef __cplusplus
 }
 #endif
@@ -1271,7 +1290,9 @@ void rt_source_injection(void);
 GIZMO_GPU_FUNCTION MyFloat dust_planck_mean_opacity(MyFloat Trad, MyFloat Tdust);
 
 #ifdef TRANSPORT_SUBCYCLE
-void transport_subcycle_exchange_fluxes(void);
+int transport_subcycle_keep_wanted(void);
+int transport_subcycle_keep_topology(void);
+void transport_subcycle_exchange_fluxes(int transport_sub);
 void transport_subcycle_kick(void);
 void transport_subcycle_prepare_topology(void);
 #endif
@@ -1405,6 +1426,14 @@ void cbe_step_diagnostics_observe_grad_nonfinite(long long count);
  * passes: raw LSQ + pairwise BJ-style limiter); inactive particles retain
  * prior gradient (hydro semantics). */
 void CBEGrad_gradient_calc(void);
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+/* The CBE neighbour corridor (declarations/precompiler_logic.h): CBEGrad's two
+ * passes and AGSForce share one ghost import and one neighbour list per
+ * subgroup (sidm/cbe_integrator_gradients.cc). */
+void cbe_corridor_begin(void);
+void cbe_corridor_refresh(void);
+void cbe_corridor_end(void);
+#endif
 #endif
 #endif
 

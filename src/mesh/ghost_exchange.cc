@@ -148,6 +148,20 @@ extern "C" void ghost_exchange_supply_identity_changed(const char *reason)
     g_supply_identity_epoch++;
 }
 
+/* Gas cells leaving the gas set without leaving their slots (a sink swallowing them zeroes
+ * their mass; they are compacted away later).  Rank-local, bumped by the rank that knows. */
+static long long g_gas_eligibility_epoch = 0;
+extern "C" void ghost_exchange_gas_eligibility_changed(const char *reason)
+{
+    (void)reason;
+    g_gas_eligibility_epoch++;
+}
+extern "C" void ghost_exchange_topology_stamp(long long *identity_epoch, long long *eligibility_epoch)
+{
+    *identity_epoch = g_supply_identity_epoch;
+    *eligibility_epoch = g_gas_eligibility_epoch;
+}
+
 struct ghost_local_tree_cache_t {
     int valid;
     int NumPart_when_built;
@@ -1723,6 +1737,64 @@ void ghost_exchange_cleanup(void)
     /* g_ghost_provenance_epoch is a monotonic stamp — NOT reset here. */
 }
 
+/* A ghost pool set aside between two uses of the same topology (the shared gas list kept for
+ * the transport sub-steps).  Parking returns NumPart to the local count, exactly as a cleanup
+ * does, so everything that runs in between sees no ghosts and may import and clean up pools of
+ * its own; the parked provenance is held here, out of their reach.  Restoring puts the slot
+ * layout back under a NEW provenance epoch with the values unspecified: the caller refreshes
+ * them (ghost_refresh_values) before anything reads a ghost. */
+static struct {
+    int parked, num_local, num_gas_live, num_ghosts, send_home_count;
+    int *home_rank, *home_index, *recv_count, *recv_disp, *send_count, *send_disp, *send_home_idx;
+} g_parked_pool = {0, 0, 0, 0, 0, NULL, NULL, NULL, NULL, NULL, NULL, NULL};
+
+int ghost_pool_park(void)
+{
+    if(NumPart_before_ghost < 0 || g_parked_pool.parked) {return 0;}
+    gpu_sidx_ghost_pool_cleanup();
+    if(NumGhostParticles > GhostEpochHighWater) {GhostEpochHighWater = NumGhostParticles;}
+    g_parked_pool.parked = 1;
+    g_parked_pool.num_local = NumPart_before_ghost;    g_parked_pool.num_gas_live = N_gas;
+    g_parked_pool.num_ghosts = NumGhostParticles;      g_parked_pool.send_home_count = ghost_send_home_count;
+    g_parked_pool.home_rank = ghost_home_rank_map;     g_parked_pool.home_index = ghost_home_index_map;
+    g_parked_pool.recv_count = ghost_wb_recv_count;    g_parked_pool.recv_disp = ghost_wb_recv_disp;
+    g_parked_pool.send_count = ghost_wb_send_count;    g_parked_pool.send_disp = ghost_wb_send_disp;
+    g_parked_pool.send_home_idx = ghost_send_home_idx;
+    ghost_home_rank_map = ghost_home_index_map = NULL;
+    ghost_wb_recv_count = ghost_wb_recv_disp = ghost_wb_send_count = ghost_wb_send_disp = NULL;
+    ghost_send_home_idx = NULL; ghost_send_home_count = 0;
+    NumPart = NumPart_before_ghost; N_gas = N_gas_before_ghost;
+    NumGhostParticles = 0; NumPart_before_ghost = -1; g_ghost_pool_current_ti = -1;
+    return 1;
+}
+
+int ghost_pool_restore(void)
+{
+    if(!g_parked_pool.parked || NumPart_before_ghost >= 0 || NumPart != g_parked_pool.num_local) {return 0;}
+    if(!ghost_particle_slots_fit((long long)g_parked_pool.num_local + g_parked_pool.num_ghosts)) {return 0;}
+    NumPart_before_ghost = g_parked_pool.num_local; N_gas_before_ghost = N_gas;
+    NumGhostParticles = g_parked_pool.num_ghosts;
+    NumPart = g_parked_pool.num_local + g_parked_pool.num_ghosts; N_gas = g_parked_pool.num_gas_live;
+    ghost_home_rank_map = g_parked_pool.home_rank;     ghost_home_index_map = g_parked_pool.home_index;
+    ghost_wb_recv_count = g_parked_pool.recv_count;    ghost_wb_recv_disp = g_parked_pool.recv_disp;
+    ghost_wb_send_count = g_parked_pool.send_count;    ghost_wb_send_disp = g_parked_pool.send_disp;
+    ghost_send_home_idx = g_parked_pool.send_home_idx; ghost_send_home_count = g_parked_pool.send_home_count;
+    g_parked_pool.parked = 0;
+    g_ghost_provenance_epoch++;   /* a new pool as far as anything keyed on imports is concerned */
+    g_ghost_pool_current_ti = -1; /* values unspecified until refreshed */
+    return 1;
+}
+
+void ghost_pool_discard_parked(void)
+{
+    if(!g_parked_pool.parked) {return;}
+    free(g_parked_pool.home_rank); free(g_parked_pool.home_index);
+    free(g_parked_pool.recv_count); free(g_parked_pool.recv_disp);
+    free(g_parked_pool.send_count); free(g_parked_pool.send_disp);
+    free(g_parked_pool.send_home_idx);
+    g_parked_pool.parked = 0;
+}
+
 /* Make refreshed host ghost values visible to the device. With unified-memory
    particles (P/CellP in Kokkos SharedSpace) this is a no-op: a host write to a
    ghost slot is coherent to the next kernel, and compact_xyzh caches Pos+h only
@@ -1744,18 +1816,25 @@ int ghost_refresh_values(void)
        A non-NULL ghost_send_home_idx already implies an import happened with no
        cleanup since (cleanup NULLs it). */
     if(NTask <= 1)               return GHOST_REFRESH_SKIP_SERIAL;
-    if(NumPart_before_ghost < 0) return GHOST_REFRESH_FAIL_NO_POOL;
-    if(!ghost_send_home_idx || !ghost_wb_send_count || !ghost_wb_send_disp ||
-       !ghost_wb_recv_count || !ghost_wb_recv_disp)
-                                 return GHOST_REFRESH_FAIL_NO_PROVENANCE;
-    /* Live-pool consistency: current pool counts must match the preserved
-       provenance (topology unchanged; no intervening reimport with different
-       totals). */
-    long long send_tot = 0, recv_tot = 0;
-    for(int t = 0; t < NTask; t++) { send_tot += ghost_wb_send_count[t]; recv_tot += ghost_wb_recv_count[t]; }
-    if(NumPart != NumPart_before_ghost + NumGhostParticles) return GHOST_REFRESH_FAIL_POOL_MUTATED;
-    if(recv_tot != (long long)NumGhostParticles)            return GHOST_REFRESH_FAIL_POOL_MUTATED;
-    if(send_tot != (long long)ghost_send_home_count)        return GHOST_REFRESH_FAIL_POOL_MUTATED;
+    int rc = GHOST_REFRESH_OK;
+    if(NumPart_before_ghost < 0) {rc = GHOST_REFRESH_FAIL_NO_POOL;}
+    else if(!ghost_send_home_idx || !ghost_wb_send_count || !ghost_wb_send_disp ||
+            !ghost_wb_recv_count || !ghost_wb_recv_disp) {rc = GHOST_REFRESH_FAIL_NO_PROVENANCE;}
+    else {
+        /* Live-pool consistency: current pool counts must match the preserved
+           provenance (topology unchanged; no intervening reimport with different
+           totals). */
+        long long send_tot = 0, recv_tot = 0;
+        for(int t = 0; t < NTask; t++) { send_tot += ghost_wb_send_count[t]; recv_tot += ghost_wb_recv_count[t]; }
+        if(NumPart != NumPart_before_ghost + NumGhostParticles ||
+           recv_tot != (long long)NumGhostParticles ||
+           send_tot != (long long)ghost_send_home_count) {rc = GHOST_REFRESH_FAIL_POOL_MUTATED;}
+    }
+    /* The transport below is collective, and so is the caller's fallback (a
+       cleanup + re-import): every rank refreshes or none does. */
+    int any_failed = (rc != GHOST_REFRESH_OK) ? 1 : 0, any_failed_global = any_failed;
+    MPI_Allreduce(&any_failed, &any_failed_global, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
+    if(any_failed_global) {return (rc != GHOST_REFRESH_OK) ? rc : GHOST_REFRESH_FAIL_ON_PEER;}
 
     int ns = ghost_send_home_count;
     /* Re-pack current owner values via the SAME transport import uses, in the SAME

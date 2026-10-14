@@ -82,6 +82,10 @@ struct DiffFilterSpec {
     static constexpr int                    search_mode        = MODE_B_SEARCH_SYMMETRIC;
     static constexpr unsigned int           neighbor_type_mask = (1u << 0);  /* gas */
     static constexpr mode_b_radius_policy_t radius_policy       = MODE_B_RADIUS_DEFAULT;
+    /* The pair kernel drops every pair outside its own scaled radii, so a list
+     * searched wider is exact: the corridor's list is scaled by
+     * max(1, TurbDynamicDiffFac), wider than this loop's when the factor is below 1. */
+    static constexpr bool accepts_wider_neighbor_list = true;
 
     static constexpr WritePattern  write_pattern             = WritePattern::ActiveReduceOnly;
     static constexpr SidxCacheKind sidx_cache_kind           = SidxCacheKind::GasOnly;
@@ -308,6 +312,9 @@ struct DynDiffSpec {
     static constexpr int                    search_mode        = MODE_B_SEARCH_SYMMETRIC;
     static constexpr unsigned int           neighbor_type_mask = (1u << 0);  /* gas */
     static constexpr mode_b_radius_policy_t radius_policy       = MODE_B_RADIUS_DEFAULT;
+    /* As DiffFilterSpec: the pair kernel drops every pair outside its own scaled
+     * radii, and the corridor's list may be scaled wider (factor below 1). */
+    static constexpr bool accepts_wider_neighbor_list = true;
 
     static constexpr WritePattern  write_pattern             = WritePattern::ActiveReduceOnly;
     static constexpr SidxCacheKind sidx_cache_kind           = SidxCacheKind::GasOnly;

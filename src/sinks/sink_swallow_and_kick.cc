@@ -218,6 +218,9 @@ void sink_swallow_and_kick_loop(void)
     int N_gas_sw = 0, N_sink_sw = 0, N_star_sw = 0, N_dm_sw = 0;
     sink_swk_scatter(active_list, num_active, per_active_accum,
                      &N_gas_sw, &N_sink_sw, &N_star_sw, &N_dm_sw);
+    /* Swallowed gas keeps its slot with zero mass until compaction; anything that kept the gas
+       topology from before this must know (counted on the sink's rank; consumers decide collectively). */
+    if(N_gas_sw > 0) {ghost_exchange_gas_eligibility_changed("sink_swallow_and_kick_loop");}
 
     int Ntot_gas = 0, Ntot_sink = 0, Ntot_star = 0, Ntot_dm = 0;
     MPI_Reduce(&N_gas_sw,  &Ntot_gas,  1, MPI_INT, MPI_SUM, 0, MPI_COMM_WORLD);
@@ -897,6 +900,9 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
         int k_CRegy; for(k_CRegy=0;k_CRegy<N_CR_PARTICLE_BINS;k_CRegy++) /* initialize CR energy and other related terms to nil */
         {
             CellP[j].CosmicRayEnergyPred[k_CRegy]=CellP[j].CosmicRayEnergy[k_CRegy]=CellP[j].DtCosmicRayEnergy[k_CRegy]=0;
+#if defined(TRANSPORT_SUBCYCLE) && !defined(CRFLUID_EVOLVE_SCATTERINGWAVES) && !defined(CRFLUID_EVOLVE_SPECTRUM)
+            CellP[j].DtCosmicRayEnergy_StreamingLoss[k_CRegy]=0;
+#endif
 #ifdef CRFLUID_EVOLVE_SPECTRUM
             CellP[j].CosmicRay_Number_in_Bin[k_CRegy]=CellP[j].DtCosmicRay_Number_in_Bin[k_CRegy]=0;
 #endif

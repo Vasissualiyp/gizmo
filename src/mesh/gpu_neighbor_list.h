@@ -253,12 +253,14 @@ void gpu_ngb_list_build(struct particle_data *P_shared, int num_total,
    built, or built empty.  The spatial index is not the list's to free. */
 void gpu_ngb_list_free(gpu_neighbor_list_t *gnl);
 
-/* Build the symmetric gas list (max(h_i,h_j) search) for active_indices into the host list `out`.  The
-   search produces the list in device memory; with keep_device non-null that list is moved there (whatever
-   keep_device held is freed first), so device consumers can read it without another upload; with
-   keep_device null it is freed. */
+/* Build the symmetric gas list (max(h_i,h_j) search) for active_indices into the host list `out`.  With
+   try_heap the host copy may go on the plain heap so it can outlive the working pool (collective; see the
+   definition).  The search produces the list in device memory; with keep_device non-null that list is
+   moved there (whatever keep_device held is freed first), so device consumers can read it without another
+   upload; with keep_device null it is freed. */
 void gpu_build_symmetric_neighbor_list(struct particle_data *P_host, int num_total, int *active_indices, int num_active,
-                                       neighbor_list_t *out, double search_radius_factor, gpu_neighbor_list_t *keep_device);
+                                       neighbor_list_t *out, double search_radius_factor, int try_heap,
+                                       gpu_neighbor_list_t *keep_device);
 /* The device-resident twin of gizmo_sym_neighbor_list: the same rows and pairs, built and freed with it. */
 extern gpu_neighbor_list_t gizmo_sym_neighbor_list_device;
 

@@ -254,6 +254,35 @@ void AgsForceSpec::ghost_writeback_end(const neighbor_loop_args& /*args*/,
 }
 
 
+void ags_force_partition_actives(AgsForcePartition &part)
+{
+    /* Same partition rule as legacy gravity/ags_rkern.cc:224-234. */
+    std::map<int, std::vector<int>> by_mask;
+    uint64_t local_presence = 0;
+    for(int i : ActiveParticleList) {
+        if(AGSForce_isactive(i)) {
+            const int bm = ags_gravity_kernel_shared_BITFLAG(P[i].Type);
+            if(bm > 0 && bm < 64) {
+                by_mask[bm].push_back(i);
+                local_presence |= (1ULL << bm);
+            }
+        }
+    }
+    uint64_t global_presence = local_presence;
+    if(NTask > 1) {
+        MPI_Allreduce(&local_presence, &global_presence, 1, MPI_UINT64_T, MPI_BOR, MPI_COMM_WORLD);
+    }
+    part.masks.clear();
+    part.actives.clear();
+    for(int bm = 1; bm < 64; bm++) {
+        if(!(global_presence & (1ULL << bm))) continue;
+        part.masks.push_back((unsigned int)bm);
+        auto it = by_mask.find(bm);
+        part.actives.push_back((it != by_mask.end()) ? std::move(it->second) : std::vector<int>());
+    }
+}
+
+
 /* ============================================================================
  * TOPLEVEL CALLER — AGSForce_calc()
  *
@@ -292,31 +321,22 @@ void AGSForce_calc(void)
     }
 #endif
 
-    /* Build per-bm subgroup partition. Same partition rule as legacy
-     * gravity/ags_rkern.cc:224-234. */
-    std::map<int, std::vector<int>> bm_groups_host;
-    uint64_t local_bm_presence = 0;
-    for(int ii : ActiveParticleList) {
-        if(AGSForce_isactive(ii)) {
-            int bm = ags_gravity_kernel_shared_BITFLAG(P[ii].Type);
-            if(bm > 0 && bm < 64) {
-                bm_groups_host[bm].push_back(ii);
-                local_bm_presence |= (1ULL << bm);
-            }
-        }
-    }
-    uint64_t global_bm_presence = local_bm_presence;
-    if(NTask > 1) {
-        MPI_Allreduce(&local_bm_presence, &global_bm_presence, 1,
-                      MPI_UINT64_T, MPI_BOR, MPI_COMM_WORLD);
-    }
+    /* The step's subgroup partition (ags_force_partition_actives): under the
+     * CBE neighbour corridor its partition, shared with CBEGrad; else this
+     * call's own. */
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+    AgsForcePartition &part = cbe_corridor_partition();
+#else
+    AgsForcePartition part;
+    ags_force_partition_actives(part);
+#endif
 
     /* Zero per-call i-side ASSIGN-mode accumulators on local actives
      * (legacy gravity/ags_rkern.cc:236-256). These match OUTPUT fields the
      * pair body writes via ASSIGN, not via ACCUM_ADD — they MUST be zeroed
      * before the kernel so the post-kernel scatter is well-defined. */
-    for(auto& kv : bm_groups_host) {
-        for(int ii : kv.second) {
+    for(const std::vector<int> &acts : part.actives) {
+        for(int ii : acts) {
 #ifdef DM_FUZZY
             P[ii].AGS_Dt_Numerical_QuantumPotential = 0;
 #if (DM_FUZZY > 0)
@@ -336,43 +356,44 @@ void AGSForce_calc(void)
         }
     }
 
-    /* Build NlrSubgroup array in global-union ordering. ALL ranks enter
-     * with the same subgroup ordering; ranks with no actives for a bm
-     * contribute an empty entry (collective-symmetry filler). */
-    std::vector<NlrSubgroup> subgroups;
-    std::vector<std::vector<int>> subgroup_actives_storage;
-    int total_active_local = 0;
-    for(int bm = 1; bm < 64; bm++) {
-        if(!(global_bm_presence & (1ULL << bm))) continue;
-        std::vector<int> actives_for_bm;
-        auto it = bm_groups_host.find(bm);
-        if(it != bm_groups_host.end()) actives_for_bm = std::move(it->second);
-        subgroup_actives_storage.push_back(std::move(actives_for_bm));
-        NlrSubgroup sg{};
-        sg.j_type_bitmask   = (unsigned int)bm;
-        sg.num_active_local = (int)subgroup_actives_storage.back().size();
-        sg.active_indices   = (sg.num_active_local > 0)
-                              ? subgroup_actives_storage.back().data()
-                              : nullptr;
-        subgroups.push_back(sg);
-        total_active_local += sg.num_active_local;
-    }
-
-    if(subgroups.empty()) {
+    if(part.masks.empty()) {
         /* No globally-active AGS particles anywhere. Skip the runner call. */
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+        cbe_corridor_end();
+#endif
         double t1 = my_second(); cpu_chain_sync(t1);
         CPU_Step[CPU_AGSDENSMISC] += cpu_minus_children(timediff(t00_truestart, t1), child0_span);
         return;
     }
 
-    /* Concatenated active list across subgroups (runner's union view). */
-    std::vector<int> active_list_concat;
-    active_list_concat.reserve(total_active_local);
-    for(const auto& sg_actives : subgroup_actives_storage) {
-        for(int i : sg_actives) active_list_concat.push_back(i);
-    }
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+    /* The corridor's ghosts now take the values just zeroed above, as an import
+     * made here would have carried them. */
+    cbe_corridor_refresh();
+#endif
 
-    /* The runner owns the ghost lifecycle (see ags_density). */
+    /* NlrSubgroup array in the partition's global ordering. ALL ranks enter
+     * with the same subgroup ordering; ranks with no actives for a mask
+     * contribute an empty entry (collective-symmetry filler). */
+    std::vector<NlrSubgroup> subgroups;
+    std::vector<int> active_list_concat;
+    for(size_t s = 0; s < part.masks.size(); s++) {
+        NlrSubgroup sg{};
+        sg.j_type_bitmask   = part.masks[s];
+        sg.num_active_local = (int)part.actives[s].size();
+        sg.active_indices   = (sg.num_active_local > 0) ? part.actives[s].data() : nullptr;
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+        sg.external_csr     = cbe_corridor_list((int)s);
+#endif
+        subgroups.push_back(sg);
+        /* Concatenated active list across subgroups (runner's union view). */
+        active_list_concat.insert(active_list_concat.end(), part.actives[s].begin(), part.actives[s].end());
+    }
+    const int total_active_local = (int)active_list_concat.size();
+
+    /* The runner owns the ghost lifecycle (see ags_density), unless the CBE
+     * corridor handed every subgroup its list: then the corridor imported the
+     * pool and tears it down below. */
     double ags_ghost_safety = gizmo_ghost_safety_factor();
 
     /* CBE gradients (when CBE_INTEGRATOR_WITHGRADIENTS is on) are refreshed
@@ -396,10 +417,17 @@ void AGSForce_calc(void)
     args.num_subgroups       = (int)subgroups.size();
     args.subgroups           = subgroups.data();
     args.ghost_safety_factor = ags_ghost_safety;
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+    if(cbe_corridor_serves()) {args.dispatch_override = cbe_corridor_mode();}
+#endif
 
     run_neighbor_loop_iterative<AgsForceSpec>(args);
 
+#ifdef CBE_NEIGHBOUR_CORRIDOR
+    cbe_corridor_end();   /* the corridor's span ends here: it tears down the ghost pool */
+#else
     if(NTask > 1) ghost_exchange_cleanup();
+#endif
     timecomp += cpu_minus_children(timediff(t0, my_second()), child0_timecomp);
 
     /* CBE post-tree-walk per-active finalization (legacy gravity/ags_rkern.cc:343-345).

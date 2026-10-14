@@ -27,6 +27,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <cstdint>
+#include <climits>                                   /* INT_MAX */
 #include <type_traits>
 #include <utility>                                   /* std::declval for SFINAE hook detection */
 #include <Kokkos_Core.hpp>
@@ -212,19 +213,20 @@ void nlr_free_active_list(int *active_list)
 }
 
 /* ============================================================================
- * Mode-A/B dispatch thresholds
+ * Mode-A/B/D dispatch thresholds
  *
- * Production dispatch policy is the constexpr Spec::modeb_threshold_sum and
- * Spec::modeb_threshold_max in each NeighborLoopSpec — those are code-level
- * dispatch policy constants for the loop, decided alongside the physics.
- *
- * Resolution precedence (first wins):
+ * Mode-B resolution precedence (first wins):
  *   1. parameterfile NeighborLoopModeBThreshold{Sum,Max} (-1 = unset;
  *      any other value overrides, <= 0 disables Mode B)
- *   2. Spec::modeb_threshold_{sum,max} constexpr (code default)
+ *   2. Spec::modeb_threshold_{sum,max} constexpr, where a Spec declares one
+ *   3. the default for the loop's search mode (nlr_default_modeb_thresholds)
  *
- * The threshold is settable ONLY from the parameterfile, so the value a run
- * used is recorded in its parameter log.
+ * Mode D, on the calls Mode B does not take, needs both counts at or above the
+ * parameterfile pair NeighborLoopModeDThreshold{Sum,Max}; unset, that is 0/0,
+ * so an eligible one-way loop uses Mode D wherever Mode B is not chosen.
+ *
+ * The thresholds are settable ONLY from the parameterfile, so the values a run
+ * used are recorded in its parameter log.
  * ========================================================================== */
 
 int gizmo_nlr_modeb_threshold_sum_for(const char *loop_name, int spec_default)
@@ -242,6 +244,61 @@ int gizmo_nlr_modeb_threshold_max_for(const char *loop_name, int spec_default)
        Spec default; any other value overrides it (<= 0 disables Mode B). */
     { int p = nlr_host_all_ptr()->NeighborLoopModeBThresholdMax; if(p != -1) return p; }
     return spec_default;
+}
+
+bool nlr_mode_b_rule(int sum_active, int max_active, int default_sum, int default_max)
+{
+    const int TS = gizmo_nlr_modeb_threshold_sum_for(nullptr, default_sum);
+    const int TM = gizmo_nlr_modeb_threshold_max_for(nullptr, default_max);
+    return (sum_active > 0) && (sum_active <= TS) && (max_active <= TM);
+}
+
+/* Built-in Mode-B thresholds by search mode, used where neither the parameterfile
+ * nor the Spec sets one.
+ *   One-way loops: Mode B up to 64 active globally (and 64 on any rank); above
+ *   that an eligible loop uses Mode D, which needs no ghost import either.
+ *   Symmetric loops: Mode B up to an average of 320 active per rank, with no rank
+ *   above 3200.  Measured on Frontier, Mode A's import and list build stop paying
+ *   for themselves below a few hundred active per rank.  The per-rank cap is a
+ *   separate, absolute guard against imbalance (ten times the 320 cutoff): a step
+ *   goes to Mode A when any one rank holds more than 3200, which keeps a hot rank's
+ *   request-driven walks and its export rounds bounded. */
+void nlr_default_modeb_thresholds(int search_mode, int *threshold_sum, int *threshold_max)
+{
+    if(search_mode == MODE_B_SEARCH_SYMMETRIC) {
+        const long long per_rank_average = 320, per_rank_max = 3200;
+        const long long sum = per_rank_average * (long long)NTask;
+        *threshold_sum = (sum > INT_MAX) ? INT_MAX : (int)sum;
+        *threshold_max = (int)per_rank_max;
+    } else {
+        *threshold_sum = 64;
+        *threshold_max = 64;
+    }
+}
+
+void gizmo_nlr_report_dispatch_thresholds(void)
+{
+    if(ThisTask != 0) return;
+    int oneway_sum, oneway_max, symm_sum, symm_max, d_sum, d_max;
+    nlr_default_modeb_thresholds(MODE_B_SEARCH_ONEWAY, &oneway_sum, &oneway_max);
+    nlr_default_modeb_thresholds(MODE_B_SEARCH_SYMMETRIC, &symm_sum, &symm_max);
+    oneway_sum = gizmo_nlr_modeb_threshold_sum_for(nullptr, oneway_sum);
+    oneway_max = gizmo_nlr_modeb_threshold_max_for(nullptr, oneway_max);
+    symm_sum = gizmo_nlr_modeb_threshold_sum_for(nullptr, symm_sum);
+    symm_max = gizmo_nlr_modeb_threshold_max_for(nullptr, symm_max);
+    gizmo_nlr_moded_thresholds(&d_sum, &d_max);
+    printf("Neighbor loops: Mode B at or below summed/per-rank-max active %d/%d (one-way), %d/%d (symmetric); "
+           "eligible one-way loops use Mode D at or above %d/%d, Mode A otherwise\n",
+           oneway_sum, oneway_max, symm_sum, symm_max, d_sum, d_max);
+}
+
+void gizmo_nlr_moded_thresholds(int *threshold_sum, int *threshold_max)
+{
+    const int p_sum = nlr_host_all_ptr()->NeighborLoopModeDThresholdSum;
+    const int p_max = nlr_host_all_ptr()->NeighborLoopModeDThresholdMax;
+    /* Unset (-1) = 0: Mode D wherever Mode B is not chosen. */
+    *threshold_sum = (p_sum == -1) ? 0 : p_sum;
+    *threshold_max = (p_max == -1) ? 0 : p_max;
 }
 
 
@@ -271,6 +328,34 @@ bool nlr_path_uses_imported_ghosts(NeighborLoopPlan::Path path)
 static inline bool nlr_caller_owns_ghost_pool(const neighbor_loop_args &args)
 {
     return args.external_csr != nullptr;
+}
+
+/* The iterative form: the subgroups carry caller-built lists (all or none,
+ * checked at the iterative entry, so the first subgroup answers for all). */
+static inline bool nlr_subgroups_carry_caller_lists(const neighbor_loop_args_iterative &args)
+{
+    return args.num_subgroups > 0 && args.subgroups[0].external_csr != nullptr;
+}
+
+/* A caller that owns the ghost pool a list indexes must hand the runner a live
+ * pool with its provenance, and arguments built after its import (num_total
+ * spans the ghosts).  At NTask==1 there is no pool to check (imports early-out).
+ * ghost_get_num_ghosts()==0 is NOT a liveness signal (also 0 for a live
+ * zero-ghost pool); ghost_pool_is_live() is.  Soft stop on a violation. */
+static void nlr_check_caller_owned_ghost_pool(const neighbor_loop_args &args, const char *loop_name)
+{
+    if(NTask <= 1) {return;}
+    const char *own_err = nullptr;
+    if(!ghost_pool_is_live())                 own_err = "ghost pool not live";
+    else if(ghost_get_home_rank()  == nullptr ||
+            ghost_get_home_index() == nullptr) own_err = "ghost provenance maps absent";
+    else if(args.num_total != NumPart)         own_err = "args.num_total != NumPart (args built before caller's import?)";
+    if(own_err != nullptr) {
+        fprintf(stderr, "[neighbor_loop_runner rank=%d caller=%s] caller-owned ghost-pool "
+                "contract violation: %s\n", ThisTask, loop_name, own_err);
+        fflush(stderr);
+        endrun(7313);
+    }
 }
 
 bool nlr_path_uses_gpu_arena(NeighborLoopPlan::Path path)
@@ -1868,7 +1953,6 @@ static void run_mode_b_remote(const neighbor_loop_args& args, const double *radi
     run_mode_b_remote_impl<Spec>(args, radii);
 }
 
-#ifdef NEIGHBOR_LOOP_MODE_D
 /* Whether a loop can be answered by the fused device walk at all: a one-way
  * search whose pair kernel may run concurrently, and whose active rebinding
  * the device evaluation does not perform.  Compile-time, so the machinery is
@@ -1956,22 +2040,21 @@ static void run_mode_d(const neighbor_loop_args& args, const double *radii,
      * the change of backend is invisible to every other rank. */
     if(!evaluated) {run_mode_b_local<Spec>(args, radii);}
 }
-#endif
 
 /* ============================================================================
- * External-CSR staging helpers (hydro corridor support).
+ * Caller-built list helpers (corridor support; see struct nlr_external_csr).
  *
- * When args.external_csr is non-null, Mode A skips gpu_ngb_list_build and
- * instead stages the caller's host CSR into Kokkos memory shaped like a
- * gpu_neighbor_list_t — so the rest of run_mode_a is path-agnostic. Only
+ * When a loop is handed a caller-built list (args.external_csr, or
+ * NlrSubgroup::external_csr), Mode A skips gpu_ngb_list_build and instead
+ * stages the caller's host CSR into Kokkos memory shaped like a
+ * gpu_neighbor_list_t -- so the rest of the Mode-A path is unchanged. Only
  * the build site (replaced with this helper) differs between the two paths.
  *
  * The runner OWNS the SharedSpace/DeviceSpace allocations made here and
  * frees them with gpu_ngb_list_free, as for a built list. It does NOT free the caller's
  * host buffers (active_indices / offsets / neighbors). Contract: caller
  * keeps host CSR alive for the duration of every run_neighbor_loop call
- * that injects it; the corridor design owns CSR across multiple consumers
- * by holding it in the gizmo_sym_* globals. */
+ * that injects it; a corridor owns its lists across all of its consumers. */
 /* Exhaustion is reported by returning NULL, so a caller NULL-check can
  * controlled-stop with attribution (the label appears in the memory ledger)
  * instead of a hard terminate. */
@@ -1993,6 +2076,43 @@ static void nlr_stop_no_staging_memory(const char *loop_name, const char *what, 
              loop_name ? loop_name : "neighbour loop", what,
              (double) bytes / (1024.0 * 1024.0));
     gizmo_request_controlled_stop(7713, msg, __FILE__, __LINE__, __FUNCTION__);
+}
+
+/* Whether a caller-built list answers this loop's search (contract on struct
+ * nlr_external_csr).  `rows`, `radii` and `type_mask` are the loop's own: its
+ * active list, the search radius it gives each row, its effective neighbour-type
+ * mask.  Returns nullptr when the list may be used, else the reason, with the
+ * stop code in *code.  O(rows), no collective. */
+template <typename Spec>
+static const char *
+nlr_external_csr_mismatch(const nlr_external_csr *ec, const int *rows, int n,
+                          const double *radii, unsigned int type_mask, int *code)
+{
+    constexpr bool wider_ok = nlr_spec_accepts_wider_neighbor_list_v<Spec>;
+    const double scale = nlr_spec_symmetric_j_radius_scale<Spec>();
+    *code = 7300;
+    if(ec->type_mask != type_mask)                    {return "built for other neighbour types";}
+    if(ec->search_mode != Spec::search_mode)          {return "built for another search mode";}
+    if(nlr_radius_policy_for_mask(ec->radius_policy, type_mask) !=
+       nlr_radius_policy_for_mask(Spec::radius_policy, type_mask)) {return "built under another radius policy";}
+    if(wider_ok ? !(ec->neighbor_radius_scale >= scale)
+                : !(ec->neighbor_radius_scale == scale)) {return "built with another neighbour-radius scale";}
+    if(ec->num_active != n)                           {*code = 7301; return "num_active mismatch";}
+    if(!ec->active_indices)                           {*code = 7302; return "null active_indices";}
+    if(!ec->query_radii)                              {*code = 7302; return "null query_radii";}
+    if(!ec->offsets)                                  {*code = 7303; return "null offsets";}
+    if(ec->total_pairs < 0)                           {*code = 7304; return "negative total_pairs";}
+    if(ec->total_pairs > 0 && !ec->neighbors)         {*code = 7305; return "null neighbors with total_pairs>0";}
+    if(n > 0 && ec->offsets[0] != 0)                  {*code = 7306; return "offsets[0]!=0";}
+    if(n > 0 && ec->offsets[n] != ec->total_pairs)    {*code = 7307; return "offsets[N]!=total_pairs";}
+    for(int aa = 0; aa < n; aa++) {
+        if(ec->active_indices[aa] != rows[aa])        {*code = 7308; return "row order != active_list";}
+        if(ec->offsets[aa+1] < ec->offsets[aa])       {*code = 7309; return "non-monotonic offsets";}
+        if(wider_ok ? !(radii[aa] <= ec->query_radii[aa])
+                    : !(radii[aa] == ec->query_radii[aa])) {*code = 7300; return "a row was searched with another radius";}
+    }
+    if(NTask > 1 && ec->pool_epoch != ghost_provenance_epoch()) {*code = 7313; return "built against another ghost import";}
+    return nullptr;
 }
 
 static inline bool
@@ -2051,11 +2171,10 @@ nlr_stage_external_csr_into_gnl(const nlr_external_csr *ext,
  * No additional explicit fence is needed before host-side d_accums readback
  * — the launch helper already fenced.
  *
- * External CSR injection (args.external_csr != nullptr): the caller has
- * already built a symmetric gas CSR (e.g. corridor's gizmo_sym_*) and we
- * stage it into the gnl shape via nlr_stage_external_csr_into_gnl() instead
- * of calling gpu_ngb_list_build. SidxCacheKind::GasOnly only; other Specs
- * MUST leave args.external_csr null. Existing Specs unaffected.
+ * Caller-built list (args.external_csr != nullptr): a corridor has already
+ * built the list; once nlr_external_csr_mismatch() finds it answers this
+ * loop's search, it is staged into the gnl shape via
+ * nlr_stage_external_csr_into_gnl() instead of calling gpu_ngb_list_build.
  * ========================================================================== */
 
 /* Per-active Mode-A staging can be CHUNKED so the PER-ACTIVE arrays
@@ -2353,52 +2472,24 @@ static void run_mode_a(const neighbor_loop_args& args, const double *radii)
                                         ? gpu_particles_arena_CellP() : nullptr;
 
     /* NGL build using pre-arena radii. SIDX cache resolved from spec.
-     * Hydro-corridor external-CSR path: when args.external_csr is non-null
-     * the caller has already built a symmetric gas CSR — stage it into gnl
-     * shape and skip the build. Contract: GasOnly Specs only. */
+     * Caller-built list (args.external_csr non-null): stage it into gnl shape
+     * and skip the build, once it is shown to answer this loop's search. */
     gpu_neighbor_list_t gnl;
     bool gnl_borrowed = false;   /* the caller's device list, read in place: never freed here */
     gpu_spatial_index_t *sidx = nlr_resolve_sidx_cache(Spec::sidx_cache_kind,
                                                        Spec::loop_name);
     if(args.external_csr != nullptr) {
-        /* Runtime checks — cannot be static_assert because that would fire
-         * at template instantiation for every NotIterative Spec, including
-         * non-GasOnly ones (sink_env1, dm_fuzzy, etc.) whose callers never
-         * set external_csr. Compile-time enforcement is impossible since
-         * external_csr is a runtime args field, not a Spec constexpr.
-         *
-         * All checks are UNCONDITIONAL (never diagnostic-gated):
-         * external CSR injection is a sharp tool, contract violations
-         * cause silent wrong-particle writeback (kernel stages for
-         * external_csr->active_indices[aa] but writeback applies
-         * d_accums[aa] to args.active_list[aa]). Detect loud always.
-         *
-         * On violation: soft bad-stop + release the arena and free radii_uvm
-         * (both acquired/staged above) + return, skipping the corrupt-CSR
-         * staging and the device walk. run_mode_a issues no MPI, so this
-         * return cannot desync a peer; the caller's next phase poll drains.
-         * else-if chain so a null pointer is never deref'd by a later check
-         * (offsets[0] read only once ec->offsets is confirmed non-null). */
+        /* Checked at run time, every call, never diagnostic-gated: a list built
+         * for another search hands the kernel a wrong neighbour set, and a row
+         * order other than args.active_list applies one particle's sums to
+         * another.  On a mismatch: soft bad-stop, release the arena and the
+         * staged radii, return before staging or walking.  run_mode_a issues no
+         * MPI, so the return cannot desync a peer; the next phase poll drains. */
         const nlr_external_csr *ec = args.external_csr;
-        const char *csr_err = nullptr;
         int         csr_code = 0;
-        if(Spec::sidx_cache_kind != SidxCacheKind::GasOnly) { csr_err = "requires GasOnly cache"; csr_code = 7300; }
-        else if(ec->num_active != N)                        { csr_err = "num_active mismatch"; csr_code = 7301; }
-        else if(!ec->active_indices)                        { csr_err = "null active_indices"; csr_code = 7302; }
-        else if(!ec->offsets)                               { csr_err = "null offsets"; csr_code = 7303; }
-        else if(ec->total_pairs < 0)                        { csr_err = "negative total_pairs"; csr_code = 7304; }
-        else if(ec->total_pairs > 0 && !ec->neighbors)      { csr_err = "null neighbors with total_pairs>0"; csr_code = 7305; }
-        else if(N > 0 && ec->offsets[0] != 0)               { csr_err = "offsets[0]!=0"; csr_code = 7306; }
-        else if(N > 0 && ec->offsets[N] != ec->total_pairs) { csr_err = "offsets[N]!=total_pairs"; csr_code = 7307; }
-        else {
-            /* Row order MUST match args.active_list elementwise — otherwise
-             * the kernel accumulates for ec->active_indices[aa] but the host
-             * writeback re-applies d_accums[aa] to args.active_list[aa]. */
-            for(int aa = 0; aa < N; aa++) {
-                if(ec->active_indices[aa] != args.active_list[aa]) { csr_err = "row order != active_list"; csr_code = 7308; break; }
-                if(ec->offsets[aa+1] < ec->offsets[aa])            { csr_err = "non-monotonic offsets"; csr_code = 7309; break; }
-            }
-        }
+        const char *csr_err  = nlr_external_csr_mismatch<Spec>(
+            ec, args.active_list, N, radii,
+            nlr_effective_neighbor_type_mask(args, Spec::neighbor_type_mask), &csr_code);
         if(csr_err != nullptr) {
             fprintf(stderr, "[neighbor_loop_runner rank=%d caller=%s] external-CSR contract violation: %s\n",
                     ThisTask, Spec::loop_name, csr_err);
@@ -2646,6 +2737,31 @@ static int nlr_spec_threshold_max(int fallback) {
     } else {
         return fallback;
     }
+}
+
+/* The adaptive A/B/D rule, one definition.  Mode B by the Mode-B rule
+ * (parameterfile NeighborLoopModeBThreshold{Sum,Max}, else the Spec's
+ * modeb_threshold_{sum,max}, else the default for its search mode).  Otherwise Mode D when the loop can
+ * be answered by the fused device walk, some rank has work, and both counts
+ * meet the Mode-D lower bounds; otherwise Mode A.  Collective inputs, so every
+ * rank answers alike.  Nothing here touches Mode D's state: a call answered by
+ * A or B pays nothing for D. */
+template <typename Spec>
+NlrMode nlr_select_mode(int sum_active, int max_active)
+{
+    int default_sum, default_max;
+    nlr_default_modeb_thresholds(Spec::search_mode, &default_sum, &default_max);
+    if(nlr_mode_b_rule(sum_active, max_active, nlr_spec_threshold_sum<Spec>(default_sum), nlr_spec_threshold_max<Spec>(default_max))) {
+        return NlrMode::B;
+    }
+    if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
+        int TDS = 0, TDM = 0;
+        gizmo_nlr_moded_thresholds(&TDS, &TDM);
+        if(sum_active > 0 && sum_active >= TDS && max_active >= TDM) {
+            return NlrMode::D;
+        }
+    }
+    return NlrMode::A;
 }
 
 /* ============================================================================
@@ -2897,6 +3013,9 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
      * only where something needs it — the threshold decision itself, and the
      * forced-Mode-B size guard. It is never computed merely to report it. */
     bool select_mode_b = force_b;
+    /* Mode D is asked for only on the threshold path: an override is honoured
+     * as given. */
+    NlrMode selected_mode = force_b ? NlrMode::B : NlrMode::A;
     int global_num_active = -1;       /* -1 = not computed on this path */
     if(!force_a && !force_b) {
         int local_act = args.num_active;
@@ -2904,12 +3023,8 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
         MPI_Allreduce(&local_act, &sum_act, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         MPI_Allreduce(&local_act, &max_act, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
         global_num_active = sum_act;
-        /* Spec::modeb_threshold_{sum,max} via SFINAE; default 64/64. */
-        const int spec_default_sum = nlr_spec_threshold_sum<Spec>(64);
-        const int spec_default_max = nlr_spec_threshold_max<Spec>(64);
-        const int TS = gizmo_nlr_modeb_threshold_sum_for(Spec::loop_name, spec_default_sum);
-        const int TM = gizmo_nlr_modeb_threshold_max_for(Spec::loop_name, spec_default_max);
-        select_mode_b = (sum_act > 0) && (sum_act <= TS) && (max_act <= TM);
+        selected_mode = nlr_select_mode<Spec>(sum_act, max_act);
+        select_mode_b = (selected_mode == NlrMode::B);
     } else if(force_b) {
         /* Forced Mode B skipped the dispatch Allreduce, but its size guard
          * needs the global count, so it is done here. */
@@ -2960,17 +3075,13 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
      * own note.  Declared here so it outlives the decision below and the execution further
      * down, both of which can route away from Mode D after the epoch is already open. */
     GxTouchedEpochGuard touched_epoch{0};
-#ifdef NEIGHBOR_LOOP_MODE_D
-    /* Mode D takes the calls Mode A would have taken, for every loop it can
-     * serve, when every rank can describe its tree to the device -- the same
-     * decision the iterative driver makes, and for the same reasons (stated
-     * there).  A caller-owned neighbour list is Mode A by construction, and an
-     * explicit override is honoured as given.  The vote is collective; the
-     * label was chosen from a collective too, so every rank reaches it. */
+    /* Mode D takes the calls nlr_select_mode gives it, when every rank can
+     * describe its tree to the device -- the same decision the iterative driver
+     * makes, and for the same reasons (stated there).  A caller-owned neighbour
+     * list is Mode A by construction.  The vote is collective; the mode was
+     * chosen from a collective too, so every rank reaches it. */
     if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
-        if((plan.path == NeighborLoopPlan::Path::ModeA_GpuNgl ||
-            (nlr_spec_needs_live_neighbours_v<Spec> && !select_mode_b)) && !force_a &&
-           args.external_csr == nullptr) {
+        if(selected_mode == NlrMode::D && args.external_csr == nullptr) {
             const int ready_local = (gx_device_fused_walk_prepare(&mode_d_tree, Spec::loop_name) == 0) ? 1 : 0;
             /* This rank's epoch is open exactly when its own preparation succeeded, whatever
              * the vote below decides for the call. */
@@ -2980,7 +3091,6 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
             if(ready) {plan.path = NeighborLoopPlan::Path::ModeD_DeviceFused;}
         }
     }
-#endif
 
 
     /* ---- Stage radii once ---- */
@@ -3028,25 +3138,7 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
     }
     if(nlr_path_uses_imported_ghosts(plan.path)) {
         if(nlr_caller_owns_ghost_pool(args)) {
-            /* At NTask>1 the CSR references imported ghost slots: require the
-             * caller's pool + provenance to be LIVE, and args to have been
-             * built AFTER the caller's import (num_total spans the ghosts).
-             * At NTask==1 no pool exists (imports early-out) — nothing to
-             * verify. ghost_get_num_ghosts()==0 is NOT a liveness signal
-             * (also 0 for a live zero-ghost pool); ghost_pool_is_live() is. */
-            if(NTask > 1) {
-                const char *own_err = nullptr;
-                if(!ghost_pool_is_live())                 own_err = "ghost pool not live";
-                else if(ghost_get_home_rank()  == nullptr ||
-                        ghost_get_home_index() == nullptr) own_err = "ghost provenance maps absent";
-                else if(args.num_total != NumPart)         own_err = "args.num_total != NumPart (args built before caller's import?)";
-                if(own_err != nullptr) {
-                    fprintf(stderr, "[neighbor_loop_runner rank=%d caller=%s] caller-owned ghost-pool "
-                            "contract violation: %s\n", ThisTask, Spec::loop_name, own_err);
-                    fflush(stderr);
-                    endrun(7313);
-                }
-            }
+            nlr_check_caller_owned_ghost_pool(args, Spec::loop_name);
         } else {
             gizmo_request_filtered_ghost_import_fresh(Spec::loop_name,
                                                        Spec::search_mode,
@@ -3097,14 +3189,12 @@ void run_neighbor_loop(const neighbor_loop_args& args_in)
             run_mode_b_remote<Spec>(args, radii.data());
             break;
         case NeighborLoopPlan::Path::ModeD_DeviceFused:
-#ifdef NEIGHBOR_LOOP_MODE_D
             if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
                 run_mode_d<Spec>(args, radii.data(), mode_d_tree);
-                break;
+            } else {
+                /* Never chosen without the eligibility above. */
+                endrun(90001032);
             }
-#endif
-            /* Never chosen without the build flag and the eligibility above. */
-            endrun(90001032);
             break;
     }
 
@@ -3462,6 +3552,24 @@ void NlrIterDriver<Spec>::initialize_device_context_mode_a_after_arena()
     ctx_initialized = true;
 }
 
+/* The union ghost import of a subgrouped Mode-A call: every subgroup's actives
+ * at their search radius padded by the Spec's buffer factor, neighbour types =
+ * the OR of the subgroup masks, under the Spec's search mode, radius policy and
+ * neighbour-radius scale.  One recipe, for the iterative driver and for a caller
+ * that imports in a Spec's place (the CBE corridor imports for AgsForceSpec). */
+template <typename Spec>
+void nlr_import_union_ghosts(unsigned int mask_union, const std::vector<int> &actives,
+                             const std::vector<double> &radii, double ghost_safety_factor)
+{
+    std::vector<double> padded(radii.size());
+    for (size_t k = 0; k < radii.size(); k++) {padded[k] = radii[k] * Spec::mode_a_csr_buffer_factor;}
+    const int n = (int)actives.size();
+    gizmo_request_filtered_ghost_import_fresh(Spec::loop_name, Spec::search_mode, mask_union,
+                                               (n > 0) ? actives.data() : nullptr, n,
+                                               (n > 0) ? padded.data() : nullptr, ghost_safety_factor,
+                                               Spec::radius_policy, nlr_spec_symmetric_j_radius_scale<Spec>());
+}
+
 template <typename Spec>
 void NlrIterDriver<Spec>::acquire_arena_and_init_ctx_mode_a()
 {
@@ -3493,10 +3601,17 @@ void NlrIterDriver<Spec>::acquire_arena_and_init_ctx_mode_a()
      *
      * On rebuild via rebuild_mode_a_arena_and_ctx_for_current_active_union,
      * the union covers only CURRENT compacted actives (post-Converged-removal)
-     * so the rebuild import doesn't over-cover converged slots. */
-    if (NTask > 1) {
+     * so the rebuild import doesn't over-cover converged slots.
+     *
+     * Subgroups with caller-built lists: the caller imported the pool the
+     * lists index and owns it -- no import here (it would renumber the ghost
+     * slots under the lists), and ghost_import_done stays false so the call's
+     * end leaves the pool alone. */
+    if (nlr_subgroups_carry_caller_lists(args)) {
+        nlr_check_caller_owned_ghost_pool(args, Spec::loop_name);
+    } else if (NTask > 1) {
         std::vector<int>    union_actives;
-        std::vector<double> union_radii_oversized;
+        std::vector<double> union_radii;
         unsigned int        mask_union = 0;
         for (int sg = 0; sg < args.num_subgroups; sg++) {
             mask_union |= args.subgroups[sg].j_type_bitmask;
@@ -3507,19 +3622,10 @@ void NlrIterDriver<Spec>::acquire_arena_and_init_ctx_mode_a()
             if (radii_uvm[sg] == nullptr) { continue; }
             for (int k = 0; k < sgr.num_active_local; k++) {
                 union_actives.push_back(sgr.active_indices[k]);
-                union_radii_oversized.push_back(radii_uvm[sg][k] * Spec::mode_a_csr_buffer_factor);
+                union_radii.push_back(radii_uvm[sg][k]);
             }
         }
-        const int union_n = (int)union_actives.size();
-        gizmo_request_filtered_ghost_import_fresh(Spec::loop_name,
-                                                   Spec::search_mode,
-                                                   mask_union,
-                                                   (union_n > 0) ? union_actives.data() : nullptr,
-                                                   union_n,
-                                                   (union_n > 0) ? union_radii_oversized.data() : nullptr,
-                                                   args.ghost_safety_factor,
-                                                   Spec::radius_policy,
-                                                   nlr_spec_symmetric_j_radius_scale<Spec>());
+        nlr_import_union_ghosts<Spec>(mask_union, union_actives, union_radii, args.ghost_safety_factor);
         ghost_import_done = true;
 
         /* Refresh args from globals (ghost import grew NumPart and
@@ -3616,7 +3722,7 @@ void NlrIterDriver<Spec>::rebuild_mode_a_arena_and_ctx_for_current_active_union(
 
     /* Build union from current active_set across globally-active subgroups. */
     std::vector<int>    union_actives;
-    std::vector<double> union_radii_oversized;
+    std::vector<double> union_radii;
     unsigned int        mask_union = 0;
     for (int sg = 0; sg < args.num_subgroups; sg++) {
         if (global_active_per_sg[sg] <= 0) continue;     /* skip globally-converged */
@@ -3625,7 +3731,7 @@ void NlrIterDriver<Spec>::rebuild_mode_a_arena_and_ctx_for_current_active_union(
         for (int k = 0; k < active_set_size[sg]; k++) {
             int slot = active_set_uvm[sg][k];
             union_actives.push_back(sgr.active_indices[slot]);
-            union_radii_oversized.push_back(radii_uvm[sg][slot] * Spec::mode_a_csr_buffer_factor);
+            union_radii.push_back(radii_uvm[sg][slot]);
         }
     }
 
@@ -3672,19 +3778,8 @@ void NlrIterDriver<Spec>::rebuild_mode_a_arena_and_ctx_for_current_active_union(
 
     /* === (4) Reimport with UNION radii / actives / mask (deliberate over-import,
      * an accepted tradeoff) === */
-    {
-        const int union_n = (int)union_actives.size();
-        gizmo_request_filtered_ghost_import_fresh(Spec::loop_name,
-                                                   Spec::search_mode,
-                                                   mask_union,
-                                                   (union_n > 0) ? union_actives.data() : nullptr,
-                                                   union_n,
-                                                   (union_n > 0) ? union_radii_oversized.data() : nullptr,
-                                                   args.ghost_safety_factor,
-                                                   Spec::radius_policy,
-                                                   nlr_spec_symmetric_j_radius_scale<Spec>());
-        ghost_import_done = true;
-    }
+    nlr_import_union_ghosts<Spec>(mask_union, union_actives, union_radii, args.ghost_safety_factor);
+    ghost_import_done = true;
 
     /* === (5) Refresh args from post-import globals === */
     args.num_total = NumPart;
@@ -4520,12 +4615,41 @@ static void nlr_iter_dispatch_subgroup_mode_a(NlrIterDriver<Spec>& drv, int sg)
             active_particle_indices_host_build[k] = sgr.active_indices[slot];
             radii_buffered_host_build[k]          = drv.radii_uvm[sg][slot] * Spec::mode_a_csr_buffer_factor;
         }
+        /* This subgroup's list: the caller's (NlrSubgroup::external_csr; the
+         * entry admits it only for a single-pass loop), shown to answer this
+         * loop's search and then staged, or built here.  A failure on either
+         * side leaves the CSR invalid rather than returning: the ghost-writeback
+         * pair below fires on every rank, so a return here would leave the peers
+         * waiting on a reverse-comm that never comes -- a hang, which is the one
+         * outcome worse than the stop itself. */
+        bool listed = false;   /* a list with its row index is in place */
+        const nlr_external_csr *caller_list = sgr.external_csr;
+        if (caller_list != nullptr) {
+            /* The list's rows carry the loop's search radius itself: the buffer
+             * factor only pads a list the runner builds for an iteration to grow
+             * into, and a caller-built list serves one pass. */
+            std::vector<double> radii_host_build(n_compacted);
+            for (int k = 0; k < n_compacted; k++) {
+                radii_host_build[k] = drv.radii_uvm[sg][drv.active_set_uvm[sg][k]];
+            }
+            int         csr_code = 0;
+            const char *csr_err  = nlr_external_csr_mismatch<Spec>(
+                caller_list, active_particle_indices_host_build.data(), n_compacted,
+                radii_host_build.data(), sgr.j_type_bitmask, &csr_code);
+            if (csr_err != nullptr) {
+                fprintf(stderr, "[neighbor_loop_runner rank=%d caller=%s subgroup=%d] external-CSR contract violation: %s\n",
+                        ThisTask, Spec::loop_name, sg, csr_err);
+                fflush(stderr);
+                endrun(csr_code);
+            } else if (nlr_stage_external_csr_into_gnl(caller_list, &drv.mode_a_cached_gnl[sg], Spec::loop_name)) {
+                listed = true;
+            } else {
+                gpu_ngb_list_free(&drv.mode_a_cached_gnl[sg]);
+                drv.mode_a_cached_gnl[sg] = gpu_neighbor_list_t{};
+            }
+        } else {
         const size_t radii_oversized_bytes = (size_t) n_compacted * sizeof(double);
         double *radii_oversized_uvm = (double *) nlr_shared_alloc_bytes(radii_oversized_bytes, "modea_radii");
-        /* A refused buffer leaves the CSR unbuilt. The rebuild is skipped rather than
-         * returned from: the ghost-writeback pair below fires on every rank, so a
-         * return here would leave the peers waiting on a reverse-comm that never
-         * comes -- a hang, which is the one outcome worse than the stop itself. */
         if (radii_oversized_uvm != NULL) {
         for (int k = 0; k < n_compacted; k++) radii_oversized_uvm[k] = radii_buffered_host_build[k];
 
@@ -4541,7 +4665,13 @@ static void nlr_iter_dispatch_subgroup_mode_a(NlrIterDriver<Spec>& drv, int sg)
         /* A build that ran out of memory hands back the empty list and has already
          * asked for the stop. Its row index is absent, which is exactly what the
          * kernel below reads first, so the CSR must not be marked valid. */
-        if (drv.mode_a_cached_gnl[sg].d_active != nullptr) {
+        listed = (drv.mode_a_cached_gnl[sg].d_active != nullptr);
+        } else {
+            nlr_stop_no_staging_memory(Spec::loop_name, "the oversized per-active search radii",
+                                       radii_oversized_bytes);
+        }
+        }   /* list built here */
+        if (listed) {
 
         /* Allocate csr_offset_lookup + csr_buffered_h sized to subgroup max.
          * Lookup keyed on subgroup-slot (invariant):
@@ -4578,11 +4708,7 @@ static void nlr_iter_dispatch_subgroup_mode_a(NlrIterDriver<Spec>& drv, int sg)
         }
         drv.mode_a_csr_valid[sg] = true;
         }   /* CSR row lookup obtained */
-        }   /* neighbour list built */
-        } else {
-            nlr_stop_no_staging_memory(Spec::loop_name, "the oversized per-active search radii",
-                                       radii_oversized_bytes);
-        }
+        }   /* neighbour list in place */
     }
 
     /* ===== (2) Ghost write detector + writeback begin =====
@@ -5043,6 +5169,27 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
         endrun(81201);
         return;   /* before any state touch; symmetric caller-contract failure -> graceful return, drains at next poll */
     }
+    /* Caller-built lists (NlrSubgroup::external_csr): every subgroup or none,
+     * a single-pass loop only, and Mode A by the caller's own override -- the
+     * lists index the caller's ghost pool, so no other path can use them. */
+    {
+        int with_list = 0;
+        for (int sg = 0; sg < args.num_subgroups; sg++) {
+            if (args.subgroups[sg].external_csr != nullptr) with_list++;
+        }
+        const char *why = nullptr;
+        if (with_list == 0)                                  {}
+        else if (with_list != args.num_subgroups)            {why = "only some subgroups carry a caller-built list";}
+        else if (Spec::max_iters != 1)                       {why = "an iterating loop cannot use a list built once";}
+        else if (args.dispatch_override != NlrForceMode::A)  {why = "caller-built lists need dispatch_override = A";}
+        if (why != nullptr) {
+            fprintf(stderr, "[run_neighbor_loop_iterative<%s> rank=%d] caller-built list contract violation: %s\n",
+                    Spec::loop_name, ThisTask, why);
+            fflush(stderr);
+            endrun(7310);
+            return;   /* before any state touch; symmetric caller-contract failure -> graceful return, drains at next poll */
+        }
+    }
     /* Multi-subgroup walker:
      *   - sg.j_type_bitmask threaded through Mode B local + remote collectors
      *     and Mode A NGL build per-subgroup.
@@ -5098,20 +5245,15 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
         MPI_Allreduce(&local_act, &sum_act, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
         MPI_Allreduce(&local_act, &max_act, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
         global_active_sum = sum_act;
-        const int spec_default_sum = nlr_spec_threshold_sum<Spec>(64);
-        const int spec_default_max = nlr_spec_threshold_max<Spec>(64);
-        const int TS = gizmo_nlr_modeb_threshold_sum_for(Spec::loop_name, spec_default_sum);
-        const int TM = gizmo_nlr_modeb_threshold_max_for(Spec::loop_name, spec_default_max);
-        bool select_mode_b = (sum_act > 0) && (sum_act <= TS) && (max_act <= TM);
-        path = select_mode_b ? DispatchPath::ModeB_HostWalker : DispatchPath::ModeA_GPU_NGL;
+        const NlrMode mode = nlr_select_mode<Spec>(sum_act, max_act);
+        path = (mode == NlrMode::B) ? DispatchPath::ModeB_HostWalker : DispatchPath::ModeA_GPU_NGL;
         /* Answered where its neighbours live, never on ghost copies (stated at
          * the single-pass entry, nlr_spec_needs_live_neighbours). */
         if constexpr (nlr_spec_needs_live_neighbours_v<Spec>) {
             path = DispatchPath::ModeB_HostWalker;
         }
-#ifdef NEIGHBOR_LOOP_MODE_D
-        /* Mode D takes the calls Mode A would have taken, when the loop is one
-         * it can serve and every rank can actually answer on the device.  It
+        /* Mode D takes the calls nlr_select_mode gives it, for a loop it can
+         * serve and every rank can actually answer on the device.  It
          * serves every one-way search whose pair kernel may run concurrently:
          * the neighbours are always the evaluating rank's own particles, so a
          * kernel's neighbour-side writes are local atomics, exactly as they are
@@ -5134,21 +5276,11 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
          * its tree to the device pulls the WHOLE call back to Mode A, because the
          * alternative is one rank walking while its peers wait for queries that
          * never arrive. */
-        /* sum_act > 0 FIRST, and it is not a shortcut: preparing mirrors and
-         * sweeps the whole tree, and a call with no actives anywhere has no work
-         * to justify that.  Without this test such a call reaches here because
-         * select_mode_b is false when sum_act == 0, takes the Mode-A label, and
-         * pays that sweep on the way to the globally-zero-active no-op that was
-         * going to return without computing anything.  That is O(Nnodes) on a
-         * call that should cost nothing, appearing only in builds carrying the
-         * flag.  It used to also pay a full-rank particle drift here; that is
-         * what the touched-set discovery removed, and the node half is what
-         * still justifies the gate. */
-        if(sum_act > 0 &&
-           (path == DispatchPath::ModeA_GPU_NGL ||
-            (nlr_spec_needs_live_neighbours_v<Spec> && !select_mode_b)) &&
-           nlr_spec_modeb_eval_omp<Spec>() != ModeBEvalOMP::SerialOnly &&
-           Spec::search_mode == MODE_B_SEARCH_ONEWAY) {
+        /* nlr_select_mode never asks for Mode D on a call with no actives
+         * anywhere, and that is not a shortcut: preparing mirrors and sweeps the
+         * whole tree, and such a call has no work to justify that -- it is
+         * O(Nnodes) on the way to the globally-zero-active no-op below. */
+        if(mode == NlrMode::D) {
             const int ready_local = (gx_device_fused_walk_prepare(&mode_d_tree, Spec::loop_name) == 0) ? 1 : 0;
             /* Open exactly when this rank's own preparation succeeded, whatever the vote decides. */
             touched_epoch.held = ready_local;
@@ -5156,7 +5288,6 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
             MPI_Allreduce(&ready_local, &ready, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);
             if(ready) {path = DispatchPath::ModeD_DeviceFused;}
         }
-#endif
     }
 
     /* Globally-zero-active call: do NO neighbor work. global_active_sum comes
@@ -5427,8 +5558,7 @@ void run_neighbor_loop_iterative(const neighbor_loop_args_iterative& args_in)
                     nlr_iter_dispatch_subgroup_mode_a<Spec>(drv, sg);
                     break;
                 case DispatchPath::ModeD_DeviceFused:
-                    if constexpr (nlr_spec_modeb_eval_omp<Spec>() != ModeBEvalOMP::SerialOnly &&
-                                  Spec::search_mode == MODE_B_SEARCH_ONEWAY) {
+                    if constexpr (nlr_spec_mode_d_eligible_v<Spec>) {
                         nlr_iter_dispatch_subgroup_mode_d<Spec>(drv, sg);
                     }
                     break;
@@ -5644,6 +5774,10 @@ template void run_neighbor_loop_iterative<AgsDensitySpec>(const neighbor_loop_ar
  * the iterative path so the multi-subgroup contract is available. See
  * gravity/ags_force_loop.{h,cc}. */
 template void run_neighbor_loop_iterative<AgsForceSpec>(const neighbor_loop_args_iterative&);
+/* The CBE corridor decides A/B for CBEGrad + AGSForce together, as AGSForce would. */
+template NlrMode nlr_select_mode<AgsForceSpec>(int, int);
+template void nlr_import_union_ghosts<AgsForceSpec>(unsigned int, const std::vector<int>&,
+                                                     const std::vector<double>&, double);
 #endif
 
 /* DensitySpec — hydro density runner port.

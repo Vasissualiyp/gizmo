@@ -12,6 +12,7 @@
 #include <vector>
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
+#include <climits>
 #include "../mesh/neighbor_list.h"            /* gizmo_sym_* globals */
 #include "../mesh/neighbor_loop_runner.h"     /* nlr_external_csr */
 #include "../mesh/ghost_symlist_lifecycle.h"  /* gizmo_gradients_prep_symlist / refresh_symlist */
@@ -19,22 +20,9 @@
 #include "../system/gpu_particles_arena.h"
 #include "hydro_corridor.h"
 
-/* Default adaptive thresholds (global summed / per-rank-max active gas) used
- * when the optional NeighborLoopModeBThreshold{Sum,Max} parameters are unset.
- * The corridor uses the same DECISION FORM as the runner's per-loop policy:
- *   Mode B iff sum > 0 && sum <= threshold_sum && max <= threshold_max.
- * It does NOT use the same NUMBERS. The corridor's default is 1000/1000 on
- * active GAS; a loop that reaches the runner's own adaptive path without a
- * dispatch override falls back to the Spec's threshold, defaulting to 64/64
- * on that loop's own active count (neighbor_loop_runner.cc, nlr_spec_threshold_*).
- * Consequence, by design and measured: between 65 and 1000 active gas the
- * corridor selects Mode B for gradients/hydro_force/cellcorrections (which do
- * take the override) while density -- which does not set dispatch_override --
- * independently selects Mode A and performs its own one-way ghost import.
- * That import feeds density's own neighbour search; it is not handed downstream.
- * Centralized here so a future tuning lives in one place. */
-static constexpr int CORRIDOR_DEFAULT_MODEB_THRESHOLD_SUM = 1000;
-static constexpr int CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX = 1000;
+/* The corridor takes the runner's Mode-B rule and the built-in thresholds of a
+ * symmetric loop (nlr_default_modeb_thresholds), on the summed and per-rank-max
+ * count of active GAS.  Density is one-way and decides for itself. */
 
 /* Step-scoped mode state. Reset to UNSET by gizmo_hydro_corridor_end().
  * File-static so consumers must go through the accessor; no extern reads.
@@ -44,6 +32,8 @@ static constexpr int CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX = 1000;
  * bottom of the same function. Reading UNSET from a consumer is a bug
  * (consumer placed outside the corridor span). */
 static GizmoHydroCorridorMode g_corridor_mode = GizmoHydroCorridorMode::UNSET;
+/* Whether this step's shared list is built to outlive the corridor for the transport sub-steps. */
+static int g_corridor_keep_for_substeps = 0;
 
 /* Step-scoped MG decision (see gizmo_hydro_corridor_mg_step in hydro_corridor.h).
  * Set by decide_mode, cleared by end. */
@@ -151,24 +141,19 @@ void gizmo_hydro_corridor_decide_mode(void)
     g_corridor_mode = GizmoHydroCorridorMode::MODE_A;
     return;
 #endif
-    /* Adaptive dispatch, mirroring the runner's per-loop policy:
-       Mode B iff sum > 0 && sum <= threshold_sum && max <= threshold_max.
-       Thresholds from the optional NeighborLoopModeBThreshold{Sum,Max} params
-       (-1 = unset -> corridor default; any set value overrides, <= 0 disables
-       Mode B). TRANSPORT_SUBCYCLE has already forced Mode A above. */
+    /* Adaptive dispatch: the runner's Mode-B rule with a symmetric loop's
+       defaults standing in where NeighborLoopModeBThreshold{Sum,Max} are unset.
+       TRANSPORT_SUBCYCLE has already forced Mode A above. An MG step needs the
+       complete gas graph, i.e. the Mode-A ghost pool and CSR. The summed count is
+       64-bit for the MG fraction; any count past INT_MAX is far above every
+       Mode-B threshold, so it enters the rule clamped. */
     long long sum_active_gas = 0, sum_active_all_gas = 0; int max_active_gas = 0;
     global_active_gas_counts(&sum_active_gas, &max_active_gas, &sum_active_all_gas);
     decide_mg_step(sum_active_gas, sum_active_all_gas);
-    const struct global_data_all_processes *host_all = nlr_host_all_ptr();
-    int threshold_sum = (host_all->NeighborLoopModeBThresholdSum != -1)
-                            ? host_all->NeighborLoopModeBThresholdSum
-                            : CORRIDOR_DEFAULT_MODEB_THRESHOLD_SUM;
-    int threshold_max = (host_all->NeighborLoopModeBThresholdMax != -1)
-                            ? host_all->NeighborLoopModeBThresholdMax
-                            : CORRIDOR_DEFAULT_MODEB_THRESHOLD_MAX;
-    /* An MG step needs the complete gas graph, i.e. the Mode-A ghost pool and CSR. */
-    bool select_mode_b = (sum_active_gas > 0) && (sum_active_gas <= threshold_sum)
-                                             && (max_active_gas <= threshold_max) && !g_mg_step;
+    int default_sum, default_max;
+    nlr_default_modeb_thresholds(MODE_B_SEARCH_SYMMETRIC, &default_sum, &default_max);
+    const int sum_for_rule = (sum_active_gas > (long long)INT_MAX) ? INT_MAX : (int)sum_active_gas;
+    bool select_mode_b = nlr_mode_b_rule(sum_for_rule, max_active_gas, default_sum, default_max) && !g_mg_step;
     GizmoHydroCorridorMode mode = select_mode_b ? GizmoHydroCorridorMode::MODE_B
                                                 : GizmoHydroCorridorMode::MODE_A;
     g_corridor_mode = mode;
@@ -190,6 +175,10 @@ GizmoHydroCorridorMode gizmo_hydro_corridor_get_mode(void)
  * gizmo_hydro_cleanup_symlist_and_ghosts() after hydro_force(). */
 static nlr_external_csr g_corridor_csr;
 static bool             g_corridor_csr_valid = false;
+/* Each row's search radius in the published list (the contract on struct
+ * nlr_external_csr): the ghost safety factor times the row's KernelRadius,
+ * frozen for the corridor span. */
+static std::vector<double> g_corridor_query_radii;
 /* Import epoch of the ghost pool the published CSR was built from (stamped at
  * begin and at every fallback republish). The value-refresh fast path in
  * gizmo_hydro_corridor_refresh_ghost_values runs ONLY when the CURRENT live
@@ -209,7 +198,7 @@ void gizmo_hydro_corridor_begin(void)
      * build this list themselves. */
     const double gsl_safety = gizmo_ghost_safety_factor();
     if(g_corridor_mode == GizmoHydroCorridorMode::MODE_B) {
-        gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, true, NULL);
+        gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, true, 0, NULL);
         return;
     }
 
@@ -217,7 +206,10 @@ void gizmo_hydro_corridor_begin(void)
      * active list + gizmo_sym_* CSR once for the whole corridor span. With one
      * task there is no import to carry the all-gas drift, so it is done here. */
     if(g_mg_needs_all_gas && NTask == 1) {drift_local_gas_to_current_time();}
-    gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false, &gizmo_sym_neighbor_list_device);
+#ifdef TRANSPORT_SUBCYCLE
+    g_corridor_keep_for_substeps = transport_subcycle_keep_wanted();
+#endif
+    gizmo_gradients_prep_symlist(gsl_safety, gsl_safety, false, g_corridor_keep_for_substeps, &gizmo_sym_neighbor_list_device);
 
     /* Publish the corridor's view ONLY when the runner's caller-owned-pool
      * contract can be satisfied: at NTask>1 that requires a LIVE ghost pool
@@ -227,15 +219,28 @@ void gizmo_hydro_corridor_begin(void)
      * ghosts() after hydro_force(), spanning all three consumers. */
     if(NTask > 1 && !ghost_pool_is_live()) return;
 
-    g_corridor_csr.active_indices = gizmo_sym_active_indices;
-    g_corridor_csr.num_active     = gizmo_sym_num_active;
-    g_corridor_csr.offsets        = gizmo_sym_neighbor_list.offsets;
-    g_corridor_csr.neighbors      = gizmo_sym_neighbor_list.neighbors;
-    g_corridor_csr.total_pairs    = gizmo_sym_neighbor_list.total_pairs;
-    g_corridor_csr.owner_name     = "corridor:hydro";
-    g_corridor_csr.device         = &gizmo_sym_neighbor_list_device;
-    g_corridor_csr_valid          = true;
-    g_corridor_pool_epoch         = ghost_provenance_epoch();
+    /* The search gizmo_gradients_prep_symlist built (gpu_build_symmetric_neighbor_list:
+     * symmetric, gas only, the default radius policy, both radii scaled by the
+     * ghost safety factor); each consumer is checked against it. */
+    g_corridor_query_radii.resize((size_t)gizmo_sym_num_active);
+    for(int aa = 0; aa < gizmo_sym_num_active; aa++) {
+        g_corridor_query_radii[aa] = gsl_safety * (double)P[gizmo_sym_active_indices[aa]].KernelRadius;
+    }
+    g_corridor_csr.active_indices        = gizmo_sym_active_indices;
+    g_corridor_csr.num_active            = gizmo_sym_num_active;
+    g_corridor_csr.offsets               = gizmo_sym_neighbor_list.offsets;
+    g_corridor_csr.neighbors             = gizmo_sym_neighbor_list.neighbors;
+    g_corridor_csr.total_pairs           = gizmo_sym_neighbor_list.total_pairs;
+    g_corridor_csr.owner_name            = "corridor:hydro";
+    g_corridor_csr.type_mask             = 1u;
+    g_corridor_csr.search_mode           = MODE_B_SEARCH_SYMMETRIC;
+    g_corridor_csr.radius_policy         = MODE_B_RADIUS_DEFAULT;
+    g_corridor_csr.neighbor_radius_scale = gsl_safety;
+    g_corridor_csr.query_radii           = g_corridor_query_radii.data();
+    g_corridor_csr.device                = &gizmo_sym_neighbor_list_device;
+    g_corridor_csr_valid                 = true;
+    g_corridor_pool_epoch                = ghost_provenance_epoch();
+    g_corridor_csr.pool_epoch            = g_corridor_pool_epoch;
 
 }
 
@@ -270,7 +275,9 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage)
      * (epoch match; see g_corridor_pool_epoch). Any other state — pool torn
      * down by an intervening loop's own ghost lifecycle, epoch mismatch, or
      * a refresh-guard failure — falls CLOSED to the full path below. */
-    if(ghost_pool_is_live() && ghost_provenance_epoch() == g_corridor_pool_epoch) {
+    int same_pool = (ghost_pool_is_live() && ghost_provenance_epoch() == g_corridor_pool_epoch) ? 1 : 0;
+    MPI_Allreduce(MPI_IN_PLACE, &same_pool, 1, MPI_INT, MPI_MIN, MPI_COMM_WORLD);   /* both paths are collective */
+    if(same_pool) {
         int refresh_rc = ghost_refresh_values();
         if(refresh_rc == GHOST_REFRESH_OK) {
             return;
@@ -285,7 +292,9 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage)
      * on) happen inside the re-import itself, so no side-effect list is
      * maintained here. */
     const double gsl_safety = gizmo_ghost_safety_factor();
-    gizmo_gradients_refresh_symlist(gsl_safety, gsl_safety, false);
+    /* Only a list that was admitted to the heap at prep tries again (the same answer, once per step). */
+    g_corridor_keep_for_substeps = gizmo_sym_neighbor_list.on_heap;
+    gizmo_gradients_refresh_symlist(gsl_safety, gsl_safety, false, g_corridor_keep_for_substeps, &gizmo_sym_neighbor_list_device);
 
     /* Republish. The active set is frozen across the corridor span, so
      * active_indices/num_active are pointer-stable; only the CSR arrays
@@ -296,6 +305,7 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage)
     g_corridor_csr.total_pairs = gizmo_sym_neighbor_list.total_pairs;
     g_corridor_csr.device      = &gizmo_sym_neighbor_list_device;
     g_corridor_pool_epoch      = ghost_provenance_epoch();
+    g_corridor_csr.pool_epoch  = g_corridor_pool_epoch;
 
 }
 
