@@ -3,7 +3,6 @@
 #include <stdlib.h>
 #include <string.h>
 #include <math.h>
-#include "../system/eigen_symmetric.h"
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
 #include "../eos/cosmic_ray_fluid/cosmic_ray_functions.h"

@@ -41,7 +41,6 @@
 #include "../system/gpu_particles_arena.h"
 #include "gradient_functions.h"
 #include "hydro_structs.h"
-#include "../system/eigen_symmetric.h"
 #include "../declarations/gpu_numeric_macros.h"
 #include "../declarations/gpu_error_check.h"
 #include "../declarations/gpu_dispatch_templates.h"
