@@ -1,9 +1,9 @@
-/* Unit test for system/bracketed_rootfind.h, the Brent root-finder block used by the cooling solve
-   (DoCooling) and the dust-temperature solvers.
+/* Unit test for brent_rootfind() in system/bracketed_rootfind_functions.h, the Brent root finder used by the
+   cooling solve (DoCooling), the H2-fraction solve and the cooling-side dust temperature (rt_ir_lambdadust).
 
    Self-contained: stubs the few GIZMO symbols the header touches and includes the header directly.
-   Each case brackets a root and checks that the block
-     - returns a point it actually evaluated (the block once returned an unevaluated interpolation step),
+   Each case brackets a root and checks that the solver
+     - returns a point it actually evaluated (it once returned an unevaluated interpolation step),
      - lands within the requested tolerance of the known root,
      - stays under the iteration cap and never calls endrun() when a root is bracketed,
      - expands a non-bracketing interval in the right direction for negative variables.
@@ -29,8 +29,12 @@ static int g_warn = 0, g_evals = 0;
 static std::vector<double> g_xs;      /* every argument the function was evaluated at */
 static void endrun(int code) {throw code;}
 #ifndef ROOTFIND_HEADER
-#define ROOTFIND_HEADER "system/bracketed_rootfind.h"
+#define ROOTFIND_HEADER "system/bracketed_rootfind_functions.h"
 #endif
+#ifndef KOKKOS_INLINE_FUNCTION
+#define KOKKOS_INLINE_FUNCTION inline /* so ROOTFIND_HEADER can also point at the gpu_kokkos_unified copy */
+#endif
+#include ROOTFIND_HEADER
 
 typedef double (*fn)(double);
 #define EVAL(expr) {g_evals++; g_xs.push_back(x); return (expr);}
@@ -80,11 +84,9 @@ int main()
         g_warn = 0; g_evals = 0; g_xs.clear();
         double x = NAN; int iters = 0; std::string why;
         try {
-            #define ROOTFIND_FUNCTION(xx) c.f(xx)
-            double ROOTFIND_X_a = c.a, ROOTFIND_X_b = c.b, ROOTFUNC_a = c.f(c.a), ROOTFUNC_b = c.f(c.b);
-            double ROOTFIND_REL_X_tol = c.tol_rel, ROOTFIND_ABS_X_tol = c.tol_abs;
-            #include ROOTFIND_HEADER
-            x = ROOTFIND_X_new; iters = ROOTFIND_ITER;
+            double fa = c.f(c.a), fb = c.f(c.b);
+            BrentRootfindResult r = brent_rootfind(c.f, c.a, c.b, fa, fb, c.tol_rel, c.tol_abs, MAXITER);
+            x = r.x; iters = r.iter;
         } catch(int code) {why += "endrun; ";}
         double tol = c.tol_abs + c.tol_rel * fabs(c.root);
         if(!(fabs(x - c.root) <= 3. * tol)) {why += "off root; ";}

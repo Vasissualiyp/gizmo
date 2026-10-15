@@ -10,6 +10,7 @@
 #ifdef GALSF_RESOLVEDISM_STELLAR_TABLES
 #include "../galaxy_sf/resolvedism_stellar_tables.h"
 #endif
+#include "../system/bracketed_rootfind_functions.h"
 
 /*! \file rt_utilities.c
  *  \brief useful functions for radiation modules
@@ -1620,14 +1621,13 @@ double dust_dE_cooling(int i, double Tgas, double Tdust, double* Tdust_fixedpoin
 double rt_ir_lambdadust(int i, double T, struct particle_data *pp, struct gas_cell_data *cell){
     double Tdust, T_lower, T_upper, dE, dE1, dE2, dE_lower, dE_upper, dE_guess, dTdust_tol=1e-6;
     double Tdust_fixedpoint_1, Tdust_fixedpoint_2, dummy;
-    // define ROOTFIND_FUNCTION_INNER because this gets called nested inside the cooling solver, and needs to be def'd distinctly from the overlying ROOTFIND_FUNCTION
-    #define ROOTFIND_FUNCTION_INNER(dTdust) dust_dE_cooling(i, T, T+dTdust, &Tdust_fixedpoint_1, &Tdust_fixedpoint_2, pp, cell)
+    auto dE_of_dTdust = [&](double dTdust) {return dust_dE_cooling(i, T, T+dTdust, &Tdust_fixedpoint_1, &Tdust_fixedpoint_2, pp, cell);}; // solved in Tdust-T: LambdaDust ~ (T-Tdust) needs the difference resolved, not just Tdust
     if((All.Time==0 )|| (!isfinite(cell[i].Dust_Temperature))) {Tdust=T;} else {Tdust = DMIN(MAX_DUST_TEMP, cell[i].Dust_Temperature);}
 #ifdef RT_DIAG_IR_DOUBLE_COUNT
     rt_diag_cr.dc_abs_ir = rt_diag_cr.dc_abs_nonir = rt_diag_cr.dc_emit = rt_diag_cr.dc_couple = 0;
 #endif
 
-    dE = dE_guess = ROOTFIND_FUNCTION_INNER(Tdust-T);
+    dE = dE_guess = dE_of_dTdust(Tdust-T);
     //if(cell[i].Dust_Temperature >= MAX_DUST_TEMP && dE > 0) {return 0;}
     if(Tdust_fixedpoint_1 <= 0) {Tdust_fixedpoint_1 = T;} // this means overshot to <0 from dust-gas coupling term, so set to equilibrium with gas temp as a guess
     if(Tdust_fixedpoint_1 > MAX_DUST_TEMP) {Tdust_fixedpoint_1 = MAX_DUST_TEMP;} // cap the guess
@@ -1654,7 +1654,7 @@ double rt_ir_lambdadust(int i, double T, struct particle_data *pp, struct gas_ce
         while(dE < 0 && Tdust > Tdust_floor && n_iter < MAXITER) {
             T_upper = Tdust; dE_upper = dE; /* keep the bracket tight */
             Tdust *= scalefac; Tdust = DMAX(Tdust,Tdust_floor);
-            dE = ROOTFIND_FUNCTION_INNER(Tdust-T);
+            dE = dE_of_dTdust(Tdust-T);
             if(dE==0){break;}
             scalefac *= 0.9;
             n_iter++;
@@ -1670,7 +1670,7 @@ double rt_ir_lambdadust(int i, double T, struct particle_data *pp, struct gas_ce
         while(dE > 0 && Tdust < MAX_DUST_TEMP && n_iter < MAXITER) {
             T_lower = Tdust; dE_lower = dE; /* keep the bracket tight */
             Tdust *= scalefac; Tdust = DMIN(Tdust,MAX_DUST_TEMP);
-            dE = ROOTFIND_FUNCTION_INNER(Tdust-T);
+            dE = dE_of_dTdust(Tdust-T);
             if(dE==0){break;}
             scalefac = DMIN(1.25, scalefac*1.1);
             n_iter++;
@@ -1690,7 +1690,7 @@ double rt_ir_lambdadust(int i, double T, struct particle_data *pp, struct gas_ce
         double Tk = T_start, fk = dE_start, Tprev = T_start, fprev = dE_start; int phase = (fk < 0) ? 1 : 0;
         while(Tk > Tdust_floor && n_iter < MAXITER) {
             Tprev = Tk; fprev = fk; Tk = DMAX(0.8*Tk, Tdust_floor);
-            fk = ROOTFIND_FUNCTION_INNER(Tk-T); n_iter++;
+            fk = dE_of_dTdust(Tk-T); n_iter++;
             if(fk == 0) {break;}
             if(phase == 0 && fk < 0) {phase = 1; continue;}
             if(phase == 1 && fk > 0) {phase = 2; break;}
@@ -1704,11 +1704,7 @@ double rt_ir_lambdadust(int i, double T, struct particle_data *pp, struct gas_ce
     if(dE_lower * dE_upper > 0) {PRINT_WARNING("Failed to bracket Tdust solution for ID=%lld T=%g T_lower=%g T_upper=%g dE_lower=%g dE_upper=%g\n", (long long)(long long)i /* particle index */, T, T_lower,T_upper, dE_lower, dE_upper);}
 
     if(dE!=0){  // root-solve for Tdust
-        double ROOTFIND_X_a = T_lower-T, ROOTFIND_X_b = T_upper-T;
-        double ROOTFUNC_a = dE_lower; double ROOTFUNC_b = dE_upper;
-        double ROOTFIND_REL_X_tol = dTdust_tol, ROOTFIND_ABS_X_tol=0.;
-        #include "../system/bracketed_rootfind.h"
-        Tdust = ROOTFIND_X_new+T;
+        Tdust = brent_rootfind(dE_of_dTdust, T_lower-T, T_upper-T, dE_lower, dE_upper, dTdust_tol, 0., MAXITER).x + T;
     }
     double LambdaDust = gas_dust_heating_coeff(i,T,Tdust, pp, cell) * (T-Tdust);
 #if defined(RT_DIAG_IR_DOUBLE_COUNT) && defined(COOLING)
@@ -1827,16 +1823,8 @@ double rt_eqm_dust_temp(int i, double T, double dust_absorption_rate, struct par
     if(T_upper==Tmax && dEdt_upper > 0) {return Tmax;}
     if(T_lower>=Tmax) {return Tmax;}
 
-#if (0) && !defined(SINGLE_STAR_AND_SSP_NUCLEAR_ZOOM_SPECIALBOUNDARIES)  // PFH: still testing which option is better, but the new rootfind struggles here, in hyper-zoom-in runs when given dust close to max temperature (raising max temp resolves the failure to converge or Nan's but then jumps to very high solutions somewhat randomly, where it shouldnt. The old secant routine below appears stable and more robust in this particular instance for now.
-    #define ROOTFIND_FUNCTION(dTdust) dust_dEdt(i,T,T+dTdust,dust_absorption_rate,fdustmet_init, pp, cell); // here we want to converge on a relative tolerance for Tdust-Tgas
-    if(dEdt!=0)
-    {
-        double ROOTFIND_X_a = T_lower-T, ROOTFIND_X_b = T_upper-T, ROOTFUNC_a = dEdt_lower, ROOTFUNC_b = dEdt_upper, ROOTFIND_REL_X_tol = 1e-6, ROOTFIND_ABS_X_tol=0.;
-        #include "../system/bracketed_rootfind.h"
-        Tdust = ROOTFIND_X_new + T;
-        if(ROOTFIND_ITER > MAXITER || isnan(Tdust)){PRINT_WARNING("WARNING: Particle %lld did not converge to desired Tdust tolerance (iter=%d, Tdust=%g, Tgas=%g)\n",(long long)(long long)i /* particle index */,ROOTFIND_ITER,Tdust,T);}
-    }
-#else
+    /* A Brent solve used to sit here, disabled (PFH): it struggled in hyper-zoom-in runs with dust near the maximum
+       temperature, where this secant iteration proved more robust. */
 
     /* secant iterations on the bracket tightened above, bisection as the fallback. Convergence is on the bracket
        width: a step-size test cannot tell a converged secant step from one that stalled on a bracket end. */
@@ -1860,7 +1848,6 @@ double rt_eqm_dust_temp(int i, double T, double dust_absorption_rate, struct par
         }
     }
 
-#endif
     
     return Tdust;
 }
