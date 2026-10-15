@@ -168,6 +168,39 @@ KOKKOS_INLINE_FUNCTION long long mg_local_end(const long long *col, long long a,
     while(a < b) {long long m = a + (b - a) / 2; if(mg_column_is_local(col[m], first_local, end_local)) {a = m + 1;} else {b = m;}}
     return a;
 }
+/* A row's faces put into summation order (this task's columns first, each part ascending), each coefficient moving with its
+   column. Rows hold a few tens of faces, where insertion sort is fastest; a cell with thousands of faces would cost k^2 steps
+   on its one thread and hold every task at the next collective, so a long row is heapsorted in place instead (k log k, no
+   recursion, no scratch) and needs no second level of parallelism. Columns are unique within a row: both give the same order. */
+#define MG_ROW_HEAPSORT_MIN_FACES 64
+KOKKOS_INLINE_FUNCTION void mg_row_sift_down(long long *col, double *q, long long root, long long n, long long first_local, long long end_local)
+{
+    while(2 * root + 1 < n) {
+        long long child = 2 * root + 1;
+        if(child + 1 < n && mg_face_precedes(col[child], col[child + 1], first_local, end_local)) {child++;}
+        if(!mg_face_precedes(col[root], col[child], first_local, end_local)) {return;}
+        long long tc = col[root]; col[root] = col[child]; col[child] = tc;
+        double tq = q[root]; q[root] = q[child]; q[child] = tq;
+        root = child;
+    }
+}
+KOKKOS_INLINE_FUNCTION void mg_sort_row(long long *col, double *q, long long n, long long first_local, long long end_local)
+{
+    if(n < MG_ROW_HEAPSORT_MIN_FACES) {
+        for(long long a = 1; a < n; a++) {
+            long long c = col[a]; double qa = q[a]; long long b = a - 1;
+            while(b >= 0 && mg_face_precedes(c, col[b], first_local, end_local)) {col[b+1] = col[b]; q[b+1] = q[b]; b--;}
+            col[b+1] = c; q[b+1] = qa;
+        }
+        return;
+    }
+    for(long long root = n / 2 - 1; root >= 0; root--) {mg_row_sift_down(col, q, root, n, first_local, end_local);}
+    for(long long last = n - 1; last > 0; last--) {
+        long long tc = col[0]; col[0] = col[last]; col[last] = tc;
+        double tq = q[0]; q[0] = q[last]; q[last] = tq;
+        mg_row_sift_down(col, q, 0, last, first_local, end_local);
+    }
+}
 
 
 /* ==================================================================================== */
@@ -369,7 +402,7 @@ static int mg_build_graph(const struct mg_csr *csr, std::vector<unsigned char> &
     if(!failed) {
         long long *gcol = MGd_col, *goff = MGd_off; double *gq = MGd_q;
         /* compact each row's kept faces with their global columns (owner known per face: this task, or the
-           ghost's home), then sort the row into its summation order (rows hold a few tens of faces) */
+           ghost's home), then sort the row into its summation order */
         Kokkos::parallel_for("mg_graph_compact", Kokkos::RangePolicy<>(0, n_rows), KOKKOS_LAMBDA(const int aa) {
             const int i = rows[aa];
             long long base = goff[i], k = base;
@@ -380,11 +413,7 @@ static int mg_build_graph(const struct mg_csr *csr, std::vector<unsigned char> &
                 gq[k] = d_cand_q[nn];
                 k++;
             }
-            for(long long a = base + 1; a < k; a++) {
-                long long c = gcol[a]; double q = gq[a]; long long b = a - 1;
-                while(b >= base && mg_face_precedes(c, gcol[b], first_local, end_local)) {gcol[b+1] = gcol[b]; gq[b+1] = gq[b]; b--;}
-                gcol[b+1] = c; gq[b+1] = q;
-            }
+            mg_sort_row(gcol + base, gq + base, k - base, first_local, end_local);
         });
         /* every row's cross-task faces: count, place, copy (in the row's order) */
         Kokkos::parallel_for("mg_graph_remote_count", Kokkos::RangePolicy<>(0, n_gas), KOKKOS_LAMBDA(const int i) {
