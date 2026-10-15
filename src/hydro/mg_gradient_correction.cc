@@ -673,9 +673,10 @@ static void mg_select_anchors(void)
 /* For every row i, with x_j of other-task rows exchanged: the edge form v_i = sum_j q_ij (x_i - x_j)
  * (exact for Rdiag = sum_j q_ij, and free of the cancellation of Rdiag x_i - sum_j q_ij x_j when the
  * coefficients span tens of orders of magnitude), its rounding bound e_i = 16 eps sum_j q_ij (|x_i| +
- * |x_j|) and the flux the correction puts through its faces, corr_i = sum_j q_ij |x_j - x_i|. Returns 0
- * if device memory could not be had on some task (collective). */
-static int mg_residual_terms(const double *x, double *v, double *e_bound, double *corr)
+ * |x_j|) and the flux the correction puts through its faces, corr_i = sum_j q_ij |x_j - x_i|, with its largest
+ * single-face term, envelope_i = max_j q_ij |x_j - x_i| (q without the matrix floor), which bounds the correction
+ * reused on steps without the solve. Returns 0 if device memory could not be had on some task (collective). */
+static int mg_residual_terms(const double *x, double *v, double *e_bound, double *corr, double *envelope)
 {
     const int n_gas = N_gas, n_req = (int) MG_RequestCol.size();
     const long long first_local = MG_TaskRowOffsets[ThisTask], end_local = first_local + n_gas;
@@ -687,6 +688,7 @@ static int mg_residual_terms(const double *x, double *v, double *e_bound, double
     double *d_v = mg_device_alloc<double>((size_t)n_gas, "mg_graph_residual_v");
     double *d_e = mg_device_alloc<double>((size_t)n_gas, "mg_graph_residual_bound");
     double *d_c = mg_device_alloc<double>((size_t)n_gas, "mg_graph_residual_corr");
+    double *d_env = mg_device_alloc<double>((size_t)n_gas, "mg_graph_residual_envelope");
     int failed = MG_DeviceAllocFailed;
     MPI_Allreduce(MPI_IN_PLACE, &failed, 1, MPI_INT, MPI_MAX, MPI_COMM_WORLD);
     MG_DeviceAllocFailed = 0;
@@ -697,18 +699,21 @@ static int mg_residual_terms(const double *x, double *v, double *e_bound, double
         const long long *gcol = MGd_col, *goff = MGd_off; const double *gq = MGd_q;
         Kokkos::parallel_for("mg_residual", Kokkos::RangePolicy<>(0, n_gas), KOKKOS_LAMBDA(const int i) {
             long long lend = mg_local_end(gcol, goff[i], goff[i+1], first_local, end_local);
-            double xi = d_x[i], vi = 0, ei = 0, ci = 0;
+            double xi = d_x[i], vi = 0, ei = 0, ci = 0, envi = 0;
             for(long long k = goff[i]; k < goff[i+1]; k++) {
                 double xj = (k < lend) ? d_x[gcol[k] - first_local] : d_xr[mg_lower_bound(d_req, 0, n_req, gcol[k])];
                 vi += gq[k] * (xi - xj); ei += gq[k] * (fabs(xi) + fabs(xj)); ci += gq[k] * fabs(xj - xi);
+                double face_flux = (gq[k] - 1.0e-60) * fabs(xj - xi);
+                if(face_flux > envi) {envi = face_flux;}
             }
-            d_v[i] = vi; d_e[i] = ei; d_c[i] = ci;
+            d_v[i] = vi; d_e[i] = ei; d_c[i] = ci; d_env[i] = envi;
         });
         gizmo_gpu_copy_to_host(v, d_v, (size_t)n_gas * sizeof(double));
         gizmo_gpu_copy_to_host(e_bound, d_e, (size_t)n_gas * sizeof(double));
         gizmo_gpu_copy_to_host(corr, d_c, (size_t)n_gas * sizeof(double));
+        gizmo_gpu_copy_to_host(envelope, d_env, (size_t)n_gas * sizeof(double));
     }
-    mg_device_free(d_x); mg_device_free(d_xr); mg_device_free(d_req); mg_device_free(d_v); mg_device_free(d_e); mg_device_free(d_c);
+    mg_device_free(d_x); mg_device_free(d_xr); mg_device_free(d_req); mg_device_free(d_v); mg_device_free(d_e); mg_device_free(d_c); mg_device_free(d_env);
     return !failed;
 }
 
@@ -1095,13 +1100,14 @@ static int mg_solve_backend(double *x)
 /* Public entry point                                                                     */
 /* ==================================================================================== */
 
-/* An accepted solve replaces the coefficients and the piece tokens together; anything else leaves the last accepted pair. */
-static void mg_commit_solution(const double *x)
+/* An accepted solve replaces the coefficients, the piece tokens and the envelopes together; anything else leaves the last accepted set. */
+static void mg_commit_solution(const double *x, const double *envelope)
 {
     for(int i = 0; i < N_gas; i++) {
         bool in_graph = (P[i].Type == 0) && (P[i].Mass > 0) && (CellP[i].Density > 0) && (P[i].KernelRadius > 0);
         CellP[i].MG_cgcoeff = in_graph ? x[i] : 0;
         CellP[i].MG_piece_token = in_graph ? (MG_Rows[i].piece + 1) : 0;
+        CellP[i].MG_envelope = in_graph ? envelope[i] : 0;
     }
 }
 
@@ -1174,7 +1180,7 @@ void mg_gradient_correction_calc(void)
 
     if(!stop_code) {mg_setup_exchange();}
     std::vector<double> x((size_t)DMAX(N_gas, 1), 0.0), resid((size_t)DMAX(N_gas, 1), 0.0);
-    std::vector<double> e_bound((size_t)DMAX(N_gas, 1), 0.0), corr_flux((size_t)DMAX(N_gas, 1), 0.0);
+    std::vector<double> e_bound((size_t)DMAX(N_gas, 1), 0.0), corr_flux((size_t)DMAX(N_gas, 1), 0.0), envelope((size_t)DMAX(N_gas, 1), 0.0);
     if(!stop_code) {
         long long asymmetric = mg_count_asymmetric_entries();
         if(asymmetric > 0) {
@@ -1244,7 +1250,7 @@ void mg_gradient_correction_calc(void)
             stop_code = 8803;
         }
     }
-    if(!stop_code && !mg_residual_terms(x.data(), resid.data(), e_bound.data(), corr_flux.data())) {
+    if(!stop_code && !mg_residual_terms(x.data(), resid.data(), e_bound.data(), corr_flux.data(), envelope.data())) {
         if(ThisTask == 0) {PRINT_WARNING("MG: device memory for the residual check could not be allocated on some task (task 0 asked for %g MB)", MG_DeviceBytesRequested / (1024. * 1024.));}
         stop_code = 8806;
     }
@@ -1275,7 +1281,7 @@ void mg_gradient_correction_calc(void)
                 PRINT_WARNING("MG solve %s after %d iterations: |r|/|b| %g (tolerance %g), sqrt(sum r^2/sum s^2) %g -> %g, max |r|/d %g -> %g",
                               outcome, iterations, metrics.G, MG_CG_TOL, metrics.P0, metrics.P, metrics.M0, metrics.M);
             }
-            if(improves) {mg_commit_solution(x.data());}
+            if(improves) {mg_commit_solution(x.data(), envelope.data());}
 #ifdef DIVBCLEANING_DEDNER
             if(converged && improves) {   /* the face divergence is now zero, so the cleaning potential it sourced is spurious */
                 for(int i = 0; i < N_gas; i++) {if(P[i].Type == 0) {CellP[i].Phi = CellP[i].PhiPred = CellP[i].DtPhi = 0;}}

@@ -110,6 +110,7 @@ struct GasGraddata_in_
 #ifdef MHD_MODIFIED_GRADIENT
     MyFloat MG_cgcoeff;
     long long MG_piece_token;
+    MyDouble MG_envelope;
 #endif
 #endif
 #ifdef SPHAV_CD10_VISCOSITY_SWITCH
@@ -401,7 +402,9 @@ void gradient_accumulate_neighbor(struct GasGraddata_in_ *local, struct GasGradd
 #ifdef MHD_MODIFIED_GRADIENT
         {
             /* the MG shift (c_j-c_i)(r^2/8) A of both face states changes (B_R+B_L).A by (c_j-c_i)(r^2/4)|A|^2 */
-            double mg_delta = 0.25 * r2 * mg_face_coefficient_difference(local->MG_cgcoeff, local->MG_piece_token, CellP[j].MG_cgcoeff, CellP[j].MG_piece_token) * Face_Area_Vec.norm_sq();
+            double mg_delta = 0.25 * r2 * mg_face_coefficient_difference(local->MG_cgcoeff, local->MG_piece_token, local->MG_envelope,
+                                                                         CellP[j].MG_cgcoeff, CellP[j].MG_piece_token, CellP[j].MG_envelope,
+                                                                         r2, Face_Area_Vec.norm_sq(), All.Flag_SkipMGSolve) * Face_Area_Vec.norm_sq();
             out->FaceDotB += mg_delta;
         }
 #endif
@@ -709,7 +712,9 @@ void gradient_accumulate_neighbor_iter(struct GasGraddata_in_ *local, struct Gas
 #ifdef MHD_MODIFIED_GRADIENT
         {
             /* the MG shift (c_j-c_i)(r^2/8) A of both face states changes (B_R+B_L).A by (c_j-c_i)(r^2/4)|A|^2 */
-            double mg_delta = 0.25 * r2 * mg_face_coefficient_difference(local->MG_cgcoeff, local->MG_piece_token, CellP[j].MG_cgcoeff, CellP[j].MG_piece_token) * Face_Area_Vec.norm_sq();
+            double mg_delta = 0.25 * r2 * mg_face_coefficient_difference(local->MG_cgcoeff, local->MG_piece_token, local->MG_envelope,
+                                                                         CellP[j].MG_cgcoeff, CellP[j].MG_piece_token, CellP[j].MG_envelope,
+                                                                         r2, Face_Area_Vec.norm_sq(), All.Flag_SkipMGSolve) * Face_Area_Vec.norm_sq();
             out->FaceDotB += mg_delta;
         }
 #endif

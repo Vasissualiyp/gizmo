@@ -685,7 +685,7 @@ int sink_spawn_particle_wind_shell( int i, int dummy_cell_i_to_clone, int num_al
         domain_clear_work_history(j);   /* a new cell, not a copy of the template's work */
         wakeup_sidecar_mark(j);   /* whole-struct clone inherits the template particle's wakeup into the spawned slot */
 #ifdef MHD_MODIFIED_GRADIENT
-        CellP[j].MG_cgcoeff = 0; CellP[j].MG_piece_token = 0;   /* a new cell has no MG state (the template's belongs to another place) */
+        CellP[j].MG_cgcoeff = 0; CellP[j].MG_piece_token = 0; CellP[j].MG_envelope = 0;   /* a new cell has no MG state (the template's belongs to another place) */
 #endif
 
 #if defined(SINK_TEST_WIND_MIXED_FASTSLOW) || defined(SINK_RIAF_SUBEDDINGTON_MODEL)
