@@ -287,12 +287,7 @@ void energy_budget_gravity_report(void)
 /* DIAGNOSTIC: direct double-precision total energy over Type-5 particles, evaluated at the
  * sync point at the top of the loop. Unsoftened PE (exact for r >> softening).
  *
- * KETJU subtlety: for chain members the host-KDK handoff leaves P.Vel half-a-kick off the true
- * t_sync velocity (the 2nd host half-kick and the negative half-kick do not perfectly cancel),
- * so P.Vel gives a spuriously large energy error at fast (e.g. pericenter) phases even though the
- * orbit/energy are actually conserved. We therefore use P.KetjuTrueVel — MSTAR's true end-of-step
- * velocity, captured before the negative half-kick — for KETJU-integrated particles, and plain
- * P.Vel for everyone else. (KE_raw from P.Vel is still printed for comparison.) */
+ * KETJU chain pairs (same KetjuChainID) are evaluated unsoftened. */
 static void incode_total_energy(void)
 {
     /* MPI-aware: gather all Type-5 particles to rank 0 and do the exact double-precision
@@ -323,10 +318,6 @@ static void incode_total_energy(void)
         double vx=P[i].Vel[0], vy=P[i].Vel[1], vz=P[i].Vel[2];
         sloc[k*W+10]=0.0;
 #ifdef KETJU_REGULARIZATION
-        if(P[i].KetjuIntegrated) {
-            px=P[i].KetjuTruePos[0]; py=P[i].KetjuTruePos[1]; pz=P[i].KetjuTruePos[2];
-            vx=P[i].KetjuTrueVel[0]; vy=P[i].KetjuTrueVel[1]; vz=P[i].KetjuTrueVel[2];
-        }
         sloc[k*W+10]=(P[i].KetjuIntegrated ? 1.0 : 0.0);
 #endif
         sloc[k*W+0]=px; sloc[k*W+1]=py; sloc[k*W+2]=pz;
@@ -338,7 +329,7 @@ static void incode_total_energy(void)
         sloc[k*W+6]=ForceSoftening_KernelRadius(i);
         sloc[k*W+7]=0.0; sloc[k*W+8]=0.0;
 #ifdef KETJU_REGULARIZATION
-        sloc[k*W+7]=(double)P[i].KetjuRegionTag;
+        sloc[k*W+7]=(double)P[i].KetjuChainID; /* same nonzero id = same chain */
         sloc[k*W+8]=1.0;
 #endif
         sloc[k*W+9]=P[i].Mass;
@@ -470,11 +461,6 @@ void run(void)
 
         set_non_standard_physics_for_current_time();
 
-#ifdef KETJU_REGULARIZATION
-        ketju_tag_regions();  /* tag chain members BEFORE this first gravity so member<->member forces are
-                               * excluded from the very first GravAccel that seeds MSTAR (else the full
-                               * internal force is injected once as a spurious external kick) */
-#endif
         compute_grav_accelerations();	/* compute gravitational accelerations for synchronous particles */
 
         compute_hydro_densities_and_forces();	/* densities, gradients, & hydro-accels for synchronous particles */
@@ -503,17 +489,10 @@ void run(void)
             break;
         }
 
-#ifdef KETJU_REGULARIZATION
-        ketju_limit_timesteps();    /* compute region-adaptive external timesteps + tags BEFORE
-                                     * find_timesteps, so get_timestep hands every current chain member
-                                     * the shared global-min bin THIS step and bin/sync/MSTAR-dt/drift
-                                     * derive consistently from it (STARFORGE 26d425fd multi-region sync).
-                                     * The reversed order (find before limit) was the Stella cluster
-                                     * energy-leak regression: get_timestep read a stale/zero region cap,
-                                     * so regions desynced onto different power-of-2 bins and the
-                                     * inter-region KDK coupling was evaluated at inconsistent times. */
-#endif
         find_timesteps();		/* find-timesteps */
+#if defined(KETJU_REGULARIZATION)  /* STARFORGE scheme: after find_timesteps */
+        ketju_limit_timesteps();    /* force chain particles to shared timebin */
+#endif
 #ifdef HERMITE_INTEGRATION
         HermiteOnlyFlag = 1;
         gravity_tree();	/* re-compute gravitational accelerations for synchronous particles */

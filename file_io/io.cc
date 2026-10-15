@@ -727,7 +727,7 @@ void fill_write_buffer(enum iofields blocknr, int *startindex, int pc, int type)
         break;
         
         case IO_DUSTCHEMGRAINBINSLOPES:    /* slopes for each grain size bin for each dust species */
-#if defined(GALSF_ISMDUSTCHEM_GRAINSIZEEVO) 
+#if defined(GALSF_ISMDUSTCHEM_GRAINSIZEEVO)
             for(n = 0; n < pc; pindex++)
                 if(P[pindex].Type == type)
                 {
@@ -1198,7 +1198,7 @@ case IO_DUSTCHEM_SHAT_MASSRATE:    /* shattering rate for each grain size bin fo
             break;
 
         case IO_KETJU_SPIN:
-#if defined(KETJU_REGULARIZATION) && defined(SINK_PARTICLES)
+#if defined(KETJU_REGULARIZATION) && defined(KETJU_SINKS)
             for(n = 0; n < pc; pindex++)
                 if(P[pindex].Type == type)
                 {
@@ -1653,7 +1653,7 @@ case IO_DUSTCHEM_SHAT_MASSRATE:    /* shattering rate for each grain size bin fo
 #ifdef CHEMCOOL
                     *fp++ = (MyOutputFloat) CellP[pindex].CoolingRate_CHEMCOOL;
 #else
-                    double ne = CellP[pindex].Ne, ne_out=ne; u = CellP[pindex].InternalEnergyPred; tcool = GetCoolingTime(u, CellP[pindex].Density * All.cf_a3inv, ne, &ne_out, pindex);
+                    double ne = CellP[pindex].Ne, ne_out=ne; u = CellP[pindex].InternalEnergyPred; tcool = GetCoolingTime(u, CellP[pindex].Density * All.cf_a3inv, ne, &ne_out, pindex, P, CellP);
                     double coolrate_to_output = 0; if(tcool != 0) {coolrate_to_output = u / tcool;}
                     *fp++ = (MyOutputFloat) coolrate_to_output;
 #endif
@@ -2303,6 +2303,7 @@ case IO_DUSTCHEM_SHAT_MASSRATE:    /* shattering rate for each grain size bin fo
 #endif
         break;
 
+
         case IO_LASTENTRY:
             endrun(213);
             break;
@@ -2532,7 +2533,7 @@ int get_bytes_per_blockelement(enum iofields blocknr, int mode)
             break;
 
         case IO_KETJU_SPIN:
-#if defined(KETJU_REGULARIZATION) && defined(SINK_PARTICLES)
+#if defined(KETJU_REGULARIZATION) && defined(KETJU_SINKS)
             if(mode) bytes_per_blockelement = 3 * sizeof(MyInputFloat);
             else bytes_per_blockelement = 3 * sizeof(MyOutputFloat);
 #endif
@@ -2767,6 +2768,7 @@ int get_bytes_per_blockelement(enum iofields blocknr, int mode)
             else
                 bytes_per_blockelement = 9 * sizeof(MyOutputFloat);
             break;
+
 
         case IO_LASTENTRY:
             endrun(214);
@@ -3132,6 +3134,7 @@ int get_values_per_blockelement(enum iofields blocknr)
             values = 9;
             break;
 
+
         case IO_LASTENTRY:
             endrun(215);
             break;
@@ -3345,8 +3348,8 @@ long get_particles_in_block(enum iofields blocknr, int *typelist)
             break;
 
         case IO_KETJU_FINAL_VEL:
-            for(i = 0; i < 6; i++) {if(i != 4 && i != 5) {typelist[i] = 0;}}
-            return nstars + header.npart[5];
+            for(i = 0; i < 6; i++) {if(i != 5) {typelist[i] = 0;}}
+            return header.npart[5];
             break;
 
         case IO_KETJU_SPIN:
@@ -3438,6 +3441,7 @@ long get_particles_in_block(enum iofields blocknr, int *typelist)
             for(i = 0; i < 6; i++) {if(i != 5) {typelist[i] = 0;}}
             return header.npart[5];
             break;
+
 
         case IO_LASTENTRY:
             endrun(216);
@@ -3574,7 +3578,7 @@ int blockpresent(enum iofields blocknr)
             break;
 
             case IO_DUSTCHEMGRAINBINSLOPES:
-#if defined(GALSF_ISMDUSTCHEM_GRAINSIZEEVO) 
+#if defined(GALSF_ISMDUSTCHEM_GRAINSIZEEVO)
             return 1;
 #endif
             break;      
@@ -3772,7 +3776,7 @@ int blockpresent(enum iofields blocknr)
             break;
 
         case IO_KETJU_SPIN:
-#if defined(KETJU_REGULARIZATION) && defined(SINK_PARTICLES)
+#if defined(KETJU_REGULARIZATION) && defined(KETJU_SINKS)
             return 1;
 #endif
             break;
@@ -4233,6 +4237,7 @@ int blockpresent(enum iofields blocknr)
             return 1;
 #endif
             break;
+
 
         case IO_LASTENTRY: /* will not occur */
             break;

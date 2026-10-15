@@ -579,20 +579,8 @@ extern struct global_data_all_processes
   double MaxPISearchRadius;     /*!< maximum PI search radius [kpc] */
 #endif
 /* ShieldingLength already declared above (line ~475) */
-#ifdef KETJU_REGULARIZATION
-  double KetjuRegionRadius;              /*!< physical radius of KETJU regions [code units] */
-  double KetjuMinBHMass;                 /*!< minimum Type 5 mass for region center [code units], 0=off */
-  double KetjuMinStarMass;               /*!< minimum Type 4 mass for region center [code units], 0=off */
-  double KetjuIntegrationTolerance;      /*!< GBS relative tolerance (default 1e-9) */
-  char   KetjuPNTerms[20];              /*!< PN term flags: "all","none","no_spin", or bitstring */
-  int    KetjuEnableBHMergerKicks;       /*!< enable GW recoil kicks for BH mergers */
-  double KetjuTimestepLimitingFactor;    /*!< radius factor for timestep limiting (default 100) */
-  int    KetjuMaxStepCount;              /*!< max MSTAR integration steps before bail-out (default 100000, 0=off) */
-  double KetjuExpandBinariesFactor;      /*!< expand tight binaries if period < factor*dt (default 0=off, typical 0.1) */
-  double KetjuMinParticlesPerTask;       /*!< minimum particles per compute task for load balancing (default 10) */
-#endif
 
-#if defined(COSMIC_RAY_FLUID) && defined(GALSF_RESOLVEDISM_FB) && !defined(GALSF_FB_FIRE_STELLAREVOLUTION)
+#if defined(COSMIC_RAY_FLUID) && !defined(GALSF_FB_FIRE_STELLAREVOLUTION) /* complement of the FIRE declaration; begrun registers it under COSMIC_RAY_FLUID */
   double CosmicRay_SNeFraction;   /*!< fraction of SN energy injected as CRs (typically 0.1) */
 #endif
 
@@ -844,6 +832,20 @@ extern struct global_data_all_processes
     double CosmicRayDiffusionCoeff;
 #endif
 
+#ifdef KETJU_REGULARIZATION
+  double KetjuRegionRadius;              /*!< physical radius of KETJU regions [code units] */
+  double KetjuMinBHMass;                 /*!< minimum Type 5 stage-7 (BH/relic) mass to act as always-center [code units], 0=off */
+  double KetjuMinStarMass;               /*!< minimum Type 5 stage<7 (star) mass to be a chain candidate [code units], 0=off */
+  double KetjuIntegrationTolerance;      /*!< GBS relative tolerance (default 1e-9) */
+  char   KetjuPNTerms[20];              /*!< PN term flags: "all","none","no_spin", or bitstring */
+  int    KetjuEnableBHMergerKicks;       /*!< enable GW recoil kicks for BH mergers */
+  int    KetjuUseStarStarSoftening;      /*!< keep softening between stars inside chain */
+  double KetjuTimestepLimitingFactor;    /*!< radius factor for timestep limiting (default 100) */
+  int    KetjuMaxStepCount;              /*!< max MSTAR integration steps before bail-out (default 100000, 0=off) */
+  double KetjuExpandBinariesFactor;      /*!< expand tight binaries if period < factor*dt (default 0=off, typical 0.1) */
+  double KetjuMinParticlesPerTask;       /*!< minimum particles per compute task for load balancing (default 10) */
+#endif
+
 #ifdef GALSF		/* star formation and feedback sector */
   double CritOverDensity;
   double CritPhysDensity;
@@ -889,6 +891,8 @@ extern struct global_data_all_processes
     double CosmicRay_SNeFraction;
 #endif
 #endif
+
+
 #ifdef GALSF_FB_FIRE_RT_HIIHEATING
     double HIIRegion_fLum_Coupled;
 #endif
@@ -1230,11 +1234,14 @@ extern struct gravdata_in
 #if (SINGLE_STAR_TIMESTEPPING > 0)
     int SuperTimestepFlag;  /*!< 2 if allowed to super-timestep, 1 if a candidate for super-timestepping, 0 otherwise */
 #endif
+#ifdef KETJU_REGULARIZATION
+#ifdef KETJU_TYPE4_STARS
+    double KetjuChainSphere[4]; /*!< chain bounding sphere of the target (tree opens nodes overlapping it) */
+#endif
+    MyIDType KetjuChainID;  /*!< shared chain ID for KETJU members — tree walk uses this to skip same-chain Type-5 neighbors in Min_Sink_Approach_Time/Freefall_time */
+#endif
     MyFloat OldAcc;
     int NodeList[NODELISTLENGTH];
-#ifdef KETJU_REGULARIZATION
-    int KetjuRegionTag;     /*!< KETJU chain-region id of the target (0 if none); leaves sharing this nonzero tag are excluded from the target's force so GravAccel becomes the exact external field */
-#endif
 }
  *GravDataIn,			/*!< holds particle data to be exported to other processors */
  *GravDataGet;			/*!< holds particle data imported from other processors */
@@ -1792,6 +1799,9 @@ extern struct star_direct_data
     MyFloat Mass;
     MyFloat Soft;
     MyIDType ID;
+#ifdef KETJU_REGULARIZATION
+    MyIDType KetjuChainID; /* same-chain pairs within the region radius do not set dt_2body, as in the tree walk */
+#endif
 }
  *StarDirect;
 extern int N_StarDirect;

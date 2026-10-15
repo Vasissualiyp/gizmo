@@ -416,13 +416,13 @@ integertime get_timestep(int p,		/*!< particle index */
                          int flag	/*!< either 0 for normal operation, or finite timestep to get corresponding aphys */ )
 {
     double ax, ay, az, ac, csnd = 0, dt = All.MaxSizeTimestep, dt_courant = 0, dt_divv = 0;
-#ifdef KETJU_REGULARIZATION
-    /* KETJU chain member (flag persists from the previous step's region integration, valid here
-     * at timestep-determination time): take the EXTERNAL-field timestep, not the tiny internal
-     * orbit — MSTAR sub-cycles the internal orbit. */
-    int p_ketju_member = P[p].KetjuIntegrated; (void)p_ketju_member;
-#endif
     integertime ti_step; int k; k=0;
+#if defined(KETJU_REGULARIZATION)
+    /* a chain member whose MSTAR step has just ended, with its chain-external field computed at that
+       end (ketju_compute_com_quantities): MSTAR integrates the chain internally, so the host step
+       need only follow the field external to the chain */
+    int ketju_member = (P[p].KetjuIntegrated && (P[p].KetjuChainID != 0) && (P[p].COM_dt_tidal > 0)); (void)ketju_member;
+#endif
 #ifdef TRANSPORT_SUBCYCLE
     if(P[p].Type == 0) {CellP[p].Transport_Dt_Subcycle = MAX_REAL_NUMBER;}
 #endif
@@ -486,6 +486,9 @@ integertime get_timestep(int p,		/*!< particle index */
         ax = All.cf_a2inv * P[p].GravAccel[0];
         ay = All.cf_a2inv * P[p].GravAccel[1];
         az = All.cf_a2inv * P[p].GravAccel[2];
+#ifdef KETJU_REGULARIZATION
+        if(ketju_member) {ax = All.cf_a2inv * P[p].COM_GravAccel[0]; ay = All.cf_a2inv * P[p].COM_GravAccel[1]; az = All.cf_a2inv * P[p].COM_GravAccel[2];} /* chain-external field: MSTAR integrates the internal one */
+#endif
 #ifdef PMGRID
         ax += All.cf_a2inv * P[p].GravPM[0];
         ay += All.cf_a2inv * P[p].GravPM[1];
@@ -579,6 +582,9 @@ integertime get_timestep(int p,		/*!< particle index */
 
 #ifdef TIDAL_TIMESTEP_CRITERION // tidal criterion obtains the same energy error in an optimally-softened Plummer sphere over ~100 crossing times as the Power 2003 criterion
     double tidal_mag_dt = P[p].tidal_tensorps.frobenius_norm_sq();
+#if defined(KETJU_REGULARIZATION)
+    if(ketju_member) {double t2 = P[p].COM_dt_tidal * P[p].COM_dt_tidal; tidal_mag_dt = 1. / (t2 * t2);} /* |T_external|_F^2 */
+#endif
     double tidal_prefac = (P[p].Type == 0) ? TIDAL_TIMESTEP_PREFAC_GAS : TIDAL_TIMESTEP_PREFAC;
     double dt_tidal = tidal_prefac * sqrt(All.ErrTolIntAccuracy / (All.cf_a3inv * sqrt(tidal_mag_dt / 6))); // recovers sqrt(eta) * tdyn for a Keplerian potential
     if(P[p].Type == 0) {dt_tidal = DMIN(sqrt(All.ErrTolIntAccuracy/(All.G*CellP[p].Density*All.cf_a3inv)), dt_tidal);} // gas self-gravity timescale as a bare minimum
@@ -598,9 +604,6 @@ integertime get_timestep(int p,		/*!< particle index */
 #if (SINGLE_STAR_TIMESTEPPING > 0)
     if(P[p].SuperTimestepFlag>=2) {dt_tidal = sqrt(2*All.ErrTolIntAccuracy) * P[p].COM_dt_tidal;}
 #endif
-#if defined(KETJU_REGULARIZATION) && (SINGLE_STAR_TIMESTEPPING > 0)
-    if(p_ketju_member && P[p].is_in_a_binary) {dt_tidal = sqrt(2*All.ErrTolIntAccuracy) * P[p].COM_dt_tidal;}
-#endif
     dt=DMIN(dt,dt_tidal);
 #endif
 
@@ -608,6 +611,10 @@ integertime get_timestep(int p,		/*!< particle index */
     if(P[p].Type == 5)
     {
         double dt_2body = sqrt(2*All.ErrTolIntAccuracy) * SINK_TIMESTEP_SAFETY_FACTOR / (1./P[p].Min_Sink_Approach_Time + 1./P[p].Min_Sink_Freefall_time); // timestep is harmonic mean of freefall and approach time
+        /* with KETJU_REGULARIZATION the tree walk and the direct star sum leave same-chain neighbours
+           within the region radius out of Min_Sink_Approach_Time/Freefall_time (gravity/forcetree.cc,
+           gravity/star_direct_gravity.cc), so for a chain member this is the approach to stars outside
+           its chain */
 #ifdef HERMITE_INTEGRATION
         if(eligible_for_hermite(p)) dt_2body /= SINK_TIMESTEP_SAFETY_FACTOR;
 #endif
@@ -627,10 +634,6 @@ integertime get_timestep(int p,		/*!< particle index */
                 dt_2body = 2.*M_PI / SUPERTIMESTEPPING_NUM_STEPS_PER_ORBIT * (binary_dt_2body*2); // orbital frequency is |dr x dv| / r^2, so timestep will be inverse to this
 	        } else {P[p].SuperTimestepFlag = 0;}  // we still have to take a proper short N-body integration timestep due to a third body whose approach requires careful integration, so no super timestepping is possible
 	    }
-#endif
-#ifdef KETJU_REGULARIZATION
-        /* KETJU members: skip the internal binary-orbit constraint (MSTAR sub-cycles the orbit) */
-        if(!p_ketju_member)
 #endif
         dt = DMIN(dt, dt_2body);
 #ifdef HERMITE_INTEGRATION
@@ -1178,7 +1181,7 @@ integertime get_timestep(int p,		/*!< particle index */
 #else
             dt_accr = 0.1 * DMIN(P[p].Sink_Mass, All.MaxMassForParticleSplit) / P[p].Sink_Mdot;
 #endif
-#ifdef SINGLE_STAR_FB_JETS	    
+#ifdef SINGLE_STAR_FB_JETS	
             dt_accr = DMIN(dt_accr, target_mass_for_wind_spawning(p) / P[p].Sink_Mdot); 
 #endif
         } // if(P[p].Sink_Mdot > 0 && P[p].Sink_Mass > 0)
@@ -1307,13 +1310,6 @@ integertime get_timestep(int p,		/*!< particle index */
 #endif
     ti_step = (integertime) (dt / All.Timebase_interval);
 #ifndef STOP_WHEN_BELOW_MINTIMESTEP
-#ifdef KETJU_REGULARIZATION
-    /* KETJU chain member: CAP the normal (external-field) step by the region-adaptive step, keeping
-     * whichever is SMALLER. The member bin comes from this one returned ti_step, so sync point /
-     * MSTAR dt (reg.ti_step) / host drift interval all match and the velocity trick lands exactly
-     * on MSTAR's end position (no operator-split energy injection). */
-    if(P[p].KetjuRegionTiStep > 0 && P[p].KetjuRegionTiStep < ti_step) { ti_step = P[p].KetjuRegionTiStep; }
-#endif
     if(ti_step<=1) ti_step=2;
 #endif
 

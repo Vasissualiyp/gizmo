@@ -73,7 +73,6 @@ void do_hermite_prediction(void);
 void do_hermite_correction(int final_pass);
 #endif
 #ifdef KETJU_REGULARIZATION
-void ketju_tag_regions(void);
 void ketju_limit_timesteps(void);
 void ketju_find_regions(void);
 void ketju_run_integration(void);
@@ -81,7 +80,6 @@ void ketju_set_final_velocities(void);
 void ketju_finish_step(void);
 int ketju_is_particle_in_region(int i);
 void ketju_mark_regions_stale(void);
-void ketju_finalize(void);
 void ketju_open_output_file(void);
 void ketju_close_output_file(void);
 void ketju_write_output(void);
@@ -173,6 +171,10 @@ static inline double c_light_code_reduced(int k_freq, struct particle_data *pp, 
 static inline double rsol_correction_factor_for_velocity_terms(int k_freq, struct particle_data *pp, struct gas_cell_data *cell) {return RT_SPEEDOFLIGHT_REDUCTION;}
 
 double ForceSoftening_KernelRadius(int p);
+#ifdef KETJU_TYPE4_STARS
+void tree_pair_softening(int p, double *soft, double *zeta);
+void ketju_snapshot_tree_softening(void);
+#endif
 double sigmoid_sqrt(double x);
 /* velocity_gradient_norm is now a member function of gas_cell_data — use cell[i].velocity_gradient_norm() */
 /* Free-function compat shims for modules synced verbatim from gizmo-cpp (the dust chemistry

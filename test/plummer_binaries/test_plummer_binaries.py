@@ -388,12 +388,27 @@ def _plot_variant_density_evolution(variant_id, snaps):
     # SINGLE_STAR_TIMESTEPPING=0, which leaves SINGLE_STAR_FIND_BINARIES off; the two are a
     # compile-time #error together (see precompiler_logic.h).
     pytest.param(("SINGLE_STAR_DIRECT_GRAVITY",), id="direct_gravity"),
+    # KETJU/MSTAR integrates each binary as a regularized chain; the tree still sees every star.
+    pytest.param(("KETJU_REGULARIZATION",), id="ketju"),
 ])
 def test_plummer_binaries(num_mpi_ranks, num_omp_threads, extra_config_flags, request):
     _ensure_ic()
+
+    # KETJU variant: one crossing time (3.24) rather than ten, for run time. The coupling
+    # conserves energy as well as Hermite here (|dE|/KE0 ~3e-5 at t=3.24, 5.7e-4 at 32.4 vs
+    # Hermite's 1.4e-3); the "~1%/crossing residual" the variant was first written around was
+    # the coupling bugs fixed on this branch, not a property of the method.
+    is_ketju = "KETJU_REGULARIZATION" in extra_config_flags
+    ketju_timemax_override = 3.24 if is_ketju else None
+
     clean_test_outputs(TEST_NAME, extra_config_flags)
     time_max = float(parse_params(f"{TEST_DIR}/{TEST_NAME}.params")["TimeMax"])
     overrides = None
+    if is_ketju:
+        # KETJU keeps every chain member active every step (~512 force updates per step), so the
+        # default TreeDomainUpdateFrequency=0.1 would decompose every step (~80% of wall time).
+        time_max = ketju_timemax_override
+        overrides = {"TimeMax": ketju_timemax_override, "TreeDomainUpdateFrequency": 10}
     build_and_run_test(TEST_NAME, num_mpi_ranks, num_omp_threads, extra_config_flags,
                        param_overrides=overrides)
 
@@ -444,8 +459,12 @@ def test_plummer_binaries(num_mpi_ranks, num_omp_threads, extra_config_flags, re
     e0, ke0, pe0 = _total_energy(vel0, mass0, pot0)
     ef, _, _ = _total_energy(velf, massf, potf)
     rel_e_err = abs(ef - e0) / abs(ke0)
-    assert rel_e_err < 0.01, (
-        f"Energy not conserved: |dE|/KE_0 = {rel_e_err:.4f} (>1%)  "
+    # 2% for the KETJU variant is the threshold it was written with; the measured error is
+    # ~3e-5, so this catches only gross breakage. Tighten once the chain-member snapshot state
+    # (chord positions/velocities mid-step) is written exactly and the metric can use it.
+    energy_tol = 0.02 if is_ketju else 0.01
+    assert rel_e_err < energy_tol, (
+        f"Energy not conserved: |dE|/KE_0 = {rel_e_err:.4f} (>{energy_tol*100:.0f}%)  "
         f"(E0={e0:.4g}, Ef={ef:.4g}, KE0={ke0:.4g}, PE0={pe0:.4g})"
     )
 

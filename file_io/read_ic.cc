@@ -727,7 +727,7 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
             break;
 
         case IO_KETJU_SPIN:
-#if defined(KETJU_REGULARIZATION) && defined(SINK_PARTICLES)
+#if defined(KETJU_REGULARIZATION) && defined(KETJU_SINKS)
             for(n = 0; n < pc; n++) {for(k = 0; k < 3; k++) {P[offset + n].KetjuSpin[k] = *fp++;}}
 #endif
             break;
@@ -857,6 +857,7 @@ void empty_read_buffer(enum iofields blocknr, int offset, int pc, int type)
         case IO_SOFT:
         case IO_SHOCKMACHNUM:
             break;
+
 
         case IO_LASTENTRY:
             endrun(220);

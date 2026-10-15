@@ -332,16 +332,23 @@ void init(void)
 #endif
 #ifdef KETJU_REGULARIZATION
             P[i].KetjuIntegrated = 0;
-            P[i].KetjuFreshScatter = 0;
-            P[i].KetjuRegionTag = 0;
-            P[i].KetjuTrickUntil = 0;
-            P[i].KetjuRegionTiStep = 0;
-            for(int kjv = 0; kjv < 3; kjv++) { P[i].KetjuFinalVel[kjv] = P[i].Vel[kjv]; P[i].KetjuTrueVel[kjv] = P[i].Vel[kjv]; P[i].KetjuTruePos[kjv] = P[i].Pos[kjv]; P[i].KetjuExtAccel[kjv] = 0; }
-#ifdef SINK_PARTICLES
+            P[i].KetjuChainID = 0;
+#ifdef HERMITE_INTEGRATION
+            P[i].HermiteHistoryStale = 0;
+#endif
+#ifdef KETJU_SINKS
             for(int j = 0; j < 3; j++) P[i].KetjuSpin[j] = 0;
 #endif
+#if !(SINGLE_STAR_TIMESTEPPING > 0)
+            P[i].COM_dt_tidal = 0;  /* timestep.cc treats 0 as "not set" → uses regular dt_tidal */
+            for(int j = 0; j < 3; j++) P[i].COM_GravAccel[j] = 0;
+#endif
+#ifdef KETJU_TYPE4_STARS
+            {double s2[2], z2[2]; tree_pair_softening(i, s2, z2); for(int k = 0; k < 2; k++) {P[i].KetjuTreeSoft[k] = s2[k]; P[i].KetjuTreeZeta[k] = z2[k];}}
+            for(int k = 0; k < 4; k++) {P[i].KetjuChainSphere[k] = 0;}
+#endif
 #ifdef KETJU_PN_REMNANT_TAG
-            P[i].RemnantType = -1;  /* unknown / still alive; FB stamps real value at SN time */
+            P[i].RemnantType = -1;  /* still alive; FB stamps the remnant type at SN time */
 #endif
 #endif
 #ifdef GALSF_FB_MECHANICAL

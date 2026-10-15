@@ -35,12 +35,12 @@ extern ALIGN(32) struct particle_data
     Vec3<MyFloat> OldPos;
     Vec3<MyFloat> OldVel;
     Vec3<MyFloat> OldJerk;
+#ifdef KETJU_REGULARIZATION
+    short int HermiteHistoryStale;      /*!< 1 when particle just exited a KETJU chain — fall back to KDK for one step until OldX is reseeded */
+#endif
 #ifdef HERMITE_SYMMETRIC_TIMESTEP_ACTIVE
     MyDouble dt_crit_last;  /*!< step criterion (code time, all factors and caps, not quantised) from the latest get_timestep call; 0 if not Hermite-eligible then */
     MyDouble dt_crit_prev;  /*!< dt_crit_last as it stood when the current step started */
-#endif
-#ifdef KETJU_REGULARIZATION
-    short int HermiteHistoryStale;      /*!< 1 when particle just exited a KETJU chain — fall back to KDK for one step until OldX is reseeded */
 #endif
 #endif
 #ifdef COUNT_MASS_IN_GRAVTREE
@@ -339,6 +339,13 @@ extern ALIGN(32) struct particle_data
     int SuperTimestepFlag; // >=2 if allowed to super-timestep (increases with each drift/kick), 1 if a candidate for super-timestepping, 0 otherwise
     MyDouble COM_dt_tidal; //timescale from tidal tensor evaluated at the center of mass without contribution from the companion
     Vec3<MyDouble> COM_GravAccel; //gravitational acceleration evaluated at the center of mass without contribution from the companion
+#elif defined(KETJU_REGULARIZATION)
+    /* KETJU also needs COM-frame quantities to size the host step for chain
+     * members: COM_dt_tidal sets dt_tidal and COM_GravAccel sets the
+     * acceleration-based dt (otherwise the chain partner's gravity dominates
+     * P[i].GravAccel and forces a tiny dt regardless of any tidal fix). */
+    MyDouble COM_dt_tidal;
+    Vec3<MyDouble> COM_GravAccel;
 #endif
 #ifdef SINGLE_STAR_FB_TIMESTEPLIMIT
     MyFloat MaxFeedbackVel; // maximum signal velocity of any feedback mechanism emanating from the star
@@ -366,22 +373,24 @@ extern ALIGN(32) struct particle_data
     MyFloat Mass_final; //final mass of the star before going SN (Since this is not saved to snapshots, hard restarts in the middle of spawning an SN will do weird things)
 #endif
 #endif
-    
+
 #ifdef KETJU_REGULARIZATION
-    MyDouble KetjuFinalVel[3];  /* velocity swapped into P.Vel for the host KDK after drift (carries the pre-applied -neg2 half-kick) */
-    MyDouble KetjuTrueVel[3];   /* TRUE physical end-of-step (t_sync) velocity straight from MSTAR, before any host-KDK half-kick bookkeeping — use this for energy diagnostics / analysis, NOT P.Vel (which is left half-a-kick off for chain members) */
-    MyDouble KetjuTruePos[3];   /* TRUE physical end-of-step (t_sync) position straight from MSTAR — synchronized with KetjuTrueVel. P.Pos is reconstructed by the velocity-trick drift and can be slightly phase-desynced from the velocity at pericenter; use this pair for diagnostics. */
-    MyDouble KetjuExtAccel[3];  /* EXTERNAL gravitational acceleration on this chain member. With member-member pairs excluded in the tree walk (see KetjuRegionTag), the member's tree GravAccel IS the external field, so this is just a copy of GravAccel. The host KDK applies only this external field to chain members; MSTAR integrates the internal forces. =0 for an isolated region, reducing exactly to pure-MSTAR. */
-    int KetjuRegionTag;         /* nonzero region identifier (region index+1) used by the gravity tree to EXCLUDE member<->member interactions: two particles with the same nonzero tag skip their mutual force so each member's GravAccel is the exact external (non-member) field. 0 = not a chain member. Set in ketju_limit_timesteps and ketju_find_regions before each gravity_tree call; region ordering is globally consistent (merge over gathered centers), so the tag agrees across MPI tasks. */
+    MyDouble KetjuFinalVel[3];  /* true physical velocity from KETJU, swapped in after drift */
     short int KetjuIntegrated;  /* 1 if this particle was KETJU-integrated this step */
-    short int KetjuFreshScatter; /* 1 only between scatter_results (MSTAR results written this step) and ketju_set_final_velocities. Guards the velocity swap: a freshly CAPTURED member whose region was NOT integrated this step (members still inactive on the capture sync, run_integration skipped it) has KetjuIntegrated=1 but STALE KetjuFinalVel — swapping that in destroyed the state (one-step dE=+194 in the episodic test). */
-    integertime KetjuTrickUntil; /* integer time at which this member's velocity-trick drift CHORD completes (= Ti at scatter + reg.ti_step). The final-velocity swap must NOT happen before this: ketju_set_final_velocities runs after EVERY sync, and when other particles create an intermediate sync mid-chord, a premature swap replaces the trick velocity with the physical one for the REMAINDER of the drift — the member then misses MSTAR's end position entirely (trace-verified: a 15 AU hard binary was teleported to 230 AU separation, +0.92 total energy in one step). Always-on configs never hit this (all members share the global-min bin = no intermediate syncs); episodic/cluster configs do. */
-    integertime KetjuRegionTiStep; /* region external timestep (TNT get_region_max_timestep); 0 = not a region member. Applied in get_timestep so chain members take the external/region step, not the tiny internal-orbit one. */
-#if defined(SINK_PARTICLES)
+    MyIDType KetjuChainID;      /* shared ID of the KETJU chain this particle is in (= smallest member ID); 0 if not in a chain. Used by the tree walk and the direct star sum to skip same-chain Type-5 neighbors when accumulating Min_Sink_Approach_Time / Min_Sink_Freefall_time, so dt_2body reflects only non-chain encounters. */
+#ifdef KETJU_SINKS
     MyDouble KetjuSpin[3];     /* BH spin angular momentum vector S [length*mass*velocity units] */
+#endif
+#ifndef SINGLE_STAR_TIMESTEPPING
+    MyDouble COM_dt_tidal;      /* chain-external tidal timescale of a chain member (ketju_compute_com_quantities); 0 = not set */
+    Vec3<MyDouble> COM_GravAccel; /* chain-external gravitational acceleration of a chain member */
 #endif
 #ifdef KETJU_PN_REMNANT_TAG
     signed char RemnantType;   /* StellarRemnantType code; -1 = still a live star, set at SN time */
+#endif
+#ifdef KETJU_TYPE4_STARS
+    double KetjuTreeSoft[2], KetjuTreeZeta[2]; /* softening/zeta the last gravity call used ([0] target, [1] secondary) */
+    double KetjuChainSphere[4];  /* chain bounding sphere (center, radius; comoving) at the end of the MSTAR step: the tree opens nodes overlapping it */
 #endif
 #endif
 

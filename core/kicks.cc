@@ -201,6 +201,9 @@ void apply_long_range_kick(integertime tstart, integertime tend)
     {
         if(P[i].Mass > 0)
         {
+#ifdef KETJU_REGULARIZATION
+            if(P[i].KetjuIntegrated) continue; /* KETJU particles: gravity handled by MSTAR */
+#endif
             Vec3<double> dvel = P[i].GravPM * dt_gravkick; /* do the kick, only collisionless particles */
             P[i].Vel += dvel;
             P[i].dp += dvel * P[i].Mass;
@@ -397,6 +400,12 @@ void do_the_kick(int i, integertime tstart, integertime tend, integertime tcurre
             dp += CellP[i].Rad_Accel * (mass_pred * All.cf_atime * dt_hydrokick);
 #endif
         } else {
+            /* Apply tree gravity to ALL particles (including KETJU-integrated ones).
+             * KETJU's integrate_region() calls do_negative_halfstep_kick() before AND
+             * after MSTAR to cancel the chain-self contribution of the tree kicks.
+             * Skipping the tree kick here would leave those cancellations uncompensated,
+             * producing a spurious -chain_self*dt/2 - chain_self_end*dt/2 velocity drift
+             * that pulls chain members apart and unbinds nominally circular binaries. */
             dp += P[i].GravAccel * (mass_pred * dt_gravkick);
         }
 #if (SINGLE_STAR_TIMESTEPPING > 0)  //if we're super-timestepping, the above accounts for the change in COM velocity. Now we do the internal binary velocity change

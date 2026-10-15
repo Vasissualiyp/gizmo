@@ -343,9 +343,6 @@ void gravity_tree(void)
                 /* assign values (input-function to pass in memory) */
                 GravDataIn[j].Pos = P[place].Pos;
                 GravDataIn[j].Type = P[place].Type;
-#ifdef KETJU_REGULARIZATION
-                GravDataIn[j].KetjuRegionTag = P[place].KetjuRegionTag; /* carry chain-region id so same-region leaves can be excluded on the importing task */
-#endif
                 GravDataIn[j].Soft = ForceSoftening_KernelRadius(place);
                 GravDataIn[j].OldAcc = P[place].OldAcc;
                 GravDataIn[j].Mass = P[place].Mass;
@@ -370,10 +367,16 @@ void gravity_tree(void)
 #endif
 #ifdef ADAPTIVE_GRAVSOFT_FORALL
                 GravDataIn[j].Soft = P[place].AGS_KernelRadius;
-                GravDataIn[j].AGS_zeta = P[place].AGS_zeta;
+                GravDataIn[j].AGS_zeta = (P[place].AGS_KernelRadius > All.ForceSoftening[P[place].Type]) ? P[place].AGS_zeta : 0; /* same floor rule as a local target */
 #endif
 #ifdef ADAPTIVE_GRAVSOFT_FROM_TIDAL_CRITERION
                 GravDataIn[j].tidal_tensorps_prevstep=P[place].tidal_tensorps_prevstep;
+#endif
+#ifdef KETJU_REGULARIZATION
+                GravDataIn[j].KetjuChainID = P[place].KetjuChainID;
+#ifdef KETJU_TYPE4_STARS
+                for(int ks = 0; ks < 4; ks++) {GravDataIn[j].KetjuChainSphere[ks] = P[place].KetjuChainSphere[ks];}
+#endif
 #endif
                 memcpy(GravDataIn[j].NodeList,DataNodeList[DataIndexTable[j].IndexGet].NodeList, NODELISTLENGTH * sizeof(int));
             }
@@ -793,14 +796,6 @@ void gravity_tree(void)
     {
         int i = ActiveParticleList[ii];
 #ifdef HERMITE_INTEGRATION
-#ifdef KETJU_REGULARIZATION
-        /* In the pre-kick pass (HermiteOnlyFlag==1, runs AFTER ketju_limit_timesteps has retagged region
-         * members from current positions) also recompute KETJU-flagged particles — exactly the set whose
-         * member<->member tree exclusion may have CHANGED. Without this, the first half-kick uses
-         * GravAccel from the previous step's tags: a per-transition energy leak as boundary binaries
-         * flicker in/out of regions. */
-        if(HermiteOnlyFlag == 1 && P[i].KetjuIntegrated) {} else
-#endif
         if(HermiteOnlyFlag) {if(!eligible_for_hermite(i)) continue;} /* if we are completing an extra loop required for the Hermite integration, all of the below would be double-calculated, so skip it */
 #endif      
 #ifdef ADAPTIVE_TREEFORCE_UPDATE

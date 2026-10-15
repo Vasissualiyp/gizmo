@@ -50,6 +50,9 @@ void compute_grav_accelerations(void)
      pass's: the BH->relative switch changes which node data the opening test consumes (cf. gizmo-cpp
      5b490b93). One extra build at t=0 only. */
   if(All.TypeOfOpeningCriterion == 1 && All.Ti_Current == 0) {TreeReconstructFlag = 1; gravity_tree();}
+#if defined(KETJU_REGULARIZATION) && defined(KETJU_TYPE4_STARS)
+  ketju_snapshot_tree_softening(); /* softening/zeta this gravity call used, for the KETJU pair subtraction */
+#endif
 
   PRINT_STATUS(" ..gravity force computation done");
 }

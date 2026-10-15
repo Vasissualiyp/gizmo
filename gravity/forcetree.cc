@@ -7,10 +7,8 @@
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
 #include "../declarations/resolvedism_dgr.h"
-#ifdef KETJU_REGULARIZATION
-extern int KetjuNumTagRegions; extern double *KetjuTagCenter, *KetjuTagRadius; /* ketju_coupling.cc */
-#endif
 #include "../mesh/kernel.h"
+#include "tree_pair_kernel.h"
 #if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
 #include "healpix_utils.h"     /* HEALPix pixel geometry: shared by FUV-G0 (TREE_RAD) and standalone H2/CO column walks */
 #ifdef TREE_RAD_H2
@@ -44,6 +42,25 @@ extern int KetjuNumTagRegions; extern double *KetjuTagCenter, *KetjuTagRadius; /
  * Mike Grudic has also made major revisions to code the Hermitian calculations and binary timestepping.
  */
 
+
+#ifdef KETJU_TYPE4_STARS
+/* softening and AGS zeta of particle p as force_treeevaluate uses them: [0] as (local) target, [1] as leaf secondary */
+void tree_pair_softening(int p, double *soft, double *zeta)
+{
+    soft[0] = soft[1] = ForceSoftening_KernelRadius(p); zeta[0] = zeta[1] = 0;
+#if defined(ADAPTIVE_GRAVSOFT_FORGAS)
+    if(P[p].Type == 0) {if(soft[0] > All.ForceSoftening[P[p].Type]) {zeta[0] = P[p].AGS_zeta;} else {soft[0] = All.ForceSoftening[P[p].Type]; zeta[0] = 0;}}
+#endif
+#if defined(ADAPTIVE_GRAVSOFT_FORALL)
+    if(soft[0] > All.ForceSoftening[P[p].Type]) {zeta[0] = P[p].AGS_zeta;} else {soft[0] = All.ForceSoftening[P[p].Type]; zeta[0] = 0;}
+#endif
+#ifdef ADAPTIVE_GRAVSOFT_FORGAS
+    if(P[p].Type == 0) {zeta[1] = P[p].AGS_zeta;}
+#elif defined(ADAPTIVE_GRAVSOFT_FORALL)
+    zeta[1] = P[p].AGS_zeta;
+#endif
+}
+#endif
 
 /* function to return the value of the force softening for a given cell/particle, depending on the physics and numerical options */
 double ForceSoftening_KernelRadius(int p)
@@ -1898,15 +1915,12 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
     int no, nodesinlist=0, ptype, ninteractions=0, nexp, task, listindex = 0, maxPart = All.MaxPart;
     long bunchSize = All.BunchSize; int maxNodes = MaxNodes; integertime ti_Current = All.Ti_Current;
     double soft, r2, mass, r, fac_accel, u, h=0, h_p=0, h_inv, h3_inv, h_p_inv, h_p3_inv, u_p, xtmp, aold; xtmp=0; soft=0;
+    double fac_pot_unused = 0, fac_tidal_unused = 0, fac2_tidal_unused = 0; (void)fac_pot_unused; (void)fac_tidal_unused; (void)fac2_tidal_unused;
     Vec3<double> pos, dr; Vec3<MyDouble> acc = {};
     double pmass;
     double zeta=0, zeta_sec=0; int ptype_sec=-1;
 #if defined(GALSF_RESOLVEDISM_G0_VARIABLE) && defined(GALSF_RESOLVEDISM_ISOLATED_FB_TEST)
     int g0dbg_node = 0;   /* per-interaction: 1 = accepted-node (multipole) interaction */
-#endif
-#ifdef KETJU_REGULARIZATION
-    int target_ketju_tag = 0;     /* chain-region id of this target (0 if not a chain member) */
-    int ketju_skip_pair = 0;      /* set per-interaction: skip force from a same-region member leaf (MSTAR owns internal forces) */
 #endif
 #ifdef RT_USE_TREECOL_FOR_NH
     double angular_bin_size = 4*M_PI / RT_USE_TREECOL_FOR_NH, treecol_angular_bins[RT_USE_TREECOL_FOR_NH] = {0};
@@ -2065,6 +2079,12 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 #endif
 #endif
     
+#ifdef KETJU_REGULARIZATION
+    MyIDType source_KetjuChainID = 0;
+#ifdef KETJU_TYPE4_STARS
+    double ketju_sphere[4] = {0,0,0,0}; /* target's chain sphere (radius 0 = none) */
+#endif
+#endif
     if(mode == 0)
     {
         pos = P[target].Pos;
@@ -2072,9 +2092,6 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
         soft = ForceSoftening_KernelRadius(target);
         aold = All.ErrTolForceAcc * P[target].OldAcc;
         pmass = P[target].Mass;
-#ifdef KETJU_REGULARIZATION
-        target_ketju_tag = P[target].KetjuRegionTag;
-#endif
 #if defined(SINGLE_STAR_TIMESTEPPING) || defined(COMPUTE_JERK_IN_GRAVTREE) || defined(SINK_DYNFRICTION_FROMTREE)
         vel = P[target].Vel;
 #endif
@@ -2090,6 +2107,12 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 #if defined(PMGRID) && defined(PM_PLACEHIGHRESREGION)
         if(pmforce_is_particle_high_res(ptype, P[target].Pos)) {rcut = All.Rcut[1]; asmth = All.Asmth[1];}
 #endif
+#ifdef KETJU_REGULARIZATION
+        source_KetjuChainID = P[target].KetjuChainID;
+#ifdef KETJU_TYPE4_STARS
+        if(source_KetjuChainID) {for(int ks = 0; ks < 4; ks++) {ketju_sphere[ks] = P[target].KetjuChainSphere[ks];}}
+#endif
+#endif
     }
     else
     {
@@ -2098,9 +2121,6 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
         soft = GravDataGet[target].Soft;
         aold = All.ErrTolForceAcc * GravDataGet[target].OldAcc;
         pmass = GravDataGet[target].Mass;
-#ifdef KETJU_REGULARIZATION
-        target_ketju_tag = GravDataGet[target].KetjuRegionTag;
-#endif
 #if defined(SINGLE_STAR_TIMESTEPPING) || defined(COMPUTE_JERK_IN_GRAVTREE) || defined(SINK_DYNFRICTION_FROMTREE)
         vel = GravDataGet[target].Vel;
 #endif
@@ -2112,6 +2132,12 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 #endif
 #if defined(PMGRID) && defined(PM_PLACEHIGHRESREGION)
         if(pmforce_is_particle_high_res(ptype, GravDataGet[target].Pos)) {rcut = All.Rcut[1]; asmth = All.Asmth[1];}
+#endif
+#ifdef KETJU_REGULARIZATION
+        source_KetjuChainID = GravDataGet[target].KetjuChainID;
+#ifdef KETJU_TYPE4_STARS
+        if(source_KetjuChainID) {for(int ks = 0; ks < 4; ks++) {ketju_sphere[ks] = GravDataGet[target].KetjuChainSphere[ks];}}
+#endif
 #endif
     }
     
@@ -2158,9 +2184,6 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
 #if defined(GALSF_RESOLVEDISM_G0_VARIABLE) && defined(GALSF_RESOLVEDISM_ISOLATED_FB_TEST)
             g0dbg_node = 0;
 #endif
-#ifdef KETJU_REGULARIZATION
-            ketju_skip_pair = 0; /* reset each interaction; set below only for a same-region chain-member leaf */
-#endif
             
             if(no < maxPart) /* this is a particle, we will use it */
             {
@@ -2183,13 +2206,6 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                 GRAVITY_NEAREST_XYZ(dr[0],dr[1],dr[2],-1);
                 r2 = dr.norm_sq();
                 mass = P[no].Mass;
-#ifdef KETJU_REGULARIZATION
-                /* KETJU: skip the mutual force between two members of the SAME chain region — MSTAR
-                 * integrates all chain-internal forces exactly (regularized, unsoftened). Excluding the
-                 * pair here makes this member's GravAccel the exact external (non-member) field, with no
-                 * softening/kernel mismatch to leak energy at high-eccentricity pericenters. */
-                if((target_ketju_tag != 0) && (P[no].KetjuRegionTag == target_ketju_tag)) {ketju_skip_pair = 1;}
-#endif
                 
 #ifdef GRAVITY_SPHERICAL_SYMMETRY
                 r_source = sqrt(pow(P[no].Pos[0] - center[0],2) + pow(P[no].Pos[1] - center[1],2) + pow(P[no].Pos[2] - center[2],2));
@@ -2340,9 +2356,17 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                         } // for gas, add the signal velocity of feedback from the star
 #endif
                         double tSqr = r2soft/(vSqr + MIN_REAL_NUMBER), tff4 = r2soft*r2soft*r2soft/(M_total*M_total);
-                        
+
+#ifdef KETJU_REGULARIZATION
+                        /* MSTAR also integrates a same-chain pair closer than the region radius over the next step (it
+                           is within R of a centre whenever one of the two is a centre), so the pair does not set the
+                           host step; a pair further apart may leave the chain */
+                        if((source_KetjuChainID == 0) || (P[no].KetjuChainID != source_KetjuChainID) || (r2 >= All.KetjuRegionRadius * All.KetjuRegionRadius))
+#endif
+                        {
                         if(tSqr < Min_Sink_Approach_Time) {Min_Sink_Approach_Time = tSqr;}
                         if(tff4 < Min_Sink_Freefall_time) {Min_Sink_Freefall_time = tff4;}
+                        }
 #ifdef SINGLE_STAR_FIND_BINARIES
                         if(ptype == 5) // only for BH particles and for non center of mass calculation
                         {
@@ -2502,6 +2526,22 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                         continue;
                     }
                 }
+#if defined(KETJU_REGULARIZATION) && defined(KETJU_TYPE4_STARS)
+                /* chain member: open every node overlapping its chain sphere, so same-chain partners are exact leaf pairs (as the negative half-kicks assume) */
+                if(source_KetjuChainID != 0 && ketju_sphere[3] > 0) {
+                    double dks[3] = {nop->center[0] - ketju_sphere[0], nop->center[1] - ketju_sphere[1], nop->center[2] - ketju_sphere[2]};
+                    GRAVITY_NEAREST_XYZ(dks[0],dks[1],dks[2],-1);
+                    double reach = ketju_sphere[3] + 0.866025404 * nop->len; /* node bounding radius = len*sqrt(3)/2 */
+                    if(dks[0]*dks[0] + dks[1]*dks[1] + dks[2]*dks[2] < reach*reach) {no = nop->u.d.nextnode; continue;}
+                }
+#endif
+#if defined(KETJU_REGULARIZATION) && !defined(SINGLE_STAR_DIRECT_GRAVITY) && !defined(KETJU_TYPE4_STARS)
+                /* A chain member takes every star exactly. The negative half-kicks remove its same-chain pairs as
+                   exact softened forces, so a partner left inside a node monopole leaves that node's error in the
+                   member's kick. Same-chain pairs can lie beyond SINGLE_STAR_DIRECT_GRAVITY_RADIUS, and the
+                   relative criterion stops opening once a close partner dominates |a|. */
+                if((ptype == 5) && (source_KetjuChainID != 0) && (nop->N_SINK > 0)) {no = nop->u.d.nextnode; continue;}
+#endif
                 if(nop->Ti_current != ti_Current) // add this so that threads arriving here after the the node has been drifted do not have to enter critical at all!
                 {
 #ifdef _OPENMP
@@ -2562,18 +2602,6 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
                 if(h < nop->maxsoft) // compare primary softening to node maximum
                 {
                     if(r2 < nop->maxsoft * nop->maxsoft) {no = nop->u.d.nextnode; continue;} // inside node maxsoft, continue down tree
-                }
-#endif
-#ifdef KETJU_REGULARIZATION
-                /* chain member: force-open nodes overlapping its region sphere so same-region companions reach leaf level (excluded there) */
-                if(target_ketju_tag > 0 && target_ketju_tag <= KetjuNumTagRegions)
-                {
-                    double dxk = nop->center[0] - KetjuTagCenter[3*(target_ketju_tag-1)+0];
-                    double dyk = nop->center[1] - KetjuTagCenter[3*(target_ketju_tag-1)+1];
-                    double dzk = nop->center[2] - KetjuTagCenter[3*(target_ketju_tag-1)+2];
-                    GRAVITY_NEAREST_XYZ(dxk,dyk,dzk,-1);
-                    double reach = KetjuTagRadius[target_ketju_tag-1] + 0.866025 * nop->len; /* node bounding radius = len*sqrt(3)/2 */
-                    if(dxk*dxk + dyk*dyk + dzk*dzk < reach*reach) {no = nop->u.d.nextnode; continue;}
                 }
 #endif
                 if(All.ErrTolTheta)    /* check Barnes-Hut opening criterion */
@@ -2783,89 +2811,22 @@ int force_treeevaluate(int target, int mode, int *exportflag, int *exportnodecou
             
             
             if((r2 > 0) && (mass > 0)
-#ifdef KETJU_REGULARIZATION
-               && !ketju_skip_pair /* same-region chain members: mutual force handled by MSTAR, excluded here */
-#endif
               ) // only go forward if mass positive and there is separation -- this is check for the whole block below, which should no include 'self' terms
             {
                 r = sqrt(r2);
                 
                 /* now we compute the actual pair-wise gravity terms */
-                if((r >= h) && (r >= h_p)) // can safely do a purely-Newtonian force (can be done by kernel-gravity as well, but no need to enter all the conditional statements below so just do it here for simplicity //
-                {
-                    fac_accel = mass / (r2 * r);
+                tree_pair_gravity_factors(r, r2, mass, h, h_p, ptype, ptype_sec, zeta, zeta_sec, pmass, AGS_kernel_shared_BITFLAG, fac_accel,
 #ifdef EVALPOTENTIAL
-                    fac_pot = -mass / r;
+                                          fac_pot,
+#else
+                                          fac_pot_unused,
 #endif
 #ifdef COMPUTE_TIDAL_TENSOR_IN_GRAVTREE
-                    fac_tidal = fac_accel; fac2_tidal = 3.0 * mass / (r2 * r2 * r); /* second derivative of potential needs this factor */
-#endif
-                }
-                else
-                {
-                    double h_grav = h;
-#if !defined(ADAPTIVE_GRAVSOFT_SYMMETRIZE_FORCE_BY_AVERAGING)
-                    if(h_p > h_grav) {h_grav = h_p;} // in this case, symmetrize by taking the maximum here always
-#endif
-                    h_inv=1./h_grav; h3_inv=h_inv*h_inv*h_inv; u=r*h_inv; // set here to ensure this is using the correct values //
-                    fac_accel = mass * kernel_gravity(u, h_inv, h3_inv, 1);
-#ifdef EVALPOTENTIAL
-                    fac_pot = mass * kernel_gravity(u, h_inv, h3_inv, -1);
-#endif
-#ifdef COMPUTE_TIDAL_TENSOR_IN_GRAVTREE /* second derivatives needed -> calculate them from softened potential */
-                    fac_tidal = fac_accel; fac2_tidal = mass * kernel_gravity(u, h_inv, h3_inv, 2);  /* save original fac_accel without shortrange_table factor or zeta terms (needed for tidal field calculation) */
-#endif
-                    
-#if defined(ADAPTIVE_GRAVSOFT_SYMMETRIZE_FORCE_BY_AVERAGING)
-                    if(h_p > 0) // first, appropriately symmetrize the forces between particles. only do this is secondary is a particle, so has a type and softening! //
-                    {
-                        int symmetrize_by_averaging = 0; // default here to symmetrize by taking the maximum, but this will vary below //
-                        // the 'zeta' terms for conservation with adaptive softening assume kernel-scale forces are averaged to symmetrize, to make them continuous
-                        if(ptype_sec>=0) {if((1 << ptype_sec) & (AGS_kernel_shared_BITFLAG)) {symmetrize_by_averaging=1;}} // symmetrize by averaging only for particles which have a shared AGS structure since this is how our correction terms are derived //
-#ifdef SINGLE_STAR_SINK_DYNAMICS
-                        if((ptype!=0) || (ptype_sec!=0)) {symmetrize_by_averaging=0;} // we don't want to do the symmetrization below for sink interactions because it can create very noisy interactions between tiny sink particles and diffuse gas. However we do want it for gas-gas interactions so we keep the below
-#endif
-                        double prefac_corr_p=1., prefac_corr_orig=1.; // this will give a symmetrized pair by linear averaging
-                        if(symmetrize_by_averaging==0) {prefac_corr_p=2; prefac_corr_orig=0.;} // symmetrize instead with the old method of simply taking the larger of the pair. here only act if the softening of the particle whose force is being summed is greater than the target //
-                        if((symmetrize_by_averaging==1) || (h_p>h)) // condition to need to evaluate the alternate particle ('p' side)
-                        {
-                            h_p_inv=1./h_p; h_p3_inv=h_p_inv*h_p_inv*h_p_inv; u_p=r*h_p_inv;
-                            fac_accel = 0.5 * (prefac_corr_orig * fac_accel + prefac_corr_p * mass * kernel_gravity(u_p, h_p_inv, h_p3_inv, 1)); // average with neighbor
-#ifdef EVALPOTENTIAL
-                            fac_pot = 0.5 * (prefac_corr_orig * fac_pot + prefac_corr_p * mass * kernel_gravity(u_p, h_p_inv, h_p3_inv, -1)); // average with neighbor
-#endif
-#if defined(COMPUTE_TIDAL_TENSOR_IN_GRAVTREE)
-                            fac_tidal = fac_accel; fac2_tidal = 0.5 * (prefac_corr_orig * fac2_tidal + prefac_corr_p * mass * kernel_gravity(u_p, h_p_inv, h_p3_inv, 2)); // average forces -> average in tidal tensor as well. also save updated fac_tidal
-#endif
-                        }
-                    } // closes if((h_p > 0)) clause
-#endif // closes clause to symmetrize by averaging instead of taking the larger softening
-                    
-#if defined(ADAPTIVE_GRAVSOFT_FORGAS) || defined(ADAPTIVE_GRAVSOFT_FORALL)
-                    double fac_corr = 0; int add_ags_zeta_terms_primary=1, add_ags_zeta_terms_secondary=1; u_p=r/h_p; // define the correction factor but also a clause to see if we should apply any 'correction' term at all
-                    if((r<=0) || (pmass<=0) || (mass<=0) || (ptype_sec<0)) {add_ags_zeta_terms_primary=0; add_ags_zeta_terms_secondary=0;} // define conditions to add these terms at all (don't go forward if any of these conditions are met)
-                    if((zeta == 0) || (u >= 1) || (h <= 0)) {add_ags_zeta_terms_primary=0;} // other conditions that mean -dont- use the term for the ab side
-                    if((zeta_sec == 0) || (u_p >= 1) || (h_p <= 0)) {add_ags_zeta_terms_secondary=0;} // other conditions that mean -dont- use the term for the ba side
-                    // correction only applies to 'shared-kernel' particles: so this needs to check if these are the same particles for which the 'shared' kernel lengths are computed
-#if defined(ADAPTIVE_GRAVSOFT_FORGAS)
-                    if(ptype != 0 || ptype_sec != 0) {add_ags_zeta_terms_primary=0; add_ags_zeta_terms_secondary=0;} // primary and secondary must be gas for ab side or ba side
+                                          fac_tidal, fac2_tidal);
 #else
-                    if(!((1 << ptype) & (ADAPTIVE_GRAVSOFT_FORALL)) || !((1 << ptype_sec) & (ags_gravity_kernel_shared_BITFLAG(ptype)))) {add_ags_zeta_terms_primary=0;} // primary must be a valid ags particle and 'see' secondary for ab side
-                    if(!((1 << ptype_sec) & (ADAPTIVE_GRAVSOFT_FORALL)) || !((1 << ptype) & (ags_gravity_kernel_shared_BITFLAG(ptype_sec)))) {add_ags_zeta_terms_secondary=0;} // secondary must be a valid ags particle and 'see' primary for ba side
+                                          fac_tidal_unused, fac2_tidal_unused);
 #endif
-                    if(add_ags_zeta_terms_primary) // ab side
-                    {
-                        double dWdr, wp; kernel_main(u, h3_inv, h3_inv*h_inv, &wp, &dWdr, 1);
-                        fac_corr += -(zeta/pmass) * dWdr / r; // go ahead and add the term
-                    }
-                    if(add_ags_zeta_terms_secondary) // ba side
-                    {
-                        double dWdr, wp; h_p_inv=1./h_p; h_p3_inv=h_p_inv*h_p_inv*h_p_inv; kernel_main(u_p, h_p3_inv, h_p3_inv*h_p_inv, &wp, &dWdr, 1);
-                        fac_corr += -(zeta_sec/pmass) * dWdr / r; // go ahead and add the term
-                    }
-                    if(!isnan(fac_corr)) {fac_accel += fac_corr;}
-#endif
-                } // closes r < h (else) clause [where we need to deal with inside-the-softening factors]
                 
                 
 #ifdef PMGRID

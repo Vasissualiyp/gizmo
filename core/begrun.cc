@@ -2480,6 +2480,9 @@ void read_parameter_file(char *fname)
       addr[nt] = &All.KetjuEnableBHMergerKicks;
       id[nt++] = INT;
 
+      strcpy(tag[nt], "KetjuUseStarStarSoftening");
+      addr[nt] = &All.KetjuUseStarStarSoftening;
+      id[nt++] = INT;
 
       strcpy(tag[nt], "KetjuTimestepLimitingFactor");
       addr[nt] = &All.KetjuTimestepLimitingFactor;
@@ -2515,12 +2518,6 @@ void read_parameter_file(char *fname)
 #ifdef GALSF_RESOLVEDISM
       strcpy(tag[nt], "FacSfThreshMJ");
       addr[nt] = &All.FacSfThreshMJ;
-      id[nt++] = REAL;
-#endif
-
-#if defined(TREE_RAD) || defined(TREE_RAD_H2) || defined(TREE_RAD_CO)
-      strcpy(tag[nt], "ShieldingLength");
-      addr[nt] = &All.ShieldingLength;
       id[nt++] = REAL;
 #endif
 
@@ -2903,6 +2900,16 @@ void read_parameter_file(char *fname)
 #ifdef DEVELOPER_MODE
                 if(strcmp("CourantFac",tag[i])==0) {*((double *)addr[i])=0.2; printf("Tag %s (%s) not set in parameter file: defaulting to standard CFL safety factor (=%g) \n",tag[i],alternate_tag[i],All.CourantFac); continue;}
 #endif
+#ifdef KETJU_REGULARIZATION
+                if(strcmp("KetjuMinBHMass",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (Type 5 stage-7/BH chain centers disabled)\n",tag[i]); continue;}
+                if(strcmp("KetjuMinStarMass",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (Type 5 stage<7/star chain centers disabled)\n",tag[i]); continue;}
+                if(strcmp("KetjuIntegrationTolerance",tag[i])==0) {*((double *)addr[i])=1e-9; printf("Tag %s not set: defaulting to 1e-9\n",tag[i]); continue;}
+                if(strcmp("KetjuPNTerms",tag[i])==0) {strcpy((char *)addr[i],"none"); printf("Tag %s not set: defaulting to 'none'\n",tag[i]); continue;}
+                if(strcmp("KetjuEnableBHMergerKicks",tag[i])==0) {*((int *)addr[i])=0; printf("Tag %s not set: defaulting to 0\n",tag[i]); continue;}
+                if(strcmp("KetjuUseStarStarSoftening",tag[i])==0) {*((int *)addr[i])=1; printf("Tag %s not set: defaulting to 1\n",tag[i]); continue;}
+                if(strcmp("KetjuTimestepLimitingFactor",tag[i])==0) {*((double *)addr[i])=100.; printf("Tag %s not set: defaulting to 100\n",tag[i]); continue;}
+                if(strcmp("KetjuMaxStepCount",tag[i])==0) {*((int *)addr[i])=100000; printf("Tag %s not set: defaulting to 100000\n",tag[i]); continue;}
+#endif
                 printf("ERROR. I miss a required value for tag '%s' (or alternate name '%s') in parameter file '%s'.\n", tag[i], alternate_tag[i], fname);
                 errorFlag = 1;
             }
@@ -3036,7 +3043,7 @@ void read_parameter_file(char *fname)
 #ifdef GALSF
     All.MaxNumNgbDeviation = All.DesNumNgb / 64.;
 #endif
-#if NUMDIMS==3    
+#if NUMDIMS==3
     if(All.MaxNumNgbDeviation < 0.05) All.MaxNumNgbDeviation = 0.05;
 #endif    
 #ifdef EOS_ELASTIC

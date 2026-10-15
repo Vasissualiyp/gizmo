@@ -1247,18 +1247,6 @@
 #endif
 #endif
 
-/* ---- KETJU regularized integrator ---- */
-#if defined(KETJU_REGULARIZATION)
-#if defined(FORCE_EQUAL_TIMESTEPS)
-#error "KETJU_REGULARIZATION is not compatible with FORCE_EQUAL_TIMESTEPS"
-#endif
-#endif
-#if defined(KETJU_MERGE_STARS) && !defined(KETJU_REGULARIZATION)
-#error "KETJU_MERGE_STARS requires KETJU_REGULARIZATION"
-#endif
-#if defined(KETJU_MERGE_BH) && !defined(KETJU_REGULARIZATION)
-#error "KETJU_MERGE_BH requires KETJU_REGULARIZATION"
-#endif
 
 /* ??? this should be done with an inline function inside the particle data, not a compiler directive */
 #define SinkParticle_GravityKernelRadius (All.ForceSoftening[5])
@@ -1644,4 +1632,23 @@
 #define MERGE_SPLIT_LIMIT_KINETIC_DISSIPATION // the shock-side counterpart: never merge a pair whose merge would thermalize the majority of the energy involved, which cooling then radiates away, making the merge an artificial unresolved shock. MERGE_SPLIT_ALLOW_KINETIC_DISSIPATION opts back out
 #endif
 
+
+/* ---- KETJU regularized integrator ---- */
+#if defined(KETJU_REGULARIZATION)
+#if defined(FORCE_EQUAL_TIMESTEPS)
+#error "KETJU_REGULARIZATION is not compatible with FORCE_EQUAL_TIMESTEPS"
+#endif
+#endif
+#if defined(KETJU_MERGE_STARS) && !defined(KETJU_REGULARIZATION)
+#error "KETJU_MERGE_STARS requires KETJU_REGULARIZATION"
+#endif
+#if defined(KETJU_MERGE_BH) && !defined(KETJU_REGULARIZATION)
+#error "KETJU_MERGE_BH requires KETJU_REGULARIZATION"
+#endif
+#if defined(KETJU_REGULARIZATION) && (defined(GALSF_RESOLVEDISM) || !defined(SINGLE_STAR_SINK_DYNAMICS)) && !defined(KETJU_TYPE4_STARS)
+#define KETJU_TYPE4_STARS /* Type-4 stars are chain centers/members (Stella, pure N-body); STARFORGE sink runs keep Type 5 only */
+#endif
+#if defined(KETJU_REGULARIZATION) && (defined(SINGLE_STAR_SINK_DYNAMICS) || defined(SINK_PARTICLES))
+#define KETJU_SINKS /* Type-5 sinks (STARFORGE stars or BHs) carry KETJU spin and PN class */
+#endif
 
