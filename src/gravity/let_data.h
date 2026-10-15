@@ -11,10 +11,11 @@
  *    - struct LETPerRankPayload  -- ~96 bytes / remote rank, broadcast via
  *      MPI_Allgather to inform the LET pack on every rank what each remote
  *      rank's particles look like (worst-case bounds for opening criteria).
- *    - struct LETNodeWire        -- fixed-size record for one shipped foreign
- *      node, packed contiguously: { remote_id, NODE, extNODE }.  Remote_id
- *      is the source rank's Nodes_base[] index, used as the lookup key in
- *      the unpack pointer-remap step.
+ *    - struct LETNodeWire        -- the full record of one shipped foreign node
+ *      { remote_id, NODE, extNODE, leaf identity }.  A destination's import is
+ *      packed and relabelled into these; what crosses the network is their compact
+ *      encoding (let_pack.cc, the wire codec), and the receiver decodes it back
+ *      into this form before installing.
  */
 #ifndef GIZMO_LET_DATA_H
 #define GIZMO_LET_DATA_H
@@ -210,11 +211,13 @@ struct LETCoverLeaf {
 };
 
 /* ----------------------------------------------------------------------
- * Wire format for one shipped foreign node (LET payload exchange)
+ * Full record for one shipped foreign node.
  *
- * Each shipped node is a packed record { remote_id, NODE, extNODE }.  NODE+extNODE
- * bytes are copied verbatim from the sender's UVM Nodes_base/Extnodes_base — both
- * sides have identical compile flags so byte layouts match.
+ * The sender packs a destination's import into these { remote_id, NODE, extNODE, leaf identity }
+ * records; the wire codec in let_pack.cc then encodes each one into a compact form that leaves out
+ * the fields no reader of an imported node uses, and the receiver decodes that back into this
+ * record before installing it.  Both sides have identical compile flags, so they agree on the
+ * fields.
  *
  * By the time a node is shipped, the SENDER has relabelled NODE.u.d.{sibling,nextnode}
  * into WIRE-LOCAL topology: each value is either a wire index into this sender's
@@ -249,14 +252,14 @@ struct LETNodeWire {
                             * force (which uses the pure ForceSoftening) -- the rank-asymmetric softening
                             * that injects momentum under adaptive softening.  Carry the pure value. */
     int     leaf_type;     /* source particle Type -> ptype_sec */
-    int     _pad1;         /* explicit tail pad to keep the record 8B-aligned */
+    int     _pad1;         /* explicit tail pad: keeps an array of these records 8-byte aligned */
 };
 #ifdef __cplusplus
 #include <cstddef>
-/* The wire record is the unit MPI_Alltoallv exchanges (sizeof(LETNodeWire) bytes); all ranks compile
- * the same struct, so the ABI is self-consistent per build.  Adding the leaf sidecar is an INTENTIONAL
- * wire-layout change -- assert structural/alignment invariants (NOT a brittle compile-flag-independent
- * numeric size) so an accidental reorder/misalignment fails loudly at compile time. */
+/* The full record lives in arrays (the pack's scratch) and as the decoder's output; it never crosses the
+ * network as such -- the wire codec in let_pack.cc sends its fields one by one.  Assert the structural /
+ * alignment invariants (NOT a brittle compile-flag-dependent numeric size) so an accidental reorder or
+ * misalignment fails loudly at compile time. */
 static_assert(offsetof(struct LETNodeWire, node) % alignof(struct NODE) == 0,
               "LETNodeWire.node misaligned vs struct NODE alignment");
 static_assert(sizeof(struct LETNodeWire) >= sizeof(struct NODE) + sizeof(struct extNODE),
@@ -264,12 +267,9 @@ static_assert(sizeof(struct LETNodeWire) >= sizeof(struct NODE) + sizeof(struct 
 static_assert(sizeof(struct LETNodeWire) % 8 == 0,
               "LETNodeWire not 8-byte aligned");
 #endif
-/* Wire size: 8 B header + sizeof(NODE) + sizeof(extNODE).  NODE is ALIGN(32);
- * with all #ifdef payloads off, sizeof(NODE) ~ 144 B, sizeof(extNODE) ~ 80 B,
- * total ~ 232 B per shipped node.  With heavy payloads (RT_USE_GRAVTREE,
- * SINK_*, ADAPTIVE_GRAVSOFT_FROM_TIDAL_CRITERION) it inflates to ~400-500 B.
- * The post-build pad in NODE.u.d (after the struct fields, before the union
- * close) is included in sizeof(NODE) so the wire layout is unambiguous. */
+/* What a record costs on the wire is set by the codec's field list, not by this struct: a FULL record
+ * carries every field a reader of an imported node uses, a LEAF record (most single-particle leaves)
+ * fewer; both depend on the compile flags. */
 
 /* ----------------------------------------------------------------------
  * Foreign-leaf sidecar arrays (receiver side).
@@ -419,8 +419,9 @@ extern long long RuntimeMinLETForeignNodes;
 extern long long Numforeignnodes_highwater;
 
 /*! MPI exchange + local install in one scope, in two passes.  The first
- *  Alltoalls per-rank node-counts and header-counts; the second Alltoallvs the
- *  LETNodeWire and LETSubtreeHeader bytes; then directly calls
+ *  Alltoalls per-rank record counts, encoded sizes (in stream units) and header
+ *  counts; the second Alltoallvs the encoded streams and LETSubtreeHeader bytes;
+ *  then directly calls
  *  let_unpack_and_install on the received buffers before freeing all
  *  scratch in strict LIFO order.  Inlining the install keeps mymalloc
  *  stack discipline correct -- earlier draft returned flat_recv /
@@ -432,13 +433,14 @@ extern long long Numforeignnodes_highwater;
  *  arena, which is a fixed reservation and on a large run cannot hold a whole
  *  exchange at once.  Each window is sized from the arena's own remaining space,
  *  so a run with room still exchanges in a single window. */
-let_exchange_status_t let_exchange_nodes(struct LETNodeWire **send_buf_per_rank,
+let_exchange_status_t let_exchange_nodes(unsigned char **send_buf_per_rank,
                         const int *send_count_per_rank,
+                        const int *send_units_per_rank,
                         struct LETSubtreeHeader **send_hdr_per_rank,
                         const int *send_hdr_count_per_rank,
                         long long *foreign_needed_out);
 
-/*! Install received foreign nodes into Nodes_base[] / Extnodes_base[] /
+/*! Decode the received streams and install the foreign nodes into Nodes_base[] / Extnodes_base[] /
  *  SoA at slots [TreeNodeIndexBase+MaxNodes, TreeNodeIndexBase+MaxNodes+Numforeignnodes): rebase each
  *  wire-local sibling/nextnode to slot_base+wire, map LET_WIRE_EXIT to the owning
  *  topleaf's continuation, redirect each affected local topleaf's u.d.nextnode to
@@ -453,9 +455,9 @@ let_exchange_status_t let_exchange_nodes(struct LETNodeWire **send_buf_per_rank,
  *  the first window installs anything; the per-sender bound in here is the
  *  backstop.  On overflow the return is RETRYABLE and force_treebuild ratchets the
  *  arena and rebuilds -- all overflow messaging is owned by that loop. */
-let_exchange_status_t let_unpack_and_install(const struct LETNodeWire *recv_buf,
+let_exchange_status_t let_unpack_and_install(const unsigned char *recv_buf,
                             const int *recv_count_per_rank,
-                            int recv_count_total,
+                            const int *recv_units_per_rank,
                             const struct LETSubtreeHeader *recv_hdr_buf,
                             const int *recv_hdr_count_per_rank,
                             int recv_hdr_count_total,
