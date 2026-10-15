@@ -346,6 +346,7 @@ void init(void)
 #ifdef KETJU_TYPE4_STARS
             {double s2[2], z2[2]; tree_pair_softening(i, s2, z2); for(int k = 0; k < 2; k++) {P[i].KetjuTreeSoft[k] = s2[k]; P[i].KetjuTreeZeta[k] = z2[k];}}
             for(int k = 0; k < 4; k++) {P[i].KetjuChainSphere[k] = 0;}
+            for(int k = 0; k < 3; k++) {P[i].KetjuTargetPos[k] = P[i].Pos[k];}
 #endif
 #ifdef KETJU_PN_REMNANT_TAG
             P[i].RemnantType = -1;  /* still alive; FB stamps the remnant type at SN time */

@@ -50,6 +50,26 @@
 #define KETJU_TIMESTEP_LIMITING_RADIUS_FACTOR 100.0
 #endif
 
+/* MSTAR is integrated in natural N-body units (pc, Msun, km/s) whatever the host units: its GBS convergence degrades
+ * badly for e.g. kpc / 1e10 Msun states. Converted in place around ketju_run_integrator only; identity for pc/Msun/km/s hosts. */
+#define KJ_LEN_TO_NAT  (All.UnitLength_in_cm / 3.085678e18)      /* host length unit in pc */
+#define KJ_MASS_TO_NAT (All.UnitMass_in_g / 1.989e33)            /* host mass unit in Msun */
+#define KJ_VEL_TO_NAT  (All.UnitVelocity_in_cm_per_s / 1.0e5)    /* host velocity unit in km/s */
+#define KJ_TIME_TO_NAT (KJ_LEN_TO_NAT / KJ_VEL_TO_NAT)           /* host time unit in pc/(km/s) */
+static void kj_state_change_units(struct ketju_system_physical_state *ps, int n, int to_natural)
+{
+    double fL = KJ_LEN_TO_NAT, fM = KJ_MASS_TO_NAT, fV = KJ_VEL_TO_NAT;
+    if(!to_natural) {fL = 1./fL; fM = 1./fM; fV = 1./fV;}
+    for(int i = 0; i < n; i++) {
+        ps->mass[i] *= fM;
+        for(int j = 0; j < 3; j++) {ps->pos[i][j] *= fL; ps->vel[i][j] *= fV;}
+#ifdef KETJU_SINKS
+        for(int j = 0; j < 3; j++) {ps->spin[i][j] *= fL * fM * fV;}
+#endif
+    }
+    ps->time *= fL / fV;
+}
+
 /* PN classification for KETJU integrator (0 = PN/BH, 1 = non-PN/star, -1 = not Type 5).
  * Derived from ProtoStellarStage: stage 7 (relic/BH) → 0, stage <7 (star) → 1.
  * When SINGLE_STAR_STARFORGE_PROTOSTELLAR_EVOLUTION is off we lack stage info, so
@@ -736,6 +756,93 @@ static std::vector<std::vector<ketju_mpi_particle>> merge_overlapping_regions(
     return regions;
 }
 
+#ifdef KETJU_TYPE4_STARS
+/* ============================================================
+ *  Orbit-based subsystem membership for Type-4 stars (BIFROST, Rantala+ 2023 Sec 3.4):
+ *  chain centres are grouped by pair orbital elements (bound with a < r_region, or a predicted
+ *  pericentre < r_region inside an anticipatory window); only those centres become members,
+ *  so a dense cluster does not merge into one geometric super-region.
+ * ============================================================ */
+static int pair_forms_subsystem(const ketju_mpi_particle &a, const ketju_mpi_particle &b)
+{
+    const double r_ngb = All.KetjuRegionRadius;
+    double dr[3], dv[3]; double r2 = 0, v2 = 0;
+    for(int k = 0; k < 3; k++) {
+        dr[k] = a.Pos[k] - b.Pos[k]; dv[k] = a.Vel[k] - b.Vel[k];
+        r2 += dr[k] * dr[k]; v2 += dv[k] * dv[k];
+    }
+    double r = sqrt(r2);
+    if(r < r_ngb) return 1;                       /* already deep — must be co-integrated regardless */
+    if(r >= 50.0 * r_ngb) return 0;               /* pair-scan cutoff (BIFROST r_ngb,max analogue) */
+
+    double GM = All.G * (a.Mass + b.Mass);
+    if(GM <= 0 || v2 <= 0) return 0;
+    double E = 0.5 * v2 - GM / r;                 /* specific orbital energy of the pair */
+    if(E < 0) {
+        double sma = -GM / (2.0 * E);
+        if(sma < r_ngb) return 1;                 /* bound + tight: permanent member */
+    }
+    /* predicted pericenter from the (Keplerian 2-body) angular momentum: r_peri = (h^2/GM)/(1+e).
+     * Valid for bound and hyperbolic orbits alike. */
+    double rv = dr[0]*dv[0] + dr[1]*dv[1] + dr[2]*dv[2];
+    double h2 = r2 * v2 - rv * rv;                /* |r x v|^2 */
+    double e2 = 1.0 + 2.0 * E * h2 / (GM * GM); if(e2 < 0) e2 = 0;
+    double r_peri = (h2 / GM) / (1.0 + sqrt(e2));
+    if(r_peri >= r_ngb) return 0;                 /* passage never gets inside the regularized scale */
+
+    /* anticipatory window: capture while |r|/|v_rel| < tau AND r < K*r_ngb, with tau sized so that on
+     * a near-parabolic infall (v ~ sqrt(2GM/r)) the time criterion fires at r_capture ~ K * r_ngb:
+     * r/v = r^1.5/sqrt(2GM) = tau  =>  r_capture = (2 GM tau^2)^(1/3) = K * r_ngb. Weak-field
+     * handoffs: at K=16 the mutual force at capture/release is ~256x weaker than at r_ngb.
+     * The EXPLICIT distance bound is essential: for fast HYPERBOLIC encounters (v_rel set by the
+     * cluster dispersion, not by the pair potential) r/v < tau alone fires at huge distances
+     * (~0.1 pc for r_ngb=500 AU), chaining hundreds of stars into giant merged subsystems. */
+    const double K = 16.0;
+    if(r >= K * r_ngb) return 0;
+    double tau = K * sqrt(K) * r_ngb * sqrt(r_ngb) / sqrt(2.0 * GM);
+    if(r / sqrt(v2) < tau) return 1;
+    return 0;
+}
+
+static std::vector<std::vector<ketju_mpi_particle>> build_orbit_regions(
+    const std::vector<ketju_mpi_particle> &centers)
+{
+    int n = centers.size();
+    std::vector<int> group(n);
+    for(int i = 0; i < n; i++) group[i] = i;
+    auto find = [&](int x) {
+        while(group[x] != x) { group[x] = group[group[x]]; x = group[x]; }
+        return x;
+    };
+    auto unite = [&](int a, int b) { a = find(a); b = find(b); if(a != b) group[a] = b; };
+
+    for(int i = 0; i < n; i++)
+        for(int j = i + 1; j < n; j++)
+            if(pair_forms_subsystem(centers[i], centers[j])) unite(i, j);
+
+    std::vector<std::vector<ketju_mpi_particle>> regions;
+    std::vector<int> root_to_region(n, -1);
+    for(int i = 0; i < n; i++) {
+        int r = find(i);
+        if(root_to_region[r] < 0) { root_to_region[r] = regions.size(); regions.push_back({}); }
+        regions[root_to_region[r]].push_back(centers[i]);
+    }
+    return regions;
+}
+
+/* members of an orbit group: the synchronised centres this rank owns */
+static std::set<int> local_members_from_group(const std::vector<ketju_mpi_particle> &group)
+{
+    std::set<int> members;
+    for(const ketju_mpi_particle &c : group) {
+        if(c.Task != ThisTask) continue;
+        if(!is_chain_eligible(c.Index) || !is_synchronized(c.Index)) continue;
+        members.insert(c.Index);
+    }
+    return members;
+}
+#endif
+
 /* Find synchronised local chain-eligible particles within `radius` of any center in a region */
 static std::set<int> find_local_members(const std::vector<ketju_mpi_particle> &centers, double radius)
 {
@@ -762,6 +869,9 @@ static std::set<int> find_local_particles_in_radius(const std::vector<ketju_mpi_
     for(int i = 0; i < NumPart; i++) {
         if(exclude.count(i)) continue;
         if(!is_synchronized(i)) continue;
+#ifdef KETJU_TYPE4_STARS
+        if((P[i].Type != 4 && P[i].Type != 5) || is_chain_center(i)) continue; /* only stars outside chains limit a chain; gas and other chains do not */
+#endif
         for(size_t c = 0; c < centers.size(); c++) {
             double dist = particle_distance(P[i].Pos.data_ptr(), const_cast<double*>(centers[c].Pos));
             if(dist < radius) { hits.insert(i); break; }
@@ -935,11 +1045,11 @@ static void setup_integrator(KetjuRegion &reg)
         ketju_create_system(reg.integrator, reg.num_pn_particles, n_other, reg.compute_tasks.comm);
 
         /* set units */
-        reg.integrator->constants->G = All.G;
+        reg.integrator->constants->G = All.G * KJ_LEN_TO_NAT * KJ_VEL_TO_NAT * KJ_VEL_TO_NAT / KJ_MASS_TO_NAT;
 #if defined(C_LIGHT_CODE)
-        reg.integrator->constants->c = C_LIGHT_CODE;
+        reg.integrator->constants->c = C_LIGHT_CODE * KJ_VEL_TO_NAT;
 #else
-        reg.integrator->constants->c = 2.9979e10 / All.UnitVelocity_in_cm_per_s;
+        reg.integrator->constants->c = 2.9979e10 / All.UnitVelocity_in_cm_per_s * KJ_VEL_TO_NAT;
 #endif
 
         /* set options */
@@ -953,7 +1063,7 @@ static void setup_integrator(KetjuRegion &reg)
 #ifdef KETJU_SINKS
             if(All.ForceSoftening[5] > 0) h = DMIN(h, All.ForceSoftening[5] * All.cf_atime);
 #endif
-            reg.integrator->options->star_star_softening = h;
+            reg.integrator->options->star_star_softening = h * KJ_LEN_TO_NAT;
         }
 
         /* fill particle data (relative to CoM, converted to physical coordinates) */
@@ -1120,11 +1230,11 @@ static void setup_integrator_reuse(KetjuRegion &reg)
         int n_other = reg.total_particle_count - reg.num_pn_particles;
         ketju_create_system(reg.integrator, reg.num_pn_particles, n_other, reg.compute_tasks.comm);
 
-        reg.integrator->constants->G = All.G;
+        reg.integrator->constants->G = All.G * KJ_LEN_TO_NAT * KJ_VEL_TO_NAT * KJ_VEL_TO_NAT / KJ_MASS_TO_NAT;
 #if defined(C_LIGHT_CODE)
-        reg.integrator->constants->c = C_LIGHT_CODE;
+        reg.integrator->constants->c = C_LIGHT_CODE * KJ_VEL_TO_NAT;
 #else
-        reg.integrator->constants->c = 2.9979e10 / All.UnitVelocity_in_cm_per_s;
+        reg.integrator->constants->c = 2.9979e10 / All.UnitVelocity_in_cm_per_s * KJ_VEL_TO_NAT;
 #endif
         reg.integrator->options->PN_flags = parse_pn_terms();
         reg.integrator->options->gbs_relative_tolerance = All.KetjuIntegrationTolerance;
@@ -1136,7 +1246,7 @@ static void setup_integrator_reuse(KetjuRegion &reg)
 #ifdef KETJU_SINKS
             if(All.ForceSoftening[5] > 0) h = DMIN(h, All.ForceSoftening[5] * All.cf_atime);
 #endif
-            reg.integrator->options->star_star_softening = h;
+            reg.integrator->options->star_star_softening = h * KJ_LEN_TO_NAT;
         }
 
         reg.extra_data.resize(reg.total_particle_count);
@@ -1204,6 +1314,22 @@ static void do_negative_halfstep_kick(KetjuRegion &reg, double kick_factor, int 
     int loop_end   = loop_scheduling_block_edge(n, reg.compute_tasks.size, reg.compute_tasks.rank + 1);
 
     std::vector<double> dv(3 * n, 0.0);
+#ifdef KETJU_TYPE4_STARS
+    /* absolute comoving positions as the tree uses them: at the start, the stored host positions; at the end, the exact
+       targets scatter_results computes and the drift is snapped to */
+    std::vector<double> abs_pos(3 * n);
+    double a_kick = All.cf_atime;
+    if(at_start) {
+        for(int i = 0; i < n; i++) for(int k = 0; k < 3; k++) abs_pos[3*i + k] = reg.all_particles[i].Pos[k];
+    } else {
+        if(All.ComovingIntegrationOn) a_kick = All.cf_atime * exp(reg.ti_step * All.Timebase_interval);
+        double dt_drift = get_drift_factor(All.Ti_Current, All.Ti_Current + reg.ti_step, 0, 0);
+        for(int i = 0; i < n; i++) for(int k = 0; k < 3; k++) {
+            double sp_pos = reg.com_pos[k] + ps->pos[i][k] / a_kick;
+            abs_pos[3*i + k] = (dt_drift > 0) ? sp_pos + reg.com_vel[k] * dt_drift : sp_pos;
+        }
+    }
+#endif
 
     for(int i = loop_start; i < loop_end; i++) {
         for(int j = i + 1; j < n; j++) {
@@ -1216,17 +1342,23 @@ static void do_negative_halfstep_kick(KetjuRegion &reg, double kick_factor, int 
             if(r == 0) continue;
 
 #ifdef KETJU_TYPE4_STARS
-            { /* the tree's own pair kernel with the softening/zeta of the gravity call whose kick is cancelled (comoving, -> physical by a^-3) */
+            { /* the tree's own pair kernel and separation (absolute comoving positions, as the tree differences them), with the
+                 softening/zeta of the gravity call whose kick is cancelled */
                 const ketju_mpi_particle &pi = reg.all_particles[i], &pj = reg.all_particles[j];
+                double drc[3]; for(int k = 0; k < 3; k++) {drc[k] = abs_pos[3*i + k] - abs_pos[3*j + k];}
+#if defined(BOX_PERIODIC) && !defined(GRAVITY_NOT_PERIODIC)
+                NEAREST_XYZ(drc[0], drc[1], drc[2], 1);
+#endif
                 const double *si = at_start ? pi.SoftGrav : pi.SoftNow, *zi = at_start ? pi.ZetaGrav : pi.ZetaNow;
                 const double *sj = at_start ? pj.SoftGrav : pj.SoftNow, *zj = at_start ? pj.ZetaGrav : pj.ZetaNow;
-                double rc = r / All.cf_atime, r2c = rc * rc, f_ij, f_ji, d0, d1, d2;
+                double r2c = drc[0]*drc[0] + drc[1]*drc[1] + drc[2]*drc[2], rc = sqrt(r2c), f_ij, f_ji, d0, d1, d2;
+                if(rc <= 0) continue;
                 tree_pair_gravity_factors(rc, r2c, ps->mass[j], si[0], sj[1], pi.Type, pj.Type, zi[0], zj[1], ps->mass[i], ags_gravity_kernel_shared_BITFLAG(pi.Type), f_ij, d0, d1, d2);
                 tree_pair_gravity_factors(rc, r2c, ps->mass[i], sj[0], si[1], pj.Type, pi.Type, zj[0], zi[1], ps->mass[j], ags_gravity_kernel_shared_BITFLAG(pj.Type), f_ji, d0, d1, d2);
-                double fac_c = kick_factor * All.G * All.cf_a3inv;
+                double fac_c = kick_factor * All.G / (a_kick * a_kick); /* comoving pair force -> physical acceleration */
                 for(int k = 0; k < 3; k++) {
-                    dv[3*i + k] += fac_c * f_ij * dr[k];
-                    dv[3*j + k] -= fac_c * f_ji * dr[k];
+                    dv[3*i + k] += fac_c * f_ij * drc[k];
+                    dv[3*j + k] -= fac_c * f_ji * drc[k];
                 }
                 (void)h;
             }
@@ -1369,7 +1501,9 @@ static void integrate_region(KetjuRegion &reg, double dt_physical)
 
     /* run MSTAR integrator (all compute tasks participate via compute_tasks.comm) */
     if(reg.compute_tasks.is_member() && reg.integrator) {
-        ketju_run_integrator(reg.integrator, dt_physical);
+        kj_state_change_units(reg.integrator->physical_state, reg.integrator->num_particles, 1);
+        ketju_run_integrator(reg.integrator, dt_physical * KJ_TIME_TO_NAT);
+        kj_state_change_units(reg.integrator->physical_state, reg.integrator->num_particles, 0);
 
         int n_steps = reg.integrator->perf->successful_steps + reg.integrator->perf->failed_steps;
         double dE = reg.integrator->perf->relative_energy_error;
@@ -1818,6 +1952,9 @@ static void scatter_results(KetjuRegion &reg)
             for(int j = 0; j < 3; j++) {
                 /* desired final position = final_abs_pos + CoM displacement during drift */
                 double desired_pos = sp.Pos[j] + reg.com_vel[j] * dt_drift;
+#ifdef KETJU_TYPE4_STARS
+                P[idx].KetjuTargetPos[j] = desired_pos;
+#endif
                 double delta_pos = desired_pos - P[idx].Pos[j];
 #ifdef BOX_PERIODIC
                 double box = (j == 0) ? boxSize_X : (j == 1) ? boxSize_Y : boxSize_Z;
@@ -1830,6 +1967,9 @@ static void scatter_results(KetjuRegion &reg)
             /* no drift — set position and velocity directly */
             for(int j = 0; j < 3; j++) {
                 P[idx].Pos[j] = sp.Pos[j];
+#ifdef KETJU_TYPE4_STARS
+                P[idx].KetjuTargetPos[j] = sp.Pos[j];
+#endif
                 P[idx].Vel[j] = sp.Vel[j] + reg.com_vel[j];
                 P[idx].KetjuFinalVel[j] = P[idx].Vel[j];
             }
@@ -1994,13 +2134,21 @@ void ketju_limit_timesteps(void)
 
     const double limited_radius = 2.0 * All.KetjuRegionRadius;
     const double limiting_radius = KETJU_TIMESTEP_LIMITING_RADIUS_FACTOR * All.KetjuRegionRadius;
+#ifdef KETJU_TYPE4_STARS
+    std::vector<std::vector<ketju_mpi_particle>> tsr_centers = build_orbit_regions(centers); (void)limited_radius;
+#else
     std::vector<std::vector<ketju_mpi_particle>> tsr_centers = merge_overlapping_regions(centers, 2.0 * limited_radius);
+#endif
     const int n_tsr = (int)tsr_centers.size();
 
     std::vector<std::set<int>> limited(n_tsr);
     std::vector<long long> min_ti(2 * n_tsr, (long long)TIMEBASE); /* [2r] over limited+limiting, [2r+1] limited only */
     for(int r = 0; r < n_tsr; r++) {
+#ifdef KETJU_TYPE4_STARS
+        limited[r] = local_members_from_group(tsr_centers[r]);
+#else
         limited[r] = find_local_members(tsr_centers[r], limited_radius);
+#endif
         std::set<int> limiting = find_local_particles_in_radius(tsr_centers[r], limiting_radius, limited[r]);
         for(int idx : limited[r]) {
             long long ti = GET_INTEGERTIME_FROM_TIMEBIN(P[idx].TimeBin);
@@ -2100,7 +2248,11 @@ void ketju_find_regions(void)
 
     /* merge overlapping regions */
     double merge_radius = 2.0 * All.KetjuRegionRadius;
+#ifdef KETJU_TYPE4_STARS
+    std::vector<std::vector<ketju_mpi_particle>> region_centers = build_orbit_regions(centers); (void)merge_radius;
+#else
     std::vector<std::vector<ketju_mpi_particle>> region_centers = merge_overlapping_regions(centers, merge_radius);
+#endif
 
     /* build regions (first pass: find members, collect IDs, check staleness) */
     int n_regions = region_centers.size();
@@ -2114,7 +2266,11 @@ void ketju_find_regions(void)
     for(int r = 0; r < n_regions; r++) {
         KetjuRegion reg;
         reg.centers = region_centers[r];
+#ifdef KETJU_TYPE4_STARS
+        reg.local_member_indices = local_members_from_group(reg.centers);
+#else
         reg.local_member_indices = find_local_members(reg.centers, All.KetjuRegionRadius);
+#endif
 
         int n_local = reg.local_member_indices.size();
         MPI_Allreduce(&n_local, &reg.total_particle_count, 1, MPI_INT, MPI_SUM, MPI_COMM_WORLD);
@@ -2323,6 +2479,12 @@ void ketju_set_final_velocities(void)
      * drifted to it): a region on a longer bin is still drifting along its chord. */
     for(int i = 0; i < NumPart; i++) {
         if(P[i].KetjuIntegrated && TimeBinActive[P[i].TimeBin]) {
+#ifdef KETJU_TYPE4_STARS
+            { /* land exactly on the MSTAR end position the negative half-kick used (the drift only reaches it to roundoff) */
+                double d2 = 0; for(int j = 0; j < 3; j++) {double d = P[i].Pos[j] - P[i].KetjuTargetPos[j]; d2 += d * d;}
+                if(d2 < 1e-12 * All.KetjuRegionRadius * All.KetjuRegionRadius) {for(int j = 0; j < 3; j++) {P[i].Pos[j] = P[i].KetjuTargetPos[j];}}
+            }
+#endif
             for(int j = 0; j < 3; j++) {
                 /* dp correction: the difference between true velocity and trick velocity,
                  * converted to momentum. This ensures the kick integrator is consistent. */

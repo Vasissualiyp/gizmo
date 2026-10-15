@@ -390,6 +390,7 @@ extern ALIGN(32) struct particle_data
 #endif
 #ifdef KETJU_TYPE4_STARS
     double KetjuTreeSoft[2], KetjuTreeZeta[2]; /* softening/zeta the last gravity call used ([0] target, [1] secondary) */
+    double KetjuTargetPos[3];    /* exact absolute end-of-step position of a chain member; snapped to after the drift so the tree sees what the negative half-kick subtracted */
     double KetjuChainSphere[4];  /* chain bounding sphere (center, radius; comoving) at the end of the MSTAR step: the tree opens nodes overlapping it */
 #endif
 #endif
