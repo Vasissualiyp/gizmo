@@ -782,7 +782,10 @@ enum siofields
 
 
 /* Variables for Tree */
-/* Tree Node structure (note, the ALIGN(32) directive will effectively pad the structure size to a multiple of 32 bytes) */
+/* Tree Node structure (note, the ALIGN(32) directive will effectively pad the structure size to a multiple of 32 bytes).
+   Nodes exported to other ranks travel through the wire codec in gravity/let_pack.cc, which sends only the fields some
+   reader of an imported node uses: a field added here (or to extNODE) that a walk, the drift or the GPU prediction reads
+   on an imported node must be added to that codec's field list too. */
 extern ALIGN(32) struct NODE
 {
   Vec3<MyFloat> center;		/*!< geometrical center of node */
@@ -876,6 +879,7 @@ extern int N_StarDirect;
 #endif
 
 
+/* Extension of NODE; see the note on NODE about the wire codec for exported nodes. */
 extern struct extNODE
 {
   Vec3<MyDouble> dp;
