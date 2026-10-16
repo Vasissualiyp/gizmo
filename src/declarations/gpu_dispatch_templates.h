@@ -83,6 +83,28 @@ inline int gizmo_gpu_team_size_max(const F& f)
     return probe.team_size_max(f, Kokkos::ParallelForTag());
 }
 
+/* The same pair for a kernel whose teams ask for level-0 scratch.  The bound is asked of a probe
+ * carrying the same scratch request as the launch, because that request is part of what limits the
+ * team: a probe without it reports a team the launch cannot have.  (A policy constructed at an
+ * illegal team size throws before it can be asked anything, hence the probe.) */
+template<typename F>
+inline void gizmo_gpu_team_kernel_launch(const char *tag, int league, int team_size, size_t scratch_bytes, F&& f)
+{
+    Kokkos::TeamPolicy<> policy(league, team_size, 1);
+    policy.set_scratch_size(0, Kokkos::PerTeam(scratch_bytes));
+    Kokkos::parallel_for(tag, policy, std::forward<F>(f));
+    Kokkos::fence();
+    gizmo_gpu_check_last_error(tag, league, -1);
+}
+
+template<typename F>
+inline int gizmo_gpu_team_size_max(const F& f, size_t scratch_bytes)
+{
+    Kokkos::TeamPolicy<> probe(1, 1, 1);
+    probe.set_scratch_size(0, Kokkos::PerTeam(scratch_bytes));
+    return probe.team_size_max(f, Kokkos::ParallelForTag());
+}
+
 /* How many work items the default execution space can have in flight at once:
  * the hardware's lane count, as Kokkos reports it for the backend in use.
  *
