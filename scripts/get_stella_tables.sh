@@ -1,8 +1,8 @@
 #!/bin/bash
 # Build and install the Stella stellar + CHEMCOOL tables from the stella-tables repo when they are missing.
 # Called by the Makefile (order-only prerequisite of the executable); safe to run by hand from the GIZMO root.
-#   STELLA_TABLES_REPO  git URL or local path of stella-tables (default: $HOME/stella-tables if it exists)
-#   STELLA_TABLES_REF   commit/tag to build (default: the repo's default branch head)
+#   STELLA_TABLES_REPO  git URL or local path of stella-tables (default: the public GitHub repo)
+#   STELLA_TABLES_REF   commit/tag to build (default: the version pinned below)
 #   STELLA_TABLES_DIR   where to clone and build (default: .stella-tables in the GIZMO root)
 set -euo pipefail
 GIZMO="$(cd "$(dirname "$0")/.." && pwd)"
@@ -12,22 +12,15 @@ OUTS=("$ST/stellar_tables_unified.hdf5" "$ST/stellar_wind_cumulative.hdf5" "$CC/
 missing=0; for f in "${OUTS[@]}"; do [ -e "$f" ] || missing=1; done
 [ $missing = 1 ] || exit 0
 
-REPO="${STELLA_TABLES_REPO:-}"
-if [ -z "$REPO" ]; then
-    if [ -d "$HOME/stella-tables" ]; then REPO="$HOME/stella-tables"
-    else echo "get_stella_tables: tables missing and STELLA_TABLES_REPO not set (git URL of stella-tables)" >&2; exit 1; fi
-fi
+REPO="${STELLA_TABLES_REPO:-https://github.com/Ulli1991/stella-tables.git}"
+REF="${STELLA_TABLES_REF:-8c039a8ce99776cac9b37d4d1285d9f622f03eff}"   # stella-tables version these GIZMO sources expect
 DIR="${STELLA_TABLES_DIR:-$GIZMO/.stella-tables}"
 
-if [ -d "$REPO" ] && [ -z "${STELLA_TABLES_REF:-}" ] && ! git -C "$REPO" rev-parse -q --verify HEAD >/dev/null; then
-    SRC="$REPO"                                         # local working copy without commits: build it in place
-else
-    [ -d "$DIR/.git" ] || git clone -q "$REPO" "$DIR"
-    git -C "$DIR" fetch -q origin
-    git -C "$DIR" checkout -q "${STELLA_TABLES_REF:-origin/HEAD}"
-    SRC="$DIR"
-fi
-echo "get_stella_tables: building tables from $REPO${STELLA_TABLES_REF:+ @ $STELLA_TABLES_REF} in $SRC"
+[ -d "$DIR/.git" ] || git clone -q "$REPO" "$DIR"
+git -C "$DIR" fetch -q origin
+git -C "$DIR" checkout -q "$REF"
+SRC="$DIR"
+echo "get_stella_tables: building tables from $REPO @ $REF in $SRC"
 
 if ! (cd "$SRC" && ./build.sh); then echo "get_stella_tables: stella-tables build or tests FAILED; nothing installed" >&2; exit 1; fi
 
