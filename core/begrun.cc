@@ -1175,10 +1175,25 @@ void read_parameter_file(char *fname)
       id[nt++] = REAL;
 #endif
 
+#ifdef TIDAL_TIMESTEP_CRITERION
+        strcpy(tag[nt], "TidalTimestepPrefac");
+        addr[nt] = &All.TidalTimestepPrefac;
+        id[nt++] = REAL;
+
+        strcpy(tag[nt], "TidalTimestepPrefacGas");
+        addr[nt] = &All.TidalTimestepPrefacGas;
+        id[nt++] = REAL;
+#endif
+#ifdef WAKEUP
+        strcpy(tag[nt], "WakeupTargetBin");
+        addr[nt] = &All.WakeupTargetBin;
+        id[nt++] = INT;
+#endif
 #ifdef DEVELOPER_MODE
         strcpy(tag[nt], "ErrTolIntAccuracy");
         addr[nt] = &All.ErrTolIntAccuracy;
         id[nt++] = REAL;
+
 
         strcpy(tag[nt], "ErrTolTheta");
         addr[nt] = &All.ErrTolTheta;
@@ -2736,6 +2751,17 @@ void read_parameter_file(char *fname)
 #ifdef GALSF_RESOLVEDISM_STELLAR_TABLES
                 if(strcmp("MaxStellarTimestep",tag[i])==0) {*((double *)addr[i])=50000.; printf("Tag %s (%s) not set in parameter file: defaulting to 50 kyr (=%g yr)\n",tag[i],alternate_tag[i],All.MaxStellarTimestep); continue;}
 #endif
+#ifdef TIDAL_TIMESTEP_CRITERION
+#if defined(SINGLE_STAR_TIMESTEPPING)
+                if(strcmp("TidalTimestepPrefac",tag[i])==0) {*((double *)addr[i])=0.5; printf("Tag %s not set: defaulting to 0.5\n",tag[i]); continue;}
+#else
+                if(strcmp("TidalTimestepPrefac",tag[i])==0) {*((double *)addr[i])=0.10; printf("Tag %s not set: defaulting to 0.10\n",tag[i]); continue;}
+#endif
+                if(strcmp("TidalTimestepPrefacGas",tag[i])==0) {*((double *)addr[i])=0.5; printf("Tag %s not set: defaulting to 0.5\n",tag[i]); continue;}
+#endif
+#ifdef WAKEUP
+                if(strcmp("WakeupTargetBin",tag[i])==0) {*((int *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (waker bin - log2(WAKEUP))\n",tag[i]); continue;}
+#endif
 #ifdef KETJU_REGULARIZATION
                 if(strcmp("KetjuMinBHMass",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (Type 5 chain centers disabled)\n",tag[i]); continue;}
                 if(strcmp("KetjuMinStarMass",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (Type 4 chain centers disabled)\n",tag[i]); continue;}
@@ -2900,13 +2926,28 @@ void read_parameter_file(char *fname)
 #ifdef DEVELOPER_MODE
                 if(strcmp("CourantFac",tag[i])==0) {*((double *)addr[i])=0.2; printf("Tag %s (%s) not set in parameter file: defaulting to standard CFL safety factor (=%g) \n",tag[i],alternate_tag[i],All.CourantFac); continue;}
 #endif
+#ifdef TIDAL_TIMESTEP_CRITERION
+#if defined(SINGLE_STAR_TIMESTEPPING)
+                if(strcmp("TidalTimestepPrefac",tag[i])==0) {*((double *)addr[i])=0.5; printf("Tag %s not set: defaulting to 0.5\n",tag[i]); continue;}
+#else
+                if(strcmp("TidalTimestepPrefac",tag[i])==0) {*((double *)addr[i])=0.10; printf("Tag %s not set: defaulting to 0.10\n",tag[i]); continue;}
+#endif
+                if(strcmp("TidalTimestepPrefacGas",tag[i])==0) {*((double *)addr[i])=0.5; printf("Tag %s not set: defaulting to 0.5\n",tag[i]); continue;}
+#endif
+#ifdef WAKEUP
+                if(strcmp("WakeupTargetBin",tag[i])==0) {*((int *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (waker bin - log2(WAKEUP))\n",tag[i]); continue;}
+#endif
 #ifdef KETJU_REGULARIZATION
                 if(strcmp("KetjuMinBHMass",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (Type 5 stage-7/BH chain centers disabled)\n",tag[i]); continue;}
                 if(strcmp("KetjuMinStarMass",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (Type 5 stage<7/star chain centers disabled)\n",tag[i]); continue;}
                 if(strcmp("KetjuIntegrationTolerance",tag[i])==0) {*((double *)addr[i])=1e-9; printf("Tag %s not set: defaulting to 1e-9\n",tag[i]); continue;}
                 if(strcmp("KetjuPNTerms",tag[i])==0) {strcpy((char *)addr[i],"none"); printf("Tag %s not set: defaulting to 'none'\n",tag[i]); continue;}
                 if(strcmp("KetjuEnableBHMergerKicks",tag[i])==0) {*((int *)addr[i])=0; printf("Tag %s not set: defaulting to 0\n",tag[i]); continue;}
+#ifdef KETJU_TYPE4_STARS
+                if(strcmp("KetjuUseStarStarSoftening",tag[i])==0) {*((int *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (unsoftened chains for Type-4 stars)\n",tag[i]); continue;}
+#else
                 if(strcmp("KetjuUseStarStarSoftening",tag[i])==0) {*((int *)addr[i])=1; printf("Tag %s not set: defaulting to 1\n",tag[i]); continue;}
+#endif
                 if(strcmp("KetjuTimestepLimitingFactor",tag[i])==0) {*((double *)addr[i])=100.; printf("Tag %s not set: defaulting to 100\n",tag[i]); continue;}
                 if(strcmp("KetjuMaxStepCount",tag[i])==0) {*((int *)addr[i])=100000; printf("Tag %s not set: defaulting to 100000\n",tag[i]); continue;}
 #endif

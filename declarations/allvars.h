@@ -685,6 +685,13 @@ extern struct global_data_all_processes
   double ErrTolForceAcc;	/*!< parameter for relative opening criterion in tree walk */
 
   /* adjusts accuracy of time-integration */
+#ifdef TIDAL_TIMESTEP_CRITERION
+  double TidalTimestepPrefac;    /*!< tidal timestep prefactor for non-gas particles (upstream calibration 0.10; 0.5 with SINGLE_STAR_TIMESTEPPING) */
+  double TidalTimestepPrefacGas; /*!< tidal timestep prefactor for gas (upstream 0.5) */
+#endif
+#ifdef WAKEUP
+  int WakeupTargetBin;           /*!< woken-cell bin: 0 = waker bin - log2(WAKEUP) (upstream), 1 = waker bin, 2 = highest active bin */
+#endif
   double ErrTolIntAccuracy;	/*!< accuracy tolerance parameter \f$ \eta \f$ for timestep criterion. The timesteps is \f$ \Delta t = \sqrt{\frac{2 \eta eps}{a}} \f$ */
   double MinSizeTimestep,	/*!< minimum allowed timestep. Normally, the simulation terminates if the timestep determined by the timestep criteria falls below this limit. */
          MaxSizeTimestep;		/*!< maximum allowed timestep */

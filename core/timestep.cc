@@ -573,19 +573,15 @@ integertime get_timestep(int p,		/*!< particle index */
 
 
 #define SINK_TIMESTEP_SAFETY_FACTOR (0.3)
-#if defined(SINGLE_STAR_TIMESTEPPING)
-#define TIDAL_TIMESTEP_PREFAC (0.5)   /* leave alone: 2-body criterion must bind for binaries */
-#else
-#define TIDAL_TIMESTEP_PREFAC (0.10) // calibration that makes tidal timestepping strictly more accurate in the worst-case problem the hernquist test
-#endif
-#define TIDAL_TIMESTEP_PREFAC_GAS (0.5)
+/* tidal prefactors are parameters (TidalTimestepPrefac / TidalTimestepPrefacGas); upstream calibration defaults in begrun.cc:
+   0.10 for collisionless (0.5 with SINGLE_STAR_TIMESTEPPING: 2-body criterion must bind for binaries), 0.5 for gas */
 
 #ifdef TIDAL_TIMESTEP_CRITERION // tidal criterion obtains the same energy error in an optimally-softened Plummer sphere over ~100 crossing times as the Power 2003 criterion
     double tidal_mag_dt = P[p].tidal_tensorps.frobenius_norm_sq();
 #if defined(KETJU_REGULARIZATION)
     if(ketju_member) {double t2 = P[p].COM_dt_tidal * P[p].COM_dt_tidal; tidal_mag_dt = 1. / (t2 * t2);} /* |T_external|_F^2 */
 #endif
-    double tidal_prefac = (P[p].Type == 0) ? TIDAL_TIMESTEP_PREFAC_GAS : TIDAL_TIMESTEP_PREFAC;
+    double tidal_prefac = (P[p].Type == 0) ? All.TidalTimestepPrefacGas : All.TidalTimestepPrefac;
     double dt_tidal = tidal_prefac * sqrt(All.ErrTolIntAccuracy / (All.cf_a3inv * sqrt(tidal_mag_dt / 6))); // recovers sqrt(eta) * tdyn for a Keplerian potential
     if(P[p].Type == 0) {dt_tidal = DMIN(sqrt(All.ErrTolIntAccuracy/(All.G*CellP[p].Density*All.cf_a3inv)), dt_tidal);} // gas self-gravity timescale as a bare minimum
     if(All.ComovingIntegrationOn){ // floor to the dynamical time of the universe
@@ -1561,7 +1557,7 @@ void process_wake_ups(void)
 	    if(P[i].wakeup > 0) {
 		/* hydro wakeup: target timestep = dt_waker / WAKEUP */
 		int waker_bin = P[i].wakeup - 1;
-		bin = IMAX(0, waker_bin - wakeup_bin_offset);
+		if(All.WakeupTargetBin == 1) {bin = waker_bin;} else if(All.WakeupTargetBin == 2) {bin = max_time_bin_active;} else {bin = IMAX(0, waker_bin - wakeup_bin_offset);}
 	    } else {
 		/* generic wakeup (sinks, merge, etc.): use highest active bin */
 		bin = max_time_bin_active;
