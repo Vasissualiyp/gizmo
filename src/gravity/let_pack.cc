@@ -40,6 +40,8 @@
 #include <string.h>
 #include <math.h>
 #include <float.h>
+#include <limits.h>
+#include <vector>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -1920,6 +1922,7 @@ static int let_wire_decode(int kind, let_wire_reader &rd, struct LETNodeWire *w)
 }
 
 
+
 /* The encoded streams travel in whole units of this many bytes: large enough that an int count of them
  * spans any one exchange, small enough that the zero padding at the end of a stream does not matter. */
 #define LET_WIRE_UNIT_BYTES 64
@@ -2598,6 +2601,101 @@ extern "C" let_exchange_status_t let_exchange_nodes(unsigned char **send_buf_per
  * allocated for this import, return LET_OVERFLOW_RETRYABLE without installing; the
  * force_treebuild loop raises the index ceiling and retries.
  * ---------------------------------------------------------------------- */
+/* Records one parallel decode task takes at a time. */
+#define LET_DECODE_BLOCK_RECORDS 4096
+
+/* A run of one sender's records and where its payload starts, so that decoding it needs nothing from any
+ * other block. */
+struct let_decode_block {
+    const unsigned char *kinds;     /* the sender's kind bytes, indexed by record */
+    const unsigned char *payload;   /* this block's first record */
+    const unsigned char *end;       /* end of the sender's stream */
+    int sender, j0, j1, slot_base;
+};
+
+/* Check one sender's stream and cut it into blocks: every kind known, the records fitting the stream, and
+ * what follows them fewer than one unit of zeros.  Returns 0 on a malformed stream. */
+static int let_wire_plan_stream(const unsigned char *stream, int rcount, int runits, int slot_base, int sender,
+                                std::vector<struct let_decode_block> &blocks)
+{
+    const size_t span = (size_t) runits * LET_WIRE_UNIT_BYTES;
+    if(rcount <= 0 || runits < 0 || (size_t) rcount > span) {return 0;}
+    const size_t full_bytes = let_wire_record_bytes(LET_WIRE_KIND_FULL), leaf_bytes = let_wire_record_bytes(LET_WIRE_KIND_LEAF);
+    size_t off = (size_t) rcount;   /* the records follow the kind bytes; off <= span throughout */
+    for(int j0 = 0; j0 < rcount; j0 += LET_DECODE_BLOCK_RECORDS)
+    {
+        const int j1 = (rcount - j0 > LET_DECODE_BLOCK_RECORDS) ? j0 + LET_DECODE_BLOCK_RECORDS : rcount;
+        blocks.push_back({stream, stream + off, stream + span, sender, j0, j1, slot_base});
+        for(int j = j0; j < j1; j++)
+        {
+            const size_t sz = (stream[j] == LET_WIRE_KIND_FULL) ? full_bytes : (stream[j] == LET_WIRE_KIND_LEAF) ? leaf_bytes : 0;
+            if(sz == 0 || sz > span - off) {return 0;}
+            off += sz;
+        }
+    }
+    if(span - off >= LET_WIRE_UNIT_BYTES) {return 0;}
+    for(size_t q = off; q < span; q++) {if(stream[q]) {return 0;}}
+    return 1;
+}
+
+/* Decode one block, handing each record to the destination with its slot.  Returns 0 on a malformed record. */
+template <class Sink>
+static int let_wire_decode_block(const struct let_decode_block &b, Sink &sink)
+{
+    let_wire_reader rd = {b.payload, b.end, 0};
+    for(int j = b.j0; j < b.j1; j++)
+    {
+        struct LETNodeWire rec;
+        if(!let_wire_decode(b.kinds[j], rd, &rec)) {return 0;}
+        sink.put(b.slot_base + j, rec);
+    }
+    return 1;
+}
+
+/* Decode every block, in parallel: each record lands in its own slot, so the result is the same however the
+ * work is split.  Returns the lowest failing block (so what is reported does not depend on thread timing),
+ * or -1.  The loop's end is a barrier: every record is in before the caller touches any of them. */
+template <class Sink>
+static long long let_wire_decode_blocks(const std::vector<struct let_decode_block> &blocks, Sink &sink)
+{
+    long long first_bad = LLONG_MAX;
+    const long long nb = (long long) blocks.size();
+#ifdef _OPENMP
+#pragma omp parallel for schedule(dynamic)
+#endif
+    for(long long k = 0; k < nb; k++)
+    {
+        if(!let_wire_decode_block(blocks[(size_t) k], sink))
+        {
+#ifdef _OPENMP
+#pragma omp critical(let_wire_decode_fail)
+#endif
+            {if(k < first_bad) {first_bad = k;}}
+        }
+    }
+    return (first_bad == LLONG_MAX) ? -1 : first_bad;
+}
+
+/* The install destination: a decoded record into its node slot and its foreign-leaf identity sidecar (at
+ * foreign_slot = no - (TreeNodeIndexBase+MaxNodes), NOT the SoA index no-TreeNodeIndexBase; non-leaf records
+ * carry leaf_tag 0). */
+struct let_install_sink {
+    void put(int abs_idx, const struct LETNodeWire &rec) const
+    {
+        Nodes[abs_idx]    = rec.node;
+        Extnodes[abs_idx] = rec.extnode;
+        const int foreign_slot = abs_idx - (All.TreeNodeIndexBase + MaxNodes);
+        if(ForeignLeafTag && foreign_slot >= 0 && foreign_slot < AllocatedForeignNodes)
+        {
+            ForeignLeafTag[foreign_slot]  = rec.leaf_tag;
+            ForeignLeafType[foreign_slot] = rec.leaf_type;
+            ForeignLeafZeta[foreign_slot] = rec.leaf_ags_zeta;
+            ForeignLeafSoft[foreign_slot] = rec.leaf_force_softening;
+        }
+    }
+};
+
+
 extern "C" let_exchange_status_t let_unpack_and_install(const unsigned char *recv_buf,
                                        const int *recv_count_per_rank,
                                        const int *recv_units_per_rank,
@@ -2606,77 +2704,47 @@ extern "C" let_exchange_status_t let_unpack_and_install(const unsigned char *rec
                                        int recv_hdr_count_total,
                                        const int *foreign_slot_prefix)
 {
-    size_t unit_off = 0;  /* running offset into recv_buf, in stream units (per-sender) */
-    int hdr_off  = 0;     /* running offset into recv_hdr_buf (per-sender) */
-
-    for(int r = 0; r < NTask; r++)
+    /* Pass 1: check every sender's stream and cut it into blocks (one byte per record, in order), then
+     * decode all blocks of all senders in parallel.  The stream is its record count of kind bytes, then
+     * the records, then zero padding to the end of its last unit; anything else -- an unknown kind, a
+     * record running past the stream, unexplained bytes at its end -- is a malformed exchange, which every
+     * rank then stops on together through the status. */
+    std::vector<struct let_decode_block> blocks;
     {
-        int rcount = recv_count_per_rank[r];
-        int runits = recv_units_per_rank[r];
-        int hcount = recv_hdr_count_per_rank[r];
-        const unsigned char *stream = recv_buf + unit_off * LET_WIRE_UNIT_BYTES;
-        unit_off += (size_t) runits;
-        if(rcount == 0)
+        size_t unit_off = 0;  /* running offset into recv_buf, in stream units (per-sender) */
+        for(int r = 0; r < NTask; r++)
         {
-            /* nothing from this sender -- which must then also mean no stream and no headers */
-            if(runits != 0 || hcount != 0)
+            const int rcount = recv_count_per_rank[r], runits = recv_units_per_rank[r], hcount = recv_hdr_count_per_rank[r];
+            const unsigned char *stream = recv_buf + unit_off * LET_WIRE_UNIT_BYTES;
+            unit_off += (size_t) runits;
+            if(rcount == 0)
             {
-                printf("LET install: rank %d sent no records but %d units and %d headers to rank %d; stopping.\n",
-                       r, runits, hcount, ThisTask);
+                /* nothing from this sender -- which must then also mean no stream and no headers */
+                if(runits != 0 || hcount != 0)
+                {
+                    printf("LET install: rank %d sent no records but %d units and %d headers to rank %d; stopping.\n",
+                           r, runits, hcount, ThisTask);
+                    fflush(stdout);
+                    return LET_UNPACK_INTERNAL;
+                }
+                continue;
+            }
+            /* This sender's slots come from the prefix over the receive counts, not from how many
+             * senders happen to have been installed already, so a sender occupies the same slots no
+             * matter which exchange round carried it.  The storage was checked against that same
+             * complete receive vector (and grown to it if short), so the last sender's slots end at or
+             * before the end of the storage and this can only fail if the two disagree -- an internal
+             * inconsistency, not a shortfall a larger tree would fix.  Say so and stop, rather than
+             * rebuilding three times to the same size. */
+            if((long long) foreign_slot_prefix[r] + (long long) rcount > (long long) AllocatedForeignNodes)
+            {
+                printf("LET install FATAL: sender %d needs foreign slots up to %lld but only %d are allocated (rank %d).\n",
+                       r, (long long) foreign_slot_prefix[r] + (long long) rcount, AllocatedForeignNodes, ThisTask);
                 fflush(stdout);
                 return LET_UNPACK_INTERNAL;
             }
-            continue;
-        }
-
-        /* This sender's slots come from the prefix over the receive counts, not from how many
-         * senders happen to have been installed already, so a sender occupies the same slots no
-         * matter which exchange round carried it.  The storage was checked against that same
-         * complete receive vector (and grown to it if short), so the last sender's slots end at or
-         * before the end of the storage and this can only fail if the two disagree -- an internal
-         * inconsistency, not a shortfall a larger tree would fix.  Say so and stop, rather than
-         * rebuilding three times to the same size. */
-        if((long long) foreign_slot_prefix[r] + (long long) rcount > (long long) AllocatedForeignNodes)
-        {
-            printf("LET install FATAL: sender %d needs foreign slots up to %lld but only %d are allocated (rank %d).\n",
-                   r, (long long) foreign_slot_prefix[r] + (long long) rcount, AllocatedForeignNodes, ThisTask);
-            fflush(stdout);
-            return LET_UNPACK_INTERNAL;
-        }
-        int slot_base = All.TreeNodeIndexBase + MaxNodes + foreign_slot_prefix[r];
-
-        /* Pass 1a: decode this sender's records into their slots.  The stream is its record count
-         * of kind bytes, then the records, then zero padding to the end of its last unit; anything else
-         * -- an unknown kind, a record running past the stream, unexplained bytes at its end -- is
-         * a malformed exchange, which every rank then stops on together through the status. */
-        {
-            const unsigned char *end = stream + (size_t) runits * LET_WIRE_UNIT_BYTES;
-            int ok = ((size_t) rcount <= (size_t) runits * LET_WIRE_UNIT_BYTES);
-            let_wire_reader rd = {stream + (ok ? rcount : 0), end, 0};
-            for(int j = 0; ok && j < rcount; j++)
-            {
-                struct LETNodeWire rec;
-                if(!let_wire_decode(stream[j], rd, &rec)) {ok = 0; break;}
-                const int abs_idx = slot_base + j;
-                Nodes[abs_idx]    = rec.node;
-                Extnodes[abs_idx] = rec.extnode;
-                /* the foreign-leaf identity sidecar, at foreign_slot = no - (TreeNodeIndexBase+MaxNodes),
-                 * NOT the SoA index no-TreeNodeIndexBase; non-leaf records carry leaf_tag 0 */
-                const int foreign_slot = abs_idx - (All.TreeNodeIndexBase + MaxNodes);
-                if(ForeignLeafTag && foreign_slot >= 0 && foreign_slot < AllocatedForeignNodes)
-                {
-                    ForeignLeafTag[foreign_slot]  = rec.leaf_tag;
-                    ForeignLeafType[foreign_slot] = rec.leaf_type;
-                    ForeignLeafZeta[foreign_slot] = rec.leaf_ags_zeta;
-                    ForeignLeafSoft[foreign_slot] = rec.leaf_force_softening;
-                }
-            }
-            if(ok)
-            {
-                if((size_t)(end - rd.p) >= LET_WIRE_UNIT_BYTES) {ok = 0;}
-                for(const unsigned char *q = rd.p; ok && q < end; q++) {if(*q) {ok = 0;}}
-            }
-            if(!ok)
+            const int slot_base = All.TreeNodeIndexBase + MaxNodes + foreign_slot_prefix[r];
+            if(!let_wire_plan_stream(stream, rcount, runits, slot_base, r, blocks))
             {
                 printf("LET install: the stream from rank %d (%d records in %d units) is malformed on rank %d; "
                        "stopping.\n", r, rcount, runits, ThisTask);
@@ -2684,6 +2752,25 @@ extern "C" let_exchange_status_t let_unpack_and_install(const unsigned char *rec
                 return LET_UNPACK_INTERNAL;
             }
         }
+        let_install_sink sink;
+        const long long bad = let_wire_decode_blocks(blocks, sink);
+        if(bad >= 0)
+        {
+            printf("LET install: a record from rank %d (records %d..%d) could not be decoded on rank %d; stopping.\n",
+                   blocks[(size_t) bad].sender, blocks[(size_t) bad].j0, blocks[(size_t) bad].j1 - 1, ThisTask);
+            fflush(stdout);
+            return LET_UNPACK_INTERNAL;
+        }
+    }
+
+    /* Passes 1b, 2 and 3, sender by sender, now that every record is in. */
+    int hdr_off  = 0;     /* running offset into recv_hdr_buf (per-sender) */
+    for(int r = 0; r < NTask; r++)
+    {
+        const int rcount = recv_count_per_rank[r];
+        const int hcount = recv_hdr_count_per_rank[r];
+        if(rcount == 0) {continue;}   /* and then no headers either, checked above */
+        const int slot_base = All.TreeNodeIndexBase + MaxNodes + foreign_slot_prefix[r];
 
         /* Pass 1b: rebase wire-local topology to absolute slots, once every record is in.
          * The wire graph is self-contained -- pack RELABEL resolved every terminator to a
