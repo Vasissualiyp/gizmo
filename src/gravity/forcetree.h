@@ -101,6 +101,8 @@ void force_finish_kick_nodes(void);
  * flush after the step's kick.  The kick itself does not come through here: it has
  * its own route and exchange (force_kick_node / force_finish_kick_nodes). */
 void gravity_note_motion_bound(const int *idx, int n);
+/* The same raise for particle i just inserted by force_add_element_to_tree, over its whole chain. */
+void gravity_note_inserted_motion_bound(int i);
 /* Raise the kernel-length growth rate (divVmax) of every node above each of idx[0..n) to the member's
  * particle_radius_growth_rate, for particles whose dilation factor was just frozen anew; the top-level
  * nodes reached ride the same flush.  Does nothing without USE_TIMESTEP_DILATION_FOR_ZOOMS. */

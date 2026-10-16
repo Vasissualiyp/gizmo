@@ -1792,7 +1792,10 @@ void force_add_element_to_tree(int iparent, int ichild)
     Nextnode[iparent] = ichild; // insert new particle into linked list
     Nextnode[ichild] = no; // order correctly
     Father[ichild] = father; // set parent node to be the same
-    // update parent node properties [maximum softening, speed] for opening criteria
+    /* The child's speed bound goes up its whole chain, to the top-level node other ranks route by; the
+     * parent's node alone would let it outrun every ancestor box until its first kick or the next build. */
+    gravity_note_inserted_motion_bound(ichild);
+    // update parent node property [maximum softening] for opening criteria
     MyFloat new_hmax = DMAX(Extnodes[father].hmax, (MyFloat) moment_gas_hmax_from_kernelradius(P[iparent].KernelRadius, All.MaxKernelRadius));
     Extnodes[father].hmax = new_hmax;
     /* Mode B per-type incremental update — only the band corresponding to
@@ -1806,13 +1809,9 @@ void force_add_element_to_tree(int iparent, int ichild)
             Extnodes[father].hmax_per_type[ptype] = (MyFloat)htmp;
         }
     }
-    double new_vmax = DMAX((double) Extnodes[father].vmax, particle_motion_speed_bound(ichild, P, CellP));
-    Extnodes[father].vmax = (MyFloat) new_vmax;
-
     /* Keep SoA walk-mirror coherent with the AoS Extnodes
-     * change above.  hmax and vmax are read by the walk's opening criteria
-     * (and vmax drives bbox expansion in subsequent drifts via Nodes[].len).
-     * Indexing matches the local-or-foreign convention from gpu_force_drift_nodes:
+     * change above.  hmax is read by the walk's opening criteria (vmax was
+     * mirrored by the chain raise above).  Indexing matches the local-or-foreign convention from gpu_force_drift_nodes:
      * SoA slot k = father - All.TreeNodeIndexBase for both local nodes (k < MaxNodes) and
      * foreign nodes (MaxNodes <= k < MaxNodes + AllocatedForeignNodes) -- bounded by the mirror
      * that exists, not by the index range it sits in. */
@@ -1821,7 +1820,6 @@ void force_add_element_to_tree(int iparent, int ichild)
         const int k_soa = gpu_gravity_tree_mirror_slot(father);
         if(soa && k_soa >= 0) {
             if(soa->hmax) {soa->hmax[k_soa] = (MyGravFloat) new_hmax;}
-            if(soa->vmax) {soa->vmax[k_soa] = (MyGravFloat) new_vmax;}
             /* ⛔ node_ti is deliberately NOT written here. It must pair with the
                LENGTH it describes, and this site does not write soa->len: stamping a
                newer time onto an older length makes the walk widen by too little --
