@@ -720,7 +720,7 @@ static void resolvedism_fb_serialized_pass(void (*calc_fn)(int), int flagA, int 
         int spawn_this = 0;
         if(flagA == 1 && i_owner >= 0 && P[i_owner].SNe_ThisTimeStep == 1) {
             double Mstar_sp = P[i_owner].MstarSampleIMF[0];
-            double Zbirth_sp = (P[i_owner].BirthMetallicity > 0) ? P[i_owner].BirthMetallicity : All.InitMetallicityinSolar*0.0134;
+            double Zbirth_sp = (P[i_owner].BirthMetallicity > 0) ? P[i_owner].BirthMetallicity : All.InitMetallicityinSolar*All.SolarAbundances[0];
             double logM_sp = log10(DMAX(Mstar_sp, 0.1)), logZ_sp = log10(DMAX(Zbirth_sp, 1e-8));
             int rt_sp = stellar_remnant_type(logM_sp, logZ_sp);
             double rem_sp = stellar_remnant_mass(logM_sp, logZ_sp);

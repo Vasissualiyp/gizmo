@@ -13,7 +13,7 @@ missing=0; for f in "${OUTS[@]}"; do [ -e "$f" ] || missing=1; done
 [ $missing = 1 ] || exit 0
 
 REPO="${STELLA_TABLES_REPO:-https://github.com/Ulli1991/stella-tables.git}"
-REF="${STELLA_TABLES_REF:-8c039a8ce99776cac9b37d4d1285d9f622f03eff}"   # stella-tables version these GIZMO sources expect
+REF="${STELLA_TABLES_REF:-efd709ffc439c827c0402be0427fb4848dd5e330}"   # stella-tables version these GIZMO sources expect
 DIR="${STELLA_TABLES_DIR:-$GIZMO/.stella-tables}"
 
 [ -d "$DIR/.git" ] || git clone -q "$REPO" "$DIR"

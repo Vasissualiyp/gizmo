@@ -127,7 +127,7 @@ void chem_fill_inputs(int target, struct ChemInputs *in)
          * the stored Metallicity[]/Dust[] are untouched (mass conservation & enrichment
          * bookkeeping unaffected). Uniform scale preserves abundance ratios (incl. CO=min(C,O)). */
         {
-            const double Z_solar_chem = 0.0134;
+            const double Z_solar_chem = All.SolarAbundances[0];
             const double Zmax_chem    = 10.0 * Z_solar_chem;   /* CHEM_ZMAX_SOLAR = 10 */
             double Zcell = P[target].Metallicity[0];           /* total metal mass fraction */
             if(Zcell > Zmax_chem) {

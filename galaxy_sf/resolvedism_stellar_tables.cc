@@ -734,7 +734,7 @@ void resolvedism_load_stellar_tables(void)
                     for(int kk = ELEM_C; kk < STBL_NELEM; kk++) {
                         double ny = StellarTbl.net_yields[(IDX2(iz, im)) * STBL_NELEM + kk]; /* element stride, NOT IDX3 (age stride): OOB read, segfaulted adiab builds (ASAN 2026-07-13) */
                         /* Apply same clip as injection code */
-                        double X_birth_k = (kk < ELEM_C) ? 0.0 : (StellarTbl.Z[iz] / 0.014) * 0.0134; /* approx */
+                        double X_birth_k = StellarTbl.X_init[iz * STBL_NELEM + kk]; /* table's birth mass fraction of element kk */
                         double M_elem_ej = ny + X_birth_k * Mej;
                         if(M_elem_ej > 0) metal_yield += M_elem_ej;
                     }
