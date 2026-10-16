@@ -1,0 +1,7 @@
+# MFM with metal diffusion and MHD: the merge/split paths for pending exchange, metals and B
+HYDRO_MESHLESS_FINITE_MASS
+BOX_PERIODIC
+SELFGRAVITY_OFF
+METALS
+TURB_DIFF_METALS
+MAGNETIC
