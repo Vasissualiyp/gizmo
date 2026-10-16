@@ -812,6 +812,11 @@ ifeq (GALSF_RESOLVEDISM_SAMPLE_IMF,$(findstring GALSF_RESOLVEDISM_SAMPLE_IMF,$(C
 OBJS    += galaxy_sf/resolvedism_imf_sampling.o
 endif
 
+# Stella stellar + CHEMCOOL tables: built from the stella-tables repo on first compile if missing (scripts/get_stella_tables.sh)
+ifneq (,$(findstring CHEMCOOL,$(CONFIGVARS))$(findstring GALSF_RESOLVEDISM_STELLAR_TABLES,$(CONFIGVARS)))
+STELLA_TABLES_DEP = stella_tables
+endif
+
 # KETJU regularized integrator for BH and stellar dynamics
 ifeq (KETJU_REGULARIZATION,$(findstring KETJU_REGULARIZATION,$(CONFIGVARS)))
 OBJS    += galaxy_sf/ketju_coupling.o
@@ -872,10 +877,10 @@ FFLAGS = $(FOPTIONS) -Icooling/chemcool
 
 # if we have Fortran objects (e.g. CHEMCOOL, EOS_HELMHOLTZ), link with FC; otherwise use CXX
 ifneq ($(FOBJS),)
-$(EXEC): $(OBJS) $(CHEMCXX_OBJS) $(FOBJS)
+$(EXEC): $(OBJS) $(CHEMCXX_OBJS) $(FOBJS) | $(STELLA_TABLES_DEP)
 	$(FC) $(OPTIMIZE) $(OBJS) $(CHEMCXX_OBJS) $(FOBJS) $(LIBS) -o $(EXEC)
 else
-$(EXEC): $(OBJS) $(CHEMCXX_OBJS)
+$(EXEC): $(OBJS) $(CHEMCXX_OBJS) | $(STELLA_TABLES_DEP)
 	$(CXX) $(OPTIMIZE) $(OBJS) $(CHEMCXX_OBJS) $(LIBS) -o $(EXEC)
 endif
 
@@ -888,6 +893,10 @@ $(CHEMCXX_OBJS): %.o: %.cc $(INCL) $(CONFIG) compile_time_info.cc
 
 $(FOBJS): %.o: %.F
 	$(FC) $(FOPTIONS) -I. -Icooling/chemcool -c $< -o $@
+
+.PHONY: stella_tables
+stella_tables:
+	@./scripts/get_stella_tables.sh
 
 compile_time_info.cc: $(CONFIG)
 	$(PERL) file_io/prepare-config.perl $(CONFIG)

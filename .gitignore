@@ -71,3 +71,6 @@ test/*/convergence_results/
 test/*/*_override.params
 .gizmo_build.lock
 nbody_val/
+
+# stella-tables clone used by scripts/get_stella_tables.sh
+.stella-tables/
