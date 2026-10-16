@@ -207,9 +207,11 @@ void hydro_core_meshless_compute_pair(
         /* MG correction (Tu et al. 2026). The coefficients c are defined only up to a constant on each
          * connected piece of the gas, so only c_j - c_i is physical: it shifts the face average of B along
          * the face area vector A by (c_j - c_i)(r^2/8) A. Both face states take that shift, which leaves
-         * their jump as reconstructed. On a step without the solve the c of the last solve is used the same
-         * way, as the constrained-gradient correction of that step assumes. */
-        double mg_dc = mg_face_coefficient_difference(local.MG_cgcoeff, local.MG_piece_token, CellP[j].MG_cgcoeff, CellP[j].MG_piece_token);
+         * their jump as reconstructed. On a step without the solve the c of the last solve is reused, capped by
+         * the cells' envelopes, exactly as the constrained-gradient correction of that step assumes. */
+        double mg_dc = mg_face_coefficient_difference(local.MG_cgcoeff, local.MG_piece_token, local.MG_envelope,
+                                                      CellP[j].MG_cgcoeff, CellP[j].MG_piece_token, CellP[j].MG_envelope,
+                                                      r2, Face_Area_Vec.norm_sq(), All.Flag_SkipMGSolve);
         Vec3<double> mg_dB_face = (0.125 * r2 * mg_dc) * Face_Area_Vec;
         Riemann_vec.R.B += mg_dB_face; Riemann_vec.L.B += mg_dB_face;
         if(!All.Flag_SkipMGSolve) {

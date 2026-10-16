@@ -197,9 +197,10 @@ static void report_memory_ledger_impl(const char *when, int always)
        "Kokkos observed" superset is decomposed into SoA / tree / tree-build scratch /
        moment scratch / NGL / unclassified, split by memory-space class. */
     const int NCELL = GIZMO_KOKCELL_COUNT;
-    long long bkt_cur[NCELL], bkt_hw[NCELL], node_bkt[NCELL];
+    long long bkt_cur[NCELL], bkt_hw[NCELL], node_bkt[NCELL], node_bkt_hw[NCELL];
     gizmo_kokkos_mem_buckets(bkt_cur, bkt_hw);
     MPI_Reduce(bkt_cur, node_bkt, NCELL, MPI_LONG_LONG, MPI_SUM, 0, GizmoNodeComm);
+    MPI_Reduce(bkt_hw, node_bkt_hw, NCELL, MPI_LONG_LONG, MPI_SUM, 0, GizmoNodeComm);   /* summed rank peaks: transient buckets read 0 when current */
 
     /* Tree byte breakdown (local vs foreign-LET vs aux) + foreign capacity/used-HW/floor.
        MB totals sum over the node; the node-count fields take the per-rank MAX (the
@@ -338,22 +339,27 @@ static void report_memory_ledger_impl(const char *when, int always)
         if(gizmo_kokkos_mem_available()) {
             /* Per-bucket totals (sum over space class) and per-space totals (sum over
                buckets) from the classified node array. */
-            double bkt_mb[GIZMO_KOKBUCKET_COUNT] = {0}, spc_mb[GIZMO_KOKSPACE_COUNT] = {0};
+            double bkt_mb[GIZMO_KOKBUCKET_COUNT] = {0}, bkt_hw_mb[GIZMO_KOKBUCKET_COUNT] = {0}, spc_mb[GIZMO_KOKSPACE_COUNT] = {0};
             for(int b = 0; b < GIZMO_KOKBUCKET_COUNT; b++)
                 for(int s = 0; s < GIZMO_KOKSPACE_COUNT; s++) {
                     double mb = node_bkt[b * GIZMO_KOKSPACE_COUNT + s] / (1024.0 * 1024.0);
                     bkt_mb[b] += mb; spc_mb[s] += mb;
+                    bkt_hw_mb[b] += node_bkt_hw[b * GIZMO_KOKSPACE_COUNT + s] / (1024.0 * 1024.0);
                 }
             n += snprintf(buf + n, (n < (int) sizeof(buf)) ? sizeof(buf) - n : 0,
                           "  kokkos %.0f cur / %.0f hw: SoA %.0f tree-AoS %.0f tree-SoA %.0f walk %.0f runner %.0f sidecar %.0f"
-                          " tscratch-b %.0f tscratch-m %.0f ngl-sidx %.0f ngl-pairs %.0f ngl-other %.0f unclass %.0f\n",
+                          " tscratch-b %.0f tscratch-m %.0f ngl-sidx %.0f ngl-pairs %.0f ngl-other %.0f"
+                          " mg-graph %.0f (peak %.0f) mg-insert %.0f (peak %.0f; HYPRE's own memory is not observed) unclass %.0f\n",
                           node_kok_cur / (1024.0 * 1024.0), node_kok_hw / (1024.0 * 1024.0),
                           bkt_mb[GIZMO_KOKBUCKET_PARTICLE_SOA], bkt_mb[GIZMO_KOKBUCKET_TREE_ARRAYS],
                           bkt_mb[GIZMO_KOKBUCKET_GRAVITY_TREE_SOA], bkt_mb[GIZMO_KOKBUCKET_GRAVITY_WALK],
                           bkt_mb[GIZMO_KOKBUCKET_MODEA_RUNNER], bkt_mb[GIZMO_KOKBUCKET_FINE_SIDECAR],
                           bkt_mb[GIZMO_KOKBUCKET_TREESCRATCH_BUILD], bkt_mb[GIZMO_KOKBUCKET_TREESCRATCH_MOMENT],
                           bkt_mb[GIZMO_KOKBUCKET_NGL_SIDX], bkt_mb[GIZMO_KOKBUCKET_NGL_PAIRS],
-                          bkt_mb[GIZMO_KOKBUCKET_NGL], bkt_mb[GIZMO_KOKBUCKET_UNCLASSIFIED]);
+                          bkt_mb[GIZMO_KOKBUCKET_NGL],
+                          bkt_mb[GIZMO_KOKBUCKET_MG_GRAPH], bkt_hw_mb[GIZMO_KOKBUCKET_MG_GRAPH],
+                          bkt_mb[GIZMO_KOKBUCKET_MG_INSERT], bkt_hw_mb[GIZMO_KOKBUCKET_MG_INSERT],
+                          bkt_mb[GIZMO_KOKBUCKET_UNCLASSIFIED]);
             /* Space split only when more than one space class is nonzero (on a CPU/OpenMP
                backend everything is host/shared, so this line is suppressed). */
             int nspace_nz = 0;

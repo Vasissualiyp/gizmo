@@ -249,11 +249,13 @@ const nlr_external_csr * gizmo_hydro_corridor_external_csr(void)
     return g_corridor_csr_valid ? &g_corridor_csr : nullptr;
 }
 
-bool gizmo_hydro_corridor_csr_arrays(const int **rows, int *n_rows, const int64_t **offsets, const int **neighbors)
+bool gizmo_hydro_corridor_csr_arrays(const int **rows, int *n_rows, const int64_t **offsets, const int **neighbors,
+                                     const struct gpu_neighbor_list_t **device)
 {
     if(!g_corridor_csr_valid) {return false;}
     *rows = g_corridor_csr.active_indices; *n_rows = g_corridor_csr.num_active;
     *offsets = g_corridor_csr.offsets; *neighbors = g_corridor_csr.neighbors;
+    *device = g_corridor_csr.device;
     return true;
 }
 

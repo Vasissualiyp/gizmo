@@ -1172,6 +1172,7 @@ int merge_particles_ij(int i, int j)
     if(CellP[j].MG_piece_token != 0 && CellP[j].MG_piece_token == CellP[i].MG_piece_token) {   /* same gauge: c at the merged (mass-weighted) position */
         CellP[j].MG_cgcoeff = wt_j * CellP[j].MG_cgcoeff + wt_i * CellP[i].MG_cgcoeff;
     } else {CellP[j].MG_cgcoeff = 0; CellP[j].MG_piece_token = 0;}   /* no common gauge: the merged cell carries no MG state */
+    CellP[j].MG_envelope = 0;   /* the merged cell's faces were never part of a solve: no reused correction until the next one */
 #endif
     //CellP[j].DtB = CellP[i].DtB = {}; CellP[j].BPred = CellP[j].B; CellP[i].BPred = CellP[i].B; /* zero the time derivatives and cleaning terms: these will be re-calculated self-consistently from the new mesh configuration */
     CellP[j].divB += CellP[i].divB; // CellP[i].divB = CellP[j].divB = 0; /* this is a conserved quantity (volume-integrated) so can simply be added */

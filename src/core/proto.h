@@ -143,12 +143,24 @@ GIZMO_GPU_FUNCTION static inline signed char min_work_bin(signed char a, signed 
 GIZMO_GPU_FUNCTION static inline int wakeup_flag_from_timebin(int bin) {return bin + 1;}
 GIZMO_GPU_FUNCTION static inline int wakeup_timebin_from_flag(int flag) {return flag - 1;}
 #ifdef MHD_MODIFIED_GRADIENT
-/* c_j - c_i of the last applied MG solve on a face. Each connected piece of that solve fixed its own constant in c,
-   so the difference is defined only between cells that shared a piece; across pieces (two cells that have come into
-   contact since), or for a cell with no MG state (token 0), the face takes no MG correction. */
-GIZMO_GPU_FUNCTION static inline double mg_face_coefficient_difference(double c_i, long long piece_token_i, double c_j, long long piece_token_j)
+/* c_j - c_i of the last applied MG solve on a face, as the face applies it. Each connected piece of that solve fixed its
+   own constant in c, so the difference is defined only between cells that shared a piece; across pieces (two cells that
+   have come into contact since), or for a cell with no MG state (token 0), the face takes no MG correction. On a step
+   without the solve the cells have moved since c was computed, so the correction flux |c_j - c_i| r^2|A|^2/8 through the
+   face (at the current geometry) is capped at the smaller envelope of its two cells, the largest flux each put through any
+   of its faces at the solve: a reused correction never exceeds what the solve itself applied. A cell with no envelope (0)
+   takes none. Hydro and the constrained-gradient face sum both call this, so they apply the same correction. */
+GIZMO_GPU_FUNCTION static inline double mg_face_coefficient_difference(double c_i, long long piece_token_i, double envelope_i,
+                                                                       double c_j, long long piece_token_j, double envelope_j,
+                                                                       double r2, double face_area_sq, int without_solve)
 {
-    return ((piece_token_i != 0) && (piece_token_i == piece_token_j)) ? (c_j - c_i) : 0.0;
+    if((piece_token_i == 0) || (piece_token_i != piece_token_j)) {return 0.0;}
+    double dc = c_j - c_i;
+    if(without_solve) {
+        double flux = fabs(dc) * 0.125 * r2 * face_area_sq, envelope = (envelope_i < envelope_j) ? envelope_i : envelope_j;
+        if(flux > envelope) {dc *= (envelope > 0) ? envelope / flux : 0.0;}
+    }
+    return dc;
 }
 #endif
 
@@ -421,6 +433,8 @@ enum {
   GIZMO_KOKBUCKET_NGL_SIDX,             /* label prefix ngl_sidx_  (tile/BVH/pool/compact-position spatial index) */
   GIZMO_KOKBUCKET_NGL_PAIRS,            /* label prefix ngl_pairs_ (per-dispatch active list, CSR offsets/neighbours, search scratch) */
   GIZMO_KOKBUCKET_NGL,                  /* label prefix ngl_ (remaining neighbour-list memory: build/refresh scratch) */
+  GIZMO_KOKBUCKET_MG_GRAPH,             /* label prefix mg_graph_  (MG div(B) face graph, its per-row values and build scratch) */
+  GIZMO_KOKBUCKET_MG_INSERT,            /* label prefix mg_insert_ (MG solver insertion arrays, freed once HYPRE has assembled) */
   GIZMO_KOKBUCKET_UNCLASSIFIED,
   GIZMO_KOKBUCKET_COUNT
 };
