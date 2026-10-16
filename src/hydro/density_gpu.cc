@@ -257,6 +257,7 @@ void hydro_evaluate_gpu(struct particle_data *P_host, struct gas_cell_data *Cell
 #ifdef MHD_MODIFIED_GRADIENT
             local.MG_cgcoeff = kc[ii].MG_cgcoeff;
             local.MG_piece_token = kc[ii].MG_piece_token;
+            local.MG_envelope = kc[ii].MG_envelope;
 #endif
 #endif
 #ifdef DOGRAD_INTERNAL_ENERGY

@@ -181,10 +181,13 @@ void gizmo_hydro_corridor_refresh_ghost_values(const char *stage);
 struct nlr_external_csr;
 const nlr_external_csr * gizmo_hydro_corridor_external_csr(void);
 
-/* The same published view as plain arrays, for host consumers that do not include
- * the runner header (the MG solve). Returns false when no view is published. The
+/* The same published view as plain arrays, for consumers that do not include the
+ * runner header (the MG solve), with the device copy built with it (*device has no
+ * neighbours when none was kept). Returns false when no view is published. The
  * arrays are the corridor's; re-fetch after every refresh. */
-bool gizmo_hydro_corridor_csr_arrays(const int **rows, int *n_rows, const int64_t **offsets, const int **neighbors);
+struct gpu_neighbor_list_t;
+bool gizmo_hydro_corridor_csr_arrays(const int **rows, int *n_rows, const int64_t **offsets, const int **neighbors,
+                                     const struct gpu_neighbor_list_t **device);
 
 /* Tear down the corridor at the end of hydro work for this step. Resets
  * the mode to UNSET so any unexpected read between steps is detectable.
