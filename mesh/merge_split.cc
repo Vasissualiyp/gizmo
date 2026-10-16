@@ -317,6 +317,7 @@ void merge_and_split_particles(void)
     struct flags_merg_split {
         int flag; // 0 for nothing, -1 for clipping, 1 for merging, 2 for splitting, and 3 marked as merged
         int target_index;
+        double r_nearest; // splits: nearest-neighbour distance before any cell moved
     } *Ptmp;
 
     int target_for_merger,dummy=0,numngb_inbox,startnode,i,j,n; double threshold_val;
@@ -329,6 +330,7 @@ void merge_and_split_particles(void)
     for (i = 0; i < NumPart; i++) {
       Ptmp[i].flag = 0;
       Ptmp[i].target_index = -1;
+      Ptmp[i].r_nearest = 0;
     }
 
     for (i = 0; i < NumPart; i++)
@@ -496,7 +498,7 @@ void merge_and_split_particles(void)
                     {
                         j = Ngblist[n];
                         /* make sure we're not taking the same particle */
-                        if((j>=0)&&(j!=i)&&(P[j].Type==P[i].Type) && (P[j].Mass > 0) && (Ptmp[j].flag == 0)) {
+                        if((j>=0)&&(j!=i)&&(P[j].Type==P[i].Type) && (P[j].Mass > 0)) { /* flagged neighbours count too */
                             Vec3<double> dp = P[i].Pos - P[j].Pos;
                             nearest_xyz(dp);
                             double r2 = dp.norm_sq();
@@ -506,6 +508,7 @@ void merge_and_split_particles(void)
                     if (target_for_merger >= 0) {
                         Ptmp[i].flag = 2; // mark for splitting
                         Ptmp[i].target_index = target_for_merger;
+                        Ptmp[i].r_nearest = sqrt(threshold_val);
                     }
                 }
             }
@@ -520,7 +523,7 @@ void merge_and_split_particles(void)
             if(did_merge == 1) {n_particles_merged++;}
         }
         if (Ptmp[i].flag == 2) {
-            int did_split = split_particle_i(i, n_particles_split, Ptmp[i].target_index);
+            int did_split = split_particle_i(i, n_particles_split, Ptmp[i].target_index, Ptmp[i].r_nearest);
             if(did_split == 1) {n_particles_split++; if(P[i].Type==0) {n_particles_gas_split++;}} else {failed_splits++;}
         }
     }
@@ -548,7 +551,7 @@ void merge_and_split_particles(void)
         int i_sp, NumPart_fixed = NumPart;
         for(i_sp = 0; i_sp < NumPart_fixed; i_sp++) {
             if(P[i_sp].Type != 4 || P[i_sp].SN_SpawnPending != 1) continue;
-            if(NumPart + n_particles_split + 1 >= (int)(REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPart)) {
+            if((NumPart + n_particles_split + 1 >= (int)(REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPart)) || (NumPart + n_particles_split + 1 >= (int)(REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPartGas))) { /* a gas cell: CellP must have room too */
                 printf("SPAWNSN: out of particle headroom on task %d — deferring\n", ThisTask); break;}
             int tmpl = -1, q; double r2b = 1.e30;
             for(q = 0; q < N_gas; q++) {
@@ -579,22 +582,45 @@ void merge_and_split_particles(void)
                 CellP[j_sp].VelPred[kk_sp] = P[i_sp].Vel[kk_sp];
                 CellP[j_sp].HydroAccel[kk_sp] = 0;
             }
-            P[j_sp].Mass = P[i_sp].SpawnEjMass; CellP[j_sp].Mass = P[j_sp].Mass;
+            /* cap the ejecta at the star's mass */
+            double ej_mass_sp = DMIN(P[i_sp].SpawnEjMass, P[i_sp].Mass), ej_frac_sp = (P[i_sp].SpawnEjMass > 0) ? ej_mass_sp / P[i_sp].SpawnEjMass : 0;
+            P[j_sp].Mass = ej_mass_sp; CellP[j_sp].Mass = P[j_sp].Mass;
 #ifdef HYDRO_MESHLESS_FINITE_VOLUME
             CellP[j_sp].MassTrue = P[j_sp].Mass; CellP[j_sp].dMass = 0; CellP[j_sp].DtMass = 0;
 #endif
-            double u_sp = (P[j_sp].Mass > 0) ? (P[i_sp].SpawnEjEnergy / P[j_sp].Mass) : 0;
+            /* drop the template's extensive content */
+            double m_ratio_sp = (P[tmpl].Mass > 0) ? P[j_sp].Mass / P[tmpl].Mass : 0;
+#ifdef MAGNETIC
+            CellP[j_sp].B = CellP[tmpl].B * m_ratio_sp; CellP[j_sp].BPred = CellP[tmpl].BPred * m_ratio_sp; CellP[j_sp].DtB = {}; CellP[j_sp].divB = 0; /* template field strength, not its flux */
+#ifdef DIVBCLEANING_DEDNER
+            CellP[j_sp].Phi = CellP[j_sp].PhiPred = CellP[j_sp].DtPhi = 0; CellP[j_sp].DtB_PhiCorr = {};
+#endif
+#endif
+#if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))
+            {int kd_sp; for(kd_sp=0;kd_sp<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;kd_sp++) {CellP[j_sp].Dyield_pending[kd_sp] = 0; CellP[j_sp].Dyield[kd_sp] = 0;}}
+#endif
+#if defined(GALSF_RESOLVEDISM_DUST)
+            {int kd_sp; for(kd_sp=0;kd_sp<NUM_RESOLVEDISM_DUST;kd_sp++) {CellP[j_sp].Dust[kd_sp] = 0;}} /* fresh ejecta carry no grains */
+#endif
+#if defined(SINK_THERMALFEEDBACK)
+            CellP[j_sp].Injected_Sink_Energy = 0;
+#endif
+            double u_sp = (P[i_sp].SpawnEjMass > 0) ? (P[i_sp].SpawnEjEnergy / P[i_sp].SpawnEjMass) : 0;
             CellP[j_sp].InternalEnergy = CellP[j_sp].InternalEnergyPred = u_sp;
             CellP[j_sp].DtInternalEnergy = 0;
             /* metallicity: ejecta composition (slot0 = total Z; slots 1..27 = elements) */
-            {double minv_sp = 1./DMAX(P[j_sp].Mass, 1e-30), zs_sp = 0; int ke_sp;
+            {double minv_sp = 1./DMAX(P[i_sp].SpawnEjMass, 1e-30), zs_sp = 0; int ke_sp;
              for(ke_sp = 0; ke_sp < NUM_RESOLVEDISM_ELEMENTS; ke_sp++) {
                  double X_sp = P[i_sp].SpawnEjZ[ke_sp]*minv_sp;
                  P[j_sp].Metallicity[ke_sp+1] = X_sp; if(ke_sp >= 2) {zs_sp += X_sp;} }
              P[j_sp].Metallicity[0] = zs_sp;}
             /* star bookkeeping: mass moves star -> new cell atomically here */
-            P[i_sp].Mass -= P[i_sp].SpawnEjMass; if(P[i_sp].Mass < 0) {P[i_sp].Mass = 0;}
+            P[i_sp].Mass -= P[j_sp].Mass;
+            if(ej_frac_sp < 1) {printf("SPAWNSN: star=%llu held only %.3g of its ejecta mass; payload scaled down to conserve mass\n", (unsigned long long)P[i_sp].ID, ej_frac_sp);}
             P[i_sp].SN_SpawnPending = 0;
+#ifdef WAKEUP
+            P[j_sp].wakeup = -2; NeedToWakeupParticles_local = 1; /* own timestep, not the template's */
+#endif
             printf("SPAWNSN_EXEC: star=%llu -> cell m=%.4e Msun u=%.4e (T~%.2e K) tmpl_dist=%.3e kpc task=%d\n",
                 (unsigned long long)P[i_sp].ID, P[j_sp].Mass*UNIT_MASS_IN_SOLAR, u_sp,
                 u_sp*UNIT_ENERGY_IN_CGS/UNIT_MASS_IN_CGS*(2./3.)*PROTONMASS_CGS/BOLTZMANN_CGS*0.6, sqrt(r2b), ThisTask);
@@ -626,14 +652,14 @@ void merge_and_split_particles(void)
     so care needs to be taken modifying this so that it's done in a way that is (1) conservative, (2) minimizes perturbations to the
     volumetric quantities of the flow, and (3) doesn't crash the tree or lead to particle 'overlap'
     Modified by Takashi Okamoto on 20/6/2019.  */
-int split_particle_i(int i, int n_particles_split, int i_nearest)
+/* r_nearest_presplit: distance to i_nearest before this pass moved any cell (0: measure it here) */
+int split_particle_i(int i, int n_particles_split, int i_nearest, double r_nearest_presplit)
 {
     double mass_of_new_particle;
     if( ((P[i].Type==0) && (NumPart + n_particles_split + 1 >= (int)(REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPartGas))) || (NumPart + n_particles_split + 1 >= (int)(REDUC_FAC_FOR_MEMORY_IN_DOMAIN*All.MaxPart)) )
     {
         //printf ("On Task=%d with NumPart=%d we tried to split a particle, but there is no space left...(All.MaxPart=%d). Try using more nodes, or raising PartAllocFac, or changing the split conditions to avoid this.\n", ThisTask, NumPart, All.MaxPart); fflush(stdout);
-        return 0;
-        endrun(8888);
+        return 0; /* the caller counts and reports failed splits */
     }
 #ifndef SPAWN_PARTICLES_VIA_SPLITTING
     if(P[i].Type != 0) {printf("Splitting Non-Gas Particle: i=%d ID=%llu Type=%d \n",i,(unsigned long long) P[i].ID,P[i].Type);} //fflush(stdout); endrun(8889);
@@ -648,7 +674,7 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
     cos_theta = 2.0*(get_random_number(i+3+2*ThisTask)-0.5); // random between 1 to -1 //
     Vec3<double> dp = P[i].Pos - P[i_nearest].Pos;
     nearest_xyz(dp);
-    double r_near = dp.norm();
+    double r_near = (r_nearest_presplit > 0) ? r_nearest_presplit : dp.norm();
     /* set d_r to the Voronoi-optimal daughter offset: d = (V_daughter)^{1/NDIMS}/2 = 2^{-(NDIMS+1)/NDIMS} * dx_eff,
        placing each daughter at its sub-cell centroid. minimizes O(d^2) perturbations to neighbor density estimates
        while maintaining a glass-like configuration. dimension-general: 0.397*dx_eff in 3D, 0.354 in 2D, 0.25 in 1D */
@@ -694,11 +720,13 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
 
     /* assign masses to both particles (so they sum correctly), but first record some numbers in case we need them below */
     double mass_before_split = 0, density_before_split = 0, volume_before_split = 0; mass_before_split = P[i].Mass; // save for use below
-    if(P[i].Type==0) {density_before_split = CellP[i].Density; volume_before_split = mass_before_split/density_before_split;} // save for use below
-    P[j].Mass = mass_of_new_particle * P[i].Mass; CellP[j].Mass = P[j].Mass;
-    P[i].Mass -= P[j].Mass; CellP[i].Mass = P[i].Mass;
+    if(P[i].Type==0) {density_before_split = CellP[i].Density; volume_before_split = (density_before_split > 0) ? mass_before_split/density_before_split : pow(P[i].Get_Particle_Size(), NUMDIMS);} // save for use below; cell size if no density yet
+    P[j].Mass = mass_of_new_particle * P[i].Mass;
+    P[i].Mass -= P[j].Mass;
+    if(P[i].Type==0) {CellP[j].Mass = P[j].Mass; CellP[i].Mass = P[i].Mass;} /* CellP only exists for gas */
 #ifdef BOX_BND_PARTICLES
-    if(P[i].ID==0)  {P[j].ID=1; double m0=P[i].Mass+P[j].Mass; P[i].Mass=P[j].Mass=m0;} CellP[i].Mass = P[i].Mass;
+    if(P[i].ID==0)  {P[j].ID=1; double m0=P[i].Mass+P[j].Mass; P[i].Mass=P[j].Mass=m0;}
+    if(P[i].Type==0) {CellP[i].Mass = P[i].Mass; CellP[j].Mass = P[j].Mass;}
 #endif
 
     /* prepare to shift the particle locations according to the random number we drew above */
@@ -778,6 +806,12 @@ int split_particle_i(int i, int n_particles_split, int i_nearest)
         CellP[j].GravWorkTerm = {}; CellP[i].GravWorkTerm = {}; //= mass_of_new_particle * ...; //appears more stable with this zero'd
         CellP[j].MassTrue = mass_of_new_particle * CellP[i].MassTrue;
         CellP[i].MassTrue -= CellP[j].MassTrue;
+#endif
+#if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))
+        for(k=0;k<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;k++) {CellP[j].Dyield_pending[k] = 0;} /* pending exchange stays with the parent */
+#endif
+#if defined(SINK_THERMALFEEDBACK)
+        CellP[j].Injected_Sink_Energy = mass_of_new_particle * CellP[i].Injected_Sink_Energy; CellP[i].Injected_Sink_Energy -= CellP[j].Injected_Sink_Energy; /* partition like other extensive fields */
 #endif
 #ifdef COSMIC_RAY_FLUID
 #if defined(CRFLUID_INJECTION_AT_SHOCKS)
@@ -909,12 +943,12 @@ int merge_particles_ij(int i, int j)
     int k;
     if(P[i].Mass <= 0)
     {
-        P[i].Mass = 0; CellP[i].Mass = P[i].Mass;
+        P[i].Mass = 0; if(P[i].Type==0) {CellP[i].Mass = P[i].Mass;} /* CellP only exists for gas */
         return 0;
     }
     if(P[j].Mass <= 0)
     {
-        P[j].Mass = 0; CellP[j].Mass = P[j].Mass;
+        P[j].Mass = 0; if(P[j].Type==0) {CellP[j].Mass = P[j].Mass;}
         return 0;
     }
     double mtot = P[j].Mass + P[i].Mass;
@@ -986,8 +1020,7 @@ int merge_particles_ij(int i, int j)
         }
 #endif
         /* finally zero out the particle mass so it will be deleted */
-        P[i].Mass = 0; CellP[i].Mass = P[i].Mass;
-        P[j].Mass = mtot; CellP[j].Mass = P[j].Mass;
+        P[i].Mass = 0; P[j].Mass = mtot; /* non-gas pair: CellP only exists for gas */
         /* momentum shift for passing to tree (so we know how to move it) */
         P[i].dp += P[i].Vel * P[i].Mass - p_old_i;
         P[j].dp += P[j].Vel * P[j].Mass - p_old_j;
@@ -1171,7 +1204,16 @@ int merge_particles_ij(int i, int j)
     for (k = 0; k < ChimesGlobalVars.totalNumberOfSpecies; k++) {ChimesGasVars[j].abundances[k] = (ChimesFloat) ((ChimesGasVars[j].abundances[k] * wt_j * wt_h_j) + (ChimesGasVars[i].abundances[k] * wt_i * wt_h_i));}
 #endif // CHIMES
 #ifdef METALS
+#if defined(CHEMCOOL)
+    double X_H_i_premerge = DMAX(particle_hydrogen_massfrac(i), 1e-10), X_H_j_premerge = DMAX(particle_hydrogen_massfrac(j), 1e-10); /* before j's metallicity is overwritten */
+#endif
     for(k=0;k<NUM_METAL_SPECIES;k++) {P[j].Metallicity[k] = wt_j*P[j].Metallicity[k] + wt_i*P[i].Metallicity[k];} /* metal-mass conserving */
+#if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))
+    for(k=0;k<NUM_METAL_SPECIES+NUM_ADDITIONAL_PASSIVESCALAR_SPECIES_FOR_YIELDS_AND_DIFFUSION;k++) {CellP[j].Dyield_pending[k] += CellP[i].Dyield_pending[k];} /* pending exchange adds */
+#endif
+#if defined(SINK_THERMALFEEDBACK)
+    CellP[j].Injected_Sink_Energy += CellP[i].Injected_Sink_Energy; /* it adds */
+#endif
 #ifdef GALSF_RESOLVEDISM_METALS_INDIVIDUAL
     /* Force Σ Met[1..27] = 1 bit-exact via H from conservation. */
     {
@@ -1201,20 +1243,14 @@ int merge_particles_ij(int i, int j)
 #endif
 #if defined(CHEMCOOL)
     {/* TracAbund is n_X/n_H (abundance ratio).  Convert to mass fractions
-        using pre-merge X_H, mass-weight, then back to ratios using merged X_H.
-        Under our FIRE-pattern layout, X_H = 1 − Metallicity[0] − Metallicity[1]. */
+        using each cell's pre-merge X_H, mass-weight, then back to ratios using merged X_H. */
 #if (CHEMISTRYNETWORK == 17)
      static const double trac_molwt[] = {2.0, 1.0, 28.0, 4.0, 4.0, 2.0, 3.0};
 #else
      static const double trac_molwt[] = {2.0, 1.0, 28.0};
 #endif
-#ifdef GALSF_RESOLVEDISM_METALS_INDIVIDUAL
-     double X_H_i = DMAX(P[i].Metallicity[MET_OF(ELEM_H)], 1e-10);  /* H at Met[1] */
-     double X_H_j = DMAX(P[j].Metallicity[MET_OF(ELEM_H)], 1e-10);
-#else
-     double X_H_i = DMAX(P[i].Metallicity[0], 1e-10);
-     double X_H_j = DMAX(P[j].Metallicity[0], 1e-10);
-#endif
+     static_assert(sizeof(trac_molwt)/sizeof(trac_molwt[0]) == TRAC_NUM, "TracAbund molecular weights are tabulated for CHEMISTRYNETWORK 5 and 17 only");
+     double X_H_i = X_H_i_premerge, X_H_j = X_H_j_premerge;
      double X_H_new = wt_j * X_H_j + wt_i * X_H_i;
      for(k=0;k<TRAC_NUM;k++) {
          double mf_i = CellP[i].TracAbund[k] * trac_molwt[k] * X_H_i;
@@ -1447,7 +1483,7 @@ void rearrange_particle_sequence(void)
     for(i = 0; i < NumPart; i++)
         if(P[i].Mass <= 0 || !isfinite(P[i].Mass))
         {
-            P[i].Mass = 0; CellP[i].Mass = P[i].Mass;
+            P[i].Mass = 0; if(P[i].Type==0) {CellP[i].Mass = P[i].Mass;} /* CellP only exists for gas */
             TimeBinCount[P[i].TimeBin]--;
             if(TimeBinActive[P[i].TimeBin]) {NumForceUpdate--;}
 

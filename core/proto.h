@@ -62,7 +62,7 @@ int check_if_sufficient_mergesplit_time_has_passed(int i);
 int is_particle_a_special_zoom_target(int i);
 #endif
 int merge_particles_ij(int i, int j);
-int split_particle_i(int i, int n_particles_split, int i_nearest);
+int split_particle_i(int i, int n_particles_split, int i_nearest, double r_nearest_presplit);
 void do_first_halfstep_kick(void);
 void do_second_halfstep_kick(void);
 double matrix_invert_ndims(Mat3<double>& T, Mat3<double>& Tinv);
@@ -1245,4 +1245,18 @@ void energy_budget_gravity_report(void);
 #else
 #define EB_SYNC_REPORT()
 #define EB_GRAV_REPORT()
+#endif
+
+#ifdef METALS
+/*! hydrogen mass fraction of particle i for the compiled metallicity layout */
+static inline double particle_hydrogen_massfrac(int i)
+{
+#if defined(GALSF_RESOLVEDISM_METALS_INDIVIDUAL)
+    return P[i].Metallicity[MET_OF(ELEM_H)];
+#elif (NUM_LIVE_SPECIES_FOR_COOLTABLES >= 10)
+    return 1. - P[i].Metallicity[0] - P[i].Metallicity[1];
+#else
+    return HYDROGEN_MASSFRAC;
+#endif
+}
 #endif

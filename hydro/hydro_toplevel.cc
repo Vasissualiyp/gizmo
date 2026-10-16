@@ -505,15 +505,12 @@ static inline void particle2in_hydra(struct INPUT_STRUCT_NAME *in, int i, int lo
         Network 5:  {H2(2), H+(1), CO(28)}
         Network 17: {H2(2), H+(1), CO(28), He+(4), He++(4), D+(2), HD(3)} */
 #if (CHEMISTRYNETWORK == 17)
-     static const double trac_molwt[TRAC_NUM] = {2.0, 1.0, 28.0, 4.0, 4.0, 2.0, 3.0};
+     static const double trac_molwt[] = {2.0, 1.0, 28.0, 4.0, 4.0, 2.0, 3.0};
 #else
-     static const double trac_molwt[TRAC_NUM] = {2.0, 1.0, 28.0};
+     static const double trac_molwt[] = {2.0, 1.0, 28.0};
 #endif
-#ifdef GALSF_RESOLVEDISM_METALS_INDIVIDUAL
-     double X_H_pack = DMAX(P[i].Metallicity[MET_OF(ELEM_H)], 1e-10);  /* H stored explicitly at Met[1] */
-#else
-     double X_H_pack = DMAX(P[i].Metallicity[0], 1e-10);  /* legacy: slot 0 = total Z; X_H from HYDROGEN_MASSFRAC */
-#endif
+     static_assert(sizeof(trac_molwt)/sizeof(trac_molwt[0]) == TRAC_NUM, "TracAbund molecular weights are tabulated for CHEMISTRYNETWORK 5 and 17 only");
+     double X_H_pack = DMAX(particle_hydrogen_massfrac(i), 1e-10);
      for(k=0;k<TRAC_NUM;k++) {
          double mf = CellP[i].TracAbund[k] * trac_molwt[k] * X_H_pack;
          in->Metallicity[k_offset+k] = mf;
@@ -949,8 +946,9 @@ void hydro_final_operations_and_cleanup(void)
 #endif
 #if defined(CHEMCOOL) && defined(TURB_DIFF_METALS) && !defined(GALSF_RESOLVEDISM_METALS_INDIVIDUAL)
             {/* TracAbund-only path (no individual elements) — should not happen in practice */
-             static const double trac_molwt[TRAC_NUM] = {2.0, 1.0, 28.0};
-             double X_H = DMAX(P[i].Metallicity[0], 1e-10);   /* legacy: Met[0] = total Z, X_H from HYDROGEN_MASSFRAC */
+             static const double trac_molwt[] = {2.0, 1.0, 28.0};
+             static_assert(sizeof(trac_molwt)/sizeof(trac_molwt[0]) == TRAC_NUM, "TracAbund molecular weights are tabulated for CHEMISTRYNETWORK 5 and 17 only");
+             double X_H = DMAX(particle_hydrogen_massfrac(i), 1e-10);
              for(k=0;k<TRAC_NUM;k++) {
                  double da = CellP[i].Dyield[k_offset+k] / (P[i].Mass * trac_molwt[k] * X_H);
                  CellP[i].TracAbund[k] = DMAX(CellP[i].TracAbund[k] + da, 0.01*CellP[i].TracAbund[k]);}}
