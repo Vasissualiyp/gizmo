@@ -691,6 +691,17 @@ static inline void out2particle_hydra(struct OUTPUT_STRUCT_NAME *out, int i, int
     hydro routines, AFTER the neighbors have all been checked and summed */
 /* --------------------------------------------------------------------------------- */
 /* --------------------------------------------------------------------------------- */
+#if defined(TURB_DIFF_METALS) && defined(OUTPUT_TURB_DIFF_METALS_BUDGET)
+/*! global metal budget after each hydro step: sum of M*Z, and diffusive exchange still pending */
+void turb_diff_metals_budget_log(void)
+{
+    int i; double loc[2]={0}, tot[2];
+    for(i=0;i<NumPart;i++) {if(P[i].Type==0 && P[i].Mass>0) {loc[0] += P[i].Mass*P[i].Metallicity[0]; loc[1] += CellP[i].Dyield_pending[0];}}
+    MPI_Allreduce(loc, tot, 2, MPI_DOUBLE, MPI_SUM, MPI_COMM_WORLD);
+    if(ThisTask==0) {printf("TURB_DIFF_METALS_BUDGET time= %.10e MZ= %.17e pending= %.17e\n", All.Time, tot[0], tot[1]);}
+}
+#endif
+
 void hydro_final_operations_and_cleanup(void)
 {
     int i,k;
@@ -1195,6 +1206,9 @@ void hydro_force(void)
     double t_demalloc = timediff(t_demalloc_start, my_second());
     double t_postloop_start = my_second();
     hydro_final_operations_and_cleanup(); /* do final operations on results */
+#if defined(TURB_DIFF_METALS) && defined(OUTPUT_TURB_DIFF_METALS_BUDGET)
+    turb_diff_metals_budget_log();
+#endif
     MBARY_STEP("post_diff_unpack");
     double t_postloop = timediff(t_postloop_start, my_second());
     /* collect timing information */

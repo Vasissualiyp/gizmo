@@ -94,6 +94,7 @@
                                                  : local.Mass * local.Metallicity[k_species];
                 double pair_cap = 0.01 * donor_mass_k;  /* 1% per pair; ~50-80 pairs/cell → ≤80% cumulative drain */
                 if(fabs(cmag) > pair_cap) cmag = (cmag > 0 ? pair_cap : -pair_cap);
+                cmag *= dt_hydrostep_i / dt_hydrostep; // this walk covers its own timestep
 
                 /* Dual-walk Dyield_pending scatter: each perspective contributes
                  * 0.5*cmag.  Per pair both walks happen, so totals across walks
@@ -104,10 +105,12 @@
 #ifdef GALSF_RESOLVEDISM_METALS_INDIVIDUAL
                 if(k_species < NUM_METAL_SPECIES) {cmag_slotbuf[k_species] = cmag;} else {
                     out.Dyield[k_species]               += 0.5 * cmag;
+                    #pragma omp atomic
                     CellP[j].Dyield_pending[k_species]  -= 0.5 * cmag;
                 }
 #else
                 out.Dyield[k_species]               += 0.5 * cmag;
+                #pragma omp atomic
                 CellP[j].Dyield_pending[k_species]  -= 0.5 * cmag;
 #endif
             }
@@ -130,6 +133,7 @@
             for(kk = 0; kk < NUM_METAL_SPECIES; kk++) {
                 if(cmag_slotbuf[kk] != 0) {
                     out.Dyield[kk]              += 0.5 * cmag_slotbuf[kk];
+                    #pragma omp atomic
                     CellP[j].Dyield_pending[kk] -= 0.5 * cmag_slotbuf[kk];
                 }
             }

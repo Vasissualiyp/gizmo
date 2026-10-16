@@ -147,7 +147,7 @@ static Totals totals(int n)
 #if defined(SINK_THERMALFEEDBACK)
         t.E_sink += CellP[i].Injected_Sink_Energy;
 #endif
-#if defined(CHEMCOOL) && defined(METALS)
+#if defined(CHEMCOOL) && defined(HAVE_PARTICLE_HYDROGEN_MASSFRAC)
         double X_H = particle_hydrogen_massfrac(i); /* TracAbund are n_X/n_H */
         t.H2 += CellP[i].TracAbund[0] * 2. * X_H * P[i].Mass;
         if(TRAC_NUM > 2) {t.CO += CellP[i].TracAbund[2] * 28. * X_H * P[i].Mass;}
@@ -173,7 +173,7 @@ static void check_totals(const char *what, const Totals &a, const Totals &b)
 #if defined(SINK_THERMALFEEDBACK)
     snprintf(name, sizeof(name), "%s:injected_sink_energy", what); check_rel(name, b.E_sink, a.E_sink, a.E_sink);
 #endif
-#if defined(CHEMCOOL) && defined(METALS)
+#if defined(CHEMCOOL) && defined(HAVE_PARTICLE_HYDROGEN_MASSFRAC)
     snprintf(name, sizeof(name), "%s:H2_mass", what); check_rel(name, b.H2, a.H2, a.H2);
     if(TRAC_NUM > 2) {snprintf(name, sizeof(name), "%s:CO_mass", what); check_rel(name, b.CO, a.CO, a.CO);}
 #endif
@@ -213,7 +213,7 @@ static void test_merge()
     int ok = merge_particles_ij(0, 1);
     check("merge:succeeded", ok == 1, ok, 1);
     check_totals("merge", before, totals(2));
-#if defined(METALS) && defined(GALSF_RESOLVEDISM_METALS_INDIVIDUAL)
+#if defined(HAVE_PARTICLE_HYDROGEN_MASSFRAC) && defined(GALSF_RESOLVEDISM_METALS_INDIVIDUAL)
     double X_H = particle_hydrogen_massfrac(1), want = (0.8 * 0.30 + 1.5 * 0.74) / 2.3;
     check_rel("merge:merged_X_H_is_mass_weighted", X_H, want, want);
 #endif
@@ -222,7 +222,7 @@ static void test_merge()
 
 static void test_hydrogen_massfrac()
 {
-#ifdef METALS
+#ifdef HAVE_PARTICLE_HYDROGEN_MASSFRAC
     setup(8, 8);
     make_gas(0, 0.5, 0.5, 0.5, 1.0, 0.71, 0.27, 0.02, 0.);
     double X_H = particle_hydrogen_massfrac(0), want;

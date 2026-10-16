@@ -1249,6 +1249,7 @@ void energy_budget_gravity_report(void);
 
 #ifdef METALS
 /*! hydrogen mass fraction of particle i for the compiled metallicity layout */
+#define HAVE_PARTICLE_HYDROGEN_MASSFRAC
 static inline double particle_hydrogen_massfrac(int i)
 {
 #if defined(GALSF_RESOLVEDISM_METALS_INDIVIDUAL)
