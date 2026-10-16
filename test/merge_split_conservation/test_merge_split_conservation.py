@@ -1,24 +1,8 @@
-"""Conservation and memory-safety test for particle merging and splitting (mesh/merge_split.cc).
+"""Merge/split conservation and memory safety (mesh/merge_split.cc).
 
-Builds GIZMO, links merge_split_driver.cc against its objects, and runs the production split_particle_i,
-merge_particles_ij and merge_and_split_particles on cells set up by hand. The driver checks, to 1e-13:
-
-  split / merge   mass, momentum, metal mass per species, pending diffusive metal exchange, dust mass,
-                  conserved B, the Injected_Sink_Energy reservoir, and H2 and CO mass when the two cells'
-                  hydrogen fractions differ (TracAbund are ratios to n_H, so a merge that mixes up the cells'
-                  X_H changes the molecular mass)
-  split           daughters straddle the parent, each offset within 0.4 of the nearest-neighbour distance
-  X_H             particle_hydrogen_massfrac() for the compiled metallicity layout, and not total Z
-  non-gas         star-star merges and zero-mass early returns at indices past MaxPartGas write no CellP
-  SN spawn        mass moves star -> cell exactly, also when the star holds less than its ejecta; the cell
-                  carries only ejecta (no template pending exchange or dust, B scaled to its mass) and is
-                  woken; with no room for gas the spawn waits instead of writing CellP past MaxPartGas
-
-CellP is allocated with a canary region past MaxPartGas, so a write for a non-gas index is caught rather than
-silently corrupting memory. No simulation is run; the build is the only slow part.
-
-Two configurations: this directory (Stella: individual elements, CHEMCOOL network 17, dust, MHD, diffusion,
-SN spawn) and merge_split_conservation_starforge (STARFORGE defaults with SINK_THERMALFEEDBACK).
+Links merge_split_driver.cc against the build and runs split_particle_i, merge_particles_ij and the SN ejecta spawn on
+hand-built cells: every extensive quantity conserved to 1e-13, no CellP write past MaxPartGas.
+merge_split_conservation_starforge runs the same checks under STARFORGE with SINK_THERMALFEEDBACK.
 """
 
 import os
@@ -35,7 +19,7 @@ REPO = abspath(join(dirname(abspath(__file__)), "..", ".."))
 
 
 def _link_driver(test_dir):
-    """Compile and link the driver against the objects of the build that just finished (runs under the build lock)."""
+    """Link the driver against the objects of the build that just finished."""
     build_dir = join(test_dir, "output")
     os.makedirs(build_dir, exist_ok=True)
     dry = subprocess.run(["make", "-n", "-B", "GIZMO"], capture_output=True, text=True, cwd=REPO).stdout.splitlines()
@@ -56,8 +40,7 @@ def _link_driver(test_dir):
 
 
 def run_merge_split_checks(test_name, cooling_tables=False):
-    """Build test_name's configuration, run the driver, and fail on any failed check. cooling_tables: the build
-    uses the tabulated (non-CHEMCOOL) cooling, whose tables the merge's EOS call reads."""
+    """Build test_name, run the driver, fail on any failed check. cooling_tables: non-CHEMCOOL cooling needs its tables."""
     if os.environ.get("GIZMO_TEST_SKIP_BUILD_RUN"):
         pytest.skip("builds GIZMO; nothing to validate from external snapshots")
     test_dir = join(REPO, "test", test_name)

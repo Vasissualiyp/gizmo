@@ -1,13 +1,5 @@
-/* Driver for test_merge_split_conservation.py: builds cells by hand and calls the production merge/split code
-   (split_particle_i, merge_particles_ij, and merge_and_split_particles for the SN ejecta spawn), checking that
-   every extensive quantity the cells carry is conserved and that no CellP entry is written for a non-gas index.
-
-   Linked against the objects of a full GIZMO build (everything except core/main.o), so the code under test is the
-   production code. CellP is allocated with a canary region past MaxPartGas: any CellP write for an index at or
-   beyond MaxPartGas lands there and is caught.
-
-   Output, one line per check on the original stdout:  PASS|FAIL <check> got=<value> want=<value>
-   GIZMO's own stdout chatter is diverted to a temp file. Exit status is the number of failed checks. */
+/* Driver for test_merge_split_conservation.py: runs the production split/merge/SN-spawn code on hand-built cells and prints
+   PASS|FAIL per conserved quantity. CellP has a canary region past MaxPartGas to catch writes for non-gas indices. */
 #include <mpi.h>
 #include <unistd.h>
 #include <cstdio>
@@ -36,7 +28,7 @@ static void check_rel(const char *name, double got, double want, double scale)
 static const int N_CANARY = 64;
 static const unsigned char CANARY = 0xA5;
 
-/* aligned like mymalloc's blocks: built with -march=native, the compiler stores these structs with aligned vector moves */
+/* aligned like mymalloc: -march=native builds use aligned vector stores on these structs */
 static void *zalloc_aligned(size_t bytes)
 {
     void *p = NULL;
@@ -62,7 +54,7 @@ static bool canary_intact()
     return true;
 }
 
-/* a gas cell with every extensive field the merge/split code has to carry set to something distinct */
+/* a gas cell with every extensive field set */
 static void make_gas(int i, double x, double y, double z, double mass, double X_H, double Y_He, double Z_met, double seed)
 {
     P[i].Type = 0; P[i].ID = i + 1; P[i].Mass = CellP[i].Mass = mass;
@@ -156,7 +148,7 @@ static Totals totals(int n)
         t.E_sink += CellP[i].Injected_Sink_Energy;
 #endif
 #if defined(CHEMCOOL) && defined(METALS)
-        double X_H = particle_hydrogen_massfrac(i); /* TracAbund are n_X/n_H: mass in species = ratio * molecular weight * X_H * M */
+        double X_H = particle_hydrogen_massfrac(i); /* TracAbund are n_X/n_H */
         t.H2 += CellP[i].TracAbund[0] * 2. * X_H * P[i].Mass;
         if(TRAC_NUM > 2) {t.CO += CellP[i].TracAbund[2] * 28. * X_H * P[i].Mass;}
 #endif
@@ -213,7 +205,7 @@ static void test_split()
 static void test_merge()
 {
     setup(64, 64);
-    /* ejecta-like cell (low X_H, metal rich) into ISM-like cell: X_H differs, which the TracAbund merge must respect */
+    /* ejecta-like cell into ISM-like cell: different X_H */
     make_gas(0, 0.5, 0.5, 0.5, 0.8, 0.30, 0.40, 0.30, 0.1);
     make_gas(1, 0.55, 0.5, 0.5, 1.5, 0.74, 0.25, 0.01, 0.7);
     NumPart = N_gas = 2;
@@ -278,13 +270,13 @@ static void test_sn_spawn()
     NumPart = 7; N_gas = 6;
     double m_before = 0; for(int i = 0; i < NumPart; i++) {m_before += P[i].Mass;}
     merge_and_split_particles();
-    int j = 7; /* the new cell sits right after the last particle until rearrange_particle_sequence moves it */
+    int j = 7; /* new cell, before rearrange_particle_sequence */
     double m_after = 0; for(int i = 0; i <= j; i++) {m_after += P[i].Mass;}
     check("sn_spawn:cell_created", P[j].Type == 0 && P[j].Mass > 0, P[j].Mass, 5.0);
     check_rel("sn_spawn:mass_conserved", m_after, m_before, m_before);
     check_rel("sn_spawn:specific_energy", CellP[j].InternalEnergy, 40.0 / 5.0, 8.0);
 #ifdef MAGNETIC
-    double bt = CellP[0].B.norm(), b = CellP[j].B.norm(); /* template = nearest gas cell (0); its field strength at its density, not its flux */
+    double bt = CellP[0].B.norm(), b = CellP[j].B.norm(); /* template is cell 0 */
     check_rel("sn_spawn:B_scaled_to_ejecta_mass", b, bt * 5.0 / P[0].Mass, bt);
 #endif
 #if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))

@@ -1,10 +1,5 @@
-"""Split placement: each daughter sits within 0.4 of the distance to its parent's nearest neighbour.
-
-Pairs of over-massive cells sit PAIR_SEPARATION apart inside lattice voids, so each one's nearest neighbour is
-its partner, which is splitting too. The nearest-neighbour search in merge_and_split_particles used to skip
-neighbours already flagged to split or merge, so the second member of each pair measured its distance to a
-lattice node about four times farther away and could place its daughters onto its partner's.
-The run is a few steps of a static, uniform-pressure box, so the cells do not move.
+"""Split placement: daughters within 0.4, and neighbouring daughters at least 0.2, of the pre-split neighbour distance.
+Pairs of over-massive cells that both split; a static box, so cells do not move.
 """
 
 import glob

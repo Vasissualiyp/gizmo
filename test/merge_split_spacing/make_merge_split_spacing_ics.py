@@ -1,9 +1,4 @@
-"""Lattice of unit-mass cells with close pairs of over-massive cells, each pair inside one lattice void.
-
-Both members of a pair exceed the split threshold, so both split in the first merge/split pass. Each must place
-its daughters within 0.4 of the distance to its nearest neighbour, which is its partner (PAIR_SEPARATION away),
-whether or not that partner is itself splitting.
-"""
+"""Lattice of unit-mass cells with close pairs of over-massive cells, each pair inside a lattice void."""
 
 import h5py
 import numpy as np

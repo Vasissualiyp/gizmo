@@ -1,6 +1,4 @@
-"""The merge/split conservation checks of test/merge_split_conservation under STARFORGE defaults with
-SINK_THERMALFEEDBACK: covers the Injected_Sink_Energy reservoir and a metallicity layout without individual
-elements. See test/merge_split_conservation/test_merge_split_conservation.py."""
+"""test/merge_split_conservation under STARFORGE with SINK_THERMALFEEDBACK."""
 
 import os
 import sys
