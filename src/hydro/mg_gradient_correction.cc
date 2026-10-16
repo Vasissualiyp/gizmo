@@ -326,19 +326,19 @@ static int mg_build_graph(const struct mg_csr *csr, std::vector<unsigned char> &
     });
 
     /* Coefficients: one thread per row, faces in CSR order (each face appears in both of its rows'
-       CSR; a row accumulates only itself, so rows are independent). */
+       CSR; a row accumulates only itself, so rows are independent). Each face is evaluated in one
+       orientation, with the cell of the smaller global row as "i", whichever of its two rows (on
+       whichever task) is doing the work: whether the face is kept, its coefficient and its flux are then
+       the same bits in both rows, and its right-hand-side term exactly opposite. Evaluated from each end,
+       the two orientations round differently (fused multiply-adds), and a face whose area nearly cancels
+       could be kept in one row and dropped in the other, leaving the matrix unsymmetric. */
     Kokkos::parallel_for("mg_coefficients", Kokkos::RangePolicy<>(0, n_rows), KOKKOS_LAMBDA(const int aa) {
         const int i = rows[aa];
         if(Pd[i].Type != 0 || Pd[i].Mass <= 0 || Cd[i].Density <= 0 || Pd[i].KernelRadius <= 0) {
             for(int64_t nn = off[aa]; nn < off[aa+1]; nn++) {d_cand_kept[nn] = 0;}
             return;
         }
-        double h_i = Pd[i].KernelRadius, h2_i = h_i * h_i, hinv_i, hinv3_i, hinv4_i;
-        kernel_hinv(h_i, &hinv_i, &hinv3_i, &hinv4_i);
-        double V_i = Pd[i].Mass / Cd[i].Density;
-        double Particle_Size_i = pow(V_i, 1./NUMDIMS);
-        double cnumcrit2 = ((double)CONDITION_NUMBER_DANGER)*((double)CONDITION_NUMBER_DANGER) - Cd[i].ConditionNumber*Cd[i].ConditionNumber;
-        Vec3<double> Bi = Cd[i].Bfield();
+        const long long row_i = first_local + i;
         double rdiag = 0, rhs = 0, flux_scale = 0;
         long long n_kept = 0;
 
@@ -346,39 +346,41 @@ static int mg_build_graph(const struct mg_csr *csr, std::vector<unsigned char> &
             d_cand_kept[nn] = 0;
             int j = ngb[nn];
             if(Pd[j].Type != 0 || Pd[j].Mass <= 0 || Cd[j].Density <= 0 || Pd[j].KernelRadius <= 0) continue;
-            struct mg_face_kernel kernel;
-            kernel.dp = Pd[i].Pos - Pd[j].Pos;
-            nearest_xyz(kernel.dp);
-            double r2 = kernel.dp.norm_sq(), h_j = Pd[j].KernelRadius;
-            if(r2 <= 0 || (r2 >= h2_i && r2 >= h_j * h_j)) continue;
-            kernel.r = sqrt(r2); kernel.h_i = h_i;
-            double u;
-            if(kernel.r < h_i) {u = kernel.r * hinv_i; kernel_main(u, hinv3_i, hinv4_i, &kernel.wk_i, &kernel.dwk_i, 0);} else {kernel.wk_i = kernel.dwk_i = 0;}
-            if(kernel.r < h_j) {
-                double hinv_j, hinv3_j, hinv4_j; kernel_hinv(h_j, &hinv_j, &hinv3_j, &hinv4_j);
-                u = kernel.r * hinv_j; kernel_main(u, hinv3_j, hinv4_j, &kernel.wk_j, &kernel.dwk_j, 0);
-            } else {kernel.wk_j = kernel.dwk_j = 0;}
+            const long long row_j = (j < num_local) ? first_local + j : d_task_off[d_home_rank[j - num_local]] + d_home_index[j - num_local];
+            const int a = (row_i < row_j) ? i : j, b = (row_i < row_j) ? j : i;   /* the face's orientation */
+            const double sign = (a == i) ? 1.0 : -1.0;                             /* this row's side of it */
 
-            double V_j = Pd[j].Mass / Cd[j].Density;
+            struct mg_face_kernel kernel;
+            kernel.dp = Pd[a].Pos - Pd[b].Pos;
+            nearest_xyz(kernel.dp);
+            double h_a = Pd[a].KernelRadius, h_b = Pd[b].KernelRadius, r2 = kernel.dp.norm_sq();
+            if(r2 <= 0 || (r2 >= h_a * h_a && r2 >= h_b * h_b)) continue;
+            kernel.r = sqrt(r2); kernel.h_i = h_a;
+            double u, hinv, hinv3, hinv4;
+            if(kernel.r < h_a) {kernel_hinv(h_a, &hinv, &hinv3, &hinv4); u = kernel.r * hinv; kernel_main(u, hinv3, hinv4, &kernel.wk_i, &kernel.dwk_i, 0);} else {kernel.wk_i = kernel.dwk_i = 0;}
+            if(kernel.r < h_b) {kernel_hinv(h_b, &hinv, &hinv3, &hinv4); u = kernel.r * hinv; kernel_main(u, hinv3, hinv4, &kernel.wk_j, &kernel.dwk_j, 0);} else {kernel.wk_j = kernel.dwk_j = 0;}
+
+            double V_a = Pd[a].Mass / Cd[a].Density, V_b = Pd[b].Mass / Cd[b].Density;
+            double cnumcrit2 = ((double)CONDITION_NUMBER_DANGER)*((double)CONDITION_NUMBER_DANGER) - Cd[a].ConditionNumber*Cd[a].ConditionNumber;
             Vec3<double> Face_Area_Vec; double Face_Area_Norm, Vi_inv_corr_unused, Vj_inv_corr_unused;
-            compute_finitevol_faces(Cd[i], Cd[j], kernel, 1.0 / (MIN_REAL_NUMBER + kernel.r), r2, V_i, V_j,
-                                    Particle_Size_i, Pd[j].Get_Particle_Size(), cnumcrit2,
+            compute_finitevol_faces(Cd[a], Cd[b], kernel, 1.0 / (MIN_REAL_NUMBER + kernel.r), r2, V_a, V_b,
+                                    pow(V_a, 1./NUMDIMS), Pd[b].Get_Particle_Size(), cnumcrit2,
                                     Face_Area_Vec, Face_Area_Norm, Vi_inv_corr_unused, Vj_inv_corr_unused);
             if(Face_Area_Norm <= 0) continue;
 
             double Qnorm2 = 0.125 * r2 * Face_Area_Vec.norm_sq() + 1.0e-60;
             rdiag += Qnorm2;
 
-            /* face states as hydro reconstructs them at the face midpoint (x_ij - x_i = -dp/2, x_ij - x_j = +dp/2) */
-            Vec3<double> Bj = Cd[j].Bfield();
-            NGB_SHEARBOX_BOUNDARY_BCORR_(Pd[i].Pos, Pd[j].Pos, Bj, -1);
-            Vec3<double> Bface_i = Bi, Bface_j = Bj;
+            /* face states as hydro reconstructs them at the face midpoint (x_ab - x_a = -dp/2, x_ab - x_b = +dp/2) */
+            Vec3<double> Ba = Cd[a].Bfield(), Bb = Cd[b].Bfield();
+            NGB_SHEARBOX_BOUNDARY_BCORR_(Pd[a].Pos, Pd[b].Pos, Bb, -1);
+            Vec3<double> Bface_a = Ba, Bface_b = Bb;
             for(int k = 0; k < 3; k++) for(int k2 = 0; k2 < 3; k2++) {
-                Bface_i[k] -= 0.5 * Cd[i].Gradients.B[k][k2] * kernel.dp[k2];
-                Bface_j[k] += 0.5 * Cd[j].Gradients.B[k][k2] * kernel.dp[k2];
+                Bface_a[k] -= 0.5 * Cd[a].Gradients.B[k][k2] * kernel.dp[k2];
+                Bface_b[k] += 0.5 * Cd[b].Gradients.B[k][k2] * kernel.dp[k2];
             }
-            rhs += 0.5 * dot(Bface_i + Bface_j, Face_Area_Vec);
-            flux_scale += 0.5 * (sqrt(Bface_i.norm_sq()) + sqrt(Bface_j.norm_sq())) * Face_Area_Norm;
+            rhs += sign * (0.5 * dot(Bface_a + Bface_b, Face_Area_Vec));
+            flux_scale += 0.5 * (sqrt(Bface_a.norm_sq()) + sqrt(Bface_b.norm_sq())) * Face_Area_Norm;
 
             d_cand_q[nn] = Qnorm2; d_cand_kept[nn] = 1; n_kept++;
         }
