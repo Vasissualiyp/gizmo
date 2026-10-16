@@ -52,6 +52,7 @@
 /***********************************************************************************************************/
 int rt_get_source_luminosity(int i, int mode, double *lum, struct particle_data *pp, struct gas_cell_data *cell)
 {
+    {int k; for(k=0;k<N_RT_FREQ_BINS;k++) {lum[k]=0;}} // bands below only set what applies to this source
     if(!((1 << pp[i].Type) & (RT_SOURCES))) {return 0;}; // boolean test of whether i is a source or not - end if not a valid source particle
     if(pp[i].Mass <= 0 || !isfinite(pp[i].Mass)) {return 0;} // reject invalid particles scheduled for deletion; use pp[i].Mass (valid for all types) not cell[i].Mass (only valid for gas)
     int active_check = 0; // default to inactive //
