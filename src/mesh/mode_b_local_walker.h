@@ -123,7 +123,8 @@ struct ModeBExportSink {
  * remote pseudo-node the query reaches, record a targeted export into
  * `exporter` (the owner peer + that node's DomainNodeIndex). Optionally also
  * append local real-particle candidates to `cand_out` in the SAME traversal
- * (pass nullptr to skip). Passing cand_out != nullptr is the FUSED legacy
+ * (pass nullptr to skip: the walk then records exports only, and does not descend
+ * -- or drift -- the local topleaves it opens). Passing cand_out != nullptr is the FUSED legacy
  * mode==0 walk: one traversal, two sinks, each gated by its own predicate
  * (candidates by the per-type leaf test, exports by the scalar reach) — see
  * the ModeBWalkReach table in mode_b_local_walker.cc. */

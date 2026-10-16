@@ -201,8 +201,10 @@ static inline double mode_b_node_symmetric_radius(int no,
  * => opening a remote topleaf T opens every ancestor of T, so no export is missed
  * (same strict-refinement guarantee as the LET cover tree).  Hence traversal
  * reach == export reach: ONE open predicate, no scalar/per-type dual path.  The
- * cand_out / export_out sinks only choose WHERE a reached node is recorded (local
- * candidate vs remote-topleaf export), never the reach.
+ * cand_out / export_out sinks choose WHERE a reached node is recorded (local
+ * candidate vs remote-topleaf export).  They change the reach in one way only: a
+ * walk with no candidate sink does not descend an opened LOCAL topleaf, since
+ * nothing below it can export -- so such a walk also leaves the nodes there undrifted.
  *
  * (Historically the export decision used the gas-biased cross-rank SCALAR hmax and
  * a fused walk re-tested exports against it; the non-gas SYMMETRIC loops could not
@@ -320,13 +322,22 @@ static void mode_b_walk_impl(const double pos[3],
              * subtree, which holds NO owned-local candidates and must NOT be
              * descended in source-export semantics. Export on the SAME predicate
              * that opened it (traversal reach == export reach) and skip to the
-             * sibling REGARDLESS (no owned-local candidates below a remote topleaf). */
+             * sibling REGARDLESS (no owned-local candidates below a remote topleaf).
+             * A walk that collects no candidates also skips an opened LOCAL topleaf:
+             * below it are only this rank's nodes and particles -- no top-level node,
+             * so no remote topleaf and no pseudo-node -- and nothing there can export. */
             if(do_open && export_out) {
                 const int leaf = topleaf_map->topleaf_of(no, tree_base);
-                if(leaf >= 0 && DomainTask[leaf] != ThisTask) {
-                    export_out->add(DomainTask[leaf], DomainNodeIndex[leaf]);
-                    no = nop->u.d.sibling;
-                    continue;
+                if(leaf >= 0) {
+                    if(DomainTask[leaf] != ThisTask) {
+                        export_out->add(DomainTask[leaf], DomainNodeIndex[leaf]);
+                        no = nop->u.d.sibling;
+                        continue;
+                    }
+                    if(cand_out == nullptr) {
+                        no = nop->u.d.sibling;
+                        continue;
+                    }
                 }
             }
             if(do_open) {
