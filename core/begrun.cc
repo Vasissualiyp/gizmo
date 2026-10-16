@@ -2752,6 +2752,10 @@ void read_parameter_file(char *fname)
                 if(strcmp("MaxStellarTimestep",tag[i])==0) {*((double *)addr[i])=50000.; printf("Tag %s (%s) not set in parameter file: defaulting to 50 kyr (=%g yr)\n",tag[i],alternate_tag[i],All.MaxStellarTimestep); continue;}
 #endif
 #ifdef TIDAL_TIMESTEP_CRITERION
+#if defined(GALSF_RESOLVEDISM) /* Stella: pre-merge calibration all Stella validation used (5x faster in the dwarf) */
+                if(strcmp("TidalTimestepPrefac",tag[i])==0) {*((double *)addr[i])=1.0; printf("Tag %s not set: defaulting to 1.0 (Stella)\n",tag[i]); continue;}
+                if(strcmp("TidalTimestepPrefacGas",tag[i])==0) {*((double *)addr[i])=1.0; printf("Tag %s not set: defaulting to 1.0 (Stella)\n",tag[i]); continue;}
+#else
 #if defined(SINGLE_STAR_TIMESTEPPING)
                 if(strcmp("TidalTimestepPrefac",tag[i])==0) {*((double *)addr[i])=0.5; printf("Tag %s not set: defaulting to 0.5\n",tag[i]); continue;}
 #else
@@ -2759,8 +2763,13 @@ void read_parameter_file(char *fname)
 #endif
                 if(strcmp("TidalTimestepPrefacGas",tag[i])==0) {*((double *)addr[i])=0.5; printf("Tag %s not set: defaulting to 0.5\n",tag[i]); continue;}
 #endif
+#endif
 #ifdef WAKEUP
+#if defined(GALSF_RESOLVEDISM)
+                if(strcmp("WakeupTargetBin",tag[i])==0) {*((int *)addr[i])=2; printf("Tag %s not set: defaulting to 2 (highest active bin, Stella)\n",tag[i]); continue;}
+#else
                 if(strcmp("WakeupTargetBin",tag[i])==0) {*((int *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (waker bin - log2(WAKEUP))\n",tag[i]); continue;}
+#endif
 #endif
 #ifdef KETJU_REGULARIZATION
                 if(strcmp("KetjuMinBHMass",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (Type 5 chain centers disabled)\n",tag[i]); continue;}
@@ -2927,6 +2936,10 @@ void read_parameter_file(char *fname)
                 if(strcmp("CourantFac",tag[i])==0) {*((double *)addr[i])=0.2; printf("Tag %s (%s) not set in parameter file: defaulting to standard CFL safety factor (=%g) \n",tag[i],alternate_tag[i],All.CourantFac); continue;}
 #endif
 #ifdef TIDAL_TIMESTEP_CRITERION
+#if defined(GALSF_RESOLVEDISM) /* Stella: pre-merge calibration all Stella validation used (5x faster in the dwarf) */
+                if(strcmp("TidalTimestepPrefac",tag[i])==0) {*((double *)addr[i])=1.0; printf("Tag %s not set: defaulting to 1.0 (Stella)\n",tag[i]); continue;}
+                if(strcmp("TidalTimestepPrefacGas",tag[i])==0) {*((double *)addr[i])=1.0; printf("Tag %s not set: defaulting to 1.0 (Stella)\n",tag[i]); continue;}
+#else
 #if defined(SINGLE_STAR_TIMESTEPPING)
                 if(strcmp("TidalTimestepPrefac",tag[i])==0) {*((double *)addr[i])=0.5; printf("Tag %s not set: defaulting to 0.5\n",tag[i]); continue;}
 #else
@@ -2934,8 +2947,13 @@ void read_parameter_file(char *fname)
 #endif
                 if(strcmp("TidalTimestepPrefacGas",tag[i])==0) {*((double *)addr[i])=0.5; printf("Tag %s not set: defaulting to 0.5\n",tag[i]); continue;}
 #endif
+#endif
 #ifdef WAKEUP
+#if defined(GALSF_RESOLVEDISM)
+                if(strcmp("WakeupTargetBin",tag[i])==0) {*((int *)addr[i])=2; printf("Tag %s not set: defaulting to 2 (highest active bin, Stella)\n",tag[i]); continue;}
+#else
                 if(strcmp("WakeupTargetBin",tag[i])==0) {*((int *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (waker bin - log2(WAKEUP))\n",tag[i]); continue;}
+#endif
 #endif
 #ifdef KETJU_REGULARIZATION
                 if(strcmp("KetjuMinBHMass",tag[i])==0) {*((double *)addr[i])=0; printf("Tag %s not set: defaulting to 0 (Type 5 stage-7/BH chain centers disabled)\n",tag[i]); continue;}
