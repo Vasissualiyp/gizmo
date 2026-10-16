@@ -136,8 +136,9 @@ void gx_device_tree_walk_impl(double qx, double qy, double qz, double reach,
         } else {
             const int start = start_nodes[k];
             if(start < 0) {break;}                   /* -1 terminates the list */
-            /* The start list arrived over MPI, so it is validated rather than trusted. */
-            if(start < tree.node_base || start >= tree.pseudo_start) {continue;}
+            /* The start list arrived over MPI, so it is validated rather than trusted: a start is a
+             * top leaf this rank owns, so it must be a node of the local tree, not an imported one. */
+            if(start < tree.node_base || start >= tree.foreign_base) {continue;}
             if(start - tree.node_base >= tree.node_capacity) {   /* precondition leaves this unreachable */
                 Kokkos::atomic_store(anomaly, GX_WALK_ANOMALY_MALFORMED_TREE);
                 break;

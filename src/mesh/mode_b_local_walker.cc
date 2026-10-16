@@ -441,13 +441,14 @@ void mode_b_walk_from_start_nodes(const double pos[3],
 {
     if(All.TreeNodeIndexBase <= 0 || Nodes == NULL || Nextnode == NULL) return;
     const int tree_base      = All.TreeNodeIndexBase;
-    const int pseudo_start  = tree_base + MaxNodes + MaxForeignNodes;
+    const int foreign_start = tree_base + MaxNodes;
     for(int k = 0; k < n_nodes; k++) {
         const int nl = node_list[k];
         if(nl < 0) break;   /* -1 terminator (legacy NodeList convention) */
-        /* Defensive: a start-node arrives over MPI; it must be an internal
-         * node index. Skip a corrupt entry rather than dereference OOB. */
-        if(nl < tree_base || nl >= pseudo_start) continue;
+        /* Defensive: a start-node arrives over MPI; it is a top leaf this rank owns, so it must be a
+         * node of the LOCAL tree.  Skip a corrupt entry rather than walk imported nodes or read past
+         * their storage. */
+        if(nl < tree_base || nl >= foreign_start) continue;
         const int start = Nodes[nl].u.d.nextnode;   /* open the exported node */
         mode_b_walk_impl(pos, h_q, type_mask, search_mode, radius_policy, j_reach_scale,
                          start, /*stop_at_toplevel=*/true,
