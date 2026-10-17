@@ -57,7 +57,7 @@
 #include "gravtree_moment_kernel.h"  /* shared node-moment CONSTRUCTION SSOT (add_particle/finalize) */
 #include "gravtree_moment_sources.h" /* shared per-particle RT/sink/CR source-input gates */
 
-#include "gpu_pseudo_update.h"  /* gpu_scatter_foreign_to_soa */
+#include "gpu_pseudo_update.h"  /* gpu_mirror_publish_imported_node, gpu_set_soa_nextnode */
 #include "forcetree.h"          /* force_tree_grow_foreign_storage */
 #include "gpu_gravity_tree.h"            /* suns_backup: the tree's own direct-child slots; the node mirror's foreign capacity */
 
@@ -2249,7 +2249,7 @@ extern "C" let_exchange_status_t let_exchange_nodes(unsigned char **send_buf_per
     if(!grow_failed_local && AllocatedForeignNodes > 0)
     {
         /* Every foreign slot with storage must have its leaf identity on both sides before anything is installed: the
-           install and the scatter skip a missing sidecar silently, and the device walk then reads garbage tags. */
+           install and its mirror copy skip a missing sidecar silently, and the device walk then reads garbage tags. */
         const struct gpu_gravity_tree_soa_t *mirror = gpu_gravity_tree_soa();
         const int host_ok = (ForeignLeafTag && ForeignLeafType && ForeignLeafZeta && ForeignLeafSoft) ? 1 : 0;
         const int mirror_ok = (!mirror || !mirror->center)
@@ -2590,9 +2590,10 @@ extern "C" let_exchange_status_t let_exchange_nodes(unsigned char **send_buf_per
  *
  * Per sender r (recv_count_per_rank[r] records, encoded in recv_units_per_rank[r] stream units):
  *   - decode each record (the wire codec) into a consecutive foreign slot;
- *   - rebase each u.d.{sibling,nextnode} value V: V in [0,rcount) -> slot_base+V,
- *     V == LET_WIRE_EXIT -> mapped (Pass 2) to the owning local topleaf's
- *     continuation; anything else is a malformed graph and aborts loudly;
+ *   - rebase each u.d.{sibling,nextnode} value V of a record in subtree h: V in h's wire
+ *     records -> slot_base+V, V == LET_WIRE_EXIT -> the owning local topleaf's
+ *     continuation; anything else is a malformed graph, and every rank stops;
+ *   - mirror the record into the GPU tree SoA (and its leaf identity);
  *   - each subtree header h (topleaf_idx in the SHARED DomainNodeIndex[]/
  *     DomainTask[] partition) redirects Nodes[DomainNodeIndex[h.topleaf_idx]]
  *     .u.d.nextnode -> slot_base + h.wire_offset (the subtree root).
@@ -2610,47 +2611,105 @@ struct let_decode_block {
     const unsigned char *kinds;     /* the sender's kind bytes, indexed by record */
     const unsigned char *payload;   /* this block's first record */
     const unsigned char *end;       /* end of the sender's stream */
-    int sender, j0, j1, slot_base;
+    int sender, rcount, j0, j1, slot_base;   /* rcount: the sender's record count */
+    /* The subtree this block's records belong to: their links must stay in wire records [lo, hi), and an exit link
+     * becomes exit_to, the subtree's local topleaf continuation.  A block no usable header covers has lo = 0,
+     * hi = rcount and exit_to = LET_WIRE_EXIT: its exits are left as they arrive. */
+    int lo, hi, exit_to;
 };
 
+/* Where a subtree header lands on this rank: its local topleaf, and that topleaf's continuation, to which the
+ * subtree's exit links resolve.  Returns 0 for a header that does not describe a usable subtree: its records are
+ * then left with their exits unresolved and no topleaf is redirected to them. */
+static int let_header_target(const struct LETSubtreeHeader *h, int rcount, int *local_topleaf_no, int *exit_to)
+{
+    if(h->topleaf_idx < 0 || h->topleaf_idx >= NTopleaves) {return 0;}
+    if(h->wire_offset < 0 || h->count <= 0 || h->wire_offset > rcount - h->count) {return 0;}
+    const int no = DomainNodeIndex[h->topleaf_idx];
+    if(no < All.TreeNodeIndexBase || no >= All.TreeNodeIndexBase + MaxNodes) {return 0;}
+    *local_topleaf_no = no;
+    *exit_to = Nodes[no].u.d.sibling;
+    return 1;
+}
+
 /* Check one sender's stream and cut it into blocks: every kind known, the records fitting the stream, and
- * what follows them fewer than one unit of zeros.  Returns 0 on a malformed stream. */
+ * what follows them fewer than one unit of zeros.  A block never spans two subtrees: blocks end at every
+ * usable header's boundary as well as every LET_DECODE_BLOCK_RECORDS records, and carry their subtree.  The
+ * usable headers must come in increasing, non-overlapping order, as pack writes them.  Returns 0 on a
+ * malformed stream or contradictory headers. */
 static int let_wire_plan_stream(const unsigned char *stream, int rcount, int runits, int slot_base, int sender,
-                                std::vector<struct let_decode_block> &blocks)
+                                const struct LETSubtreeHeader *hdrs, int hcount, std::vector<struct let_decode_block> &blocks)
 {
     const size_t span = (size_t) runits * LET_WIRE_UNIT_BYTES;
     if(rcount <= 0 || runits < 0 || (size_t) rcount > span) {return 0;}
     const size_t full_bytes = let_wire_record_bytes(LET_WIRE_KIND_FULL), leaf_bytes = let_wire_record_bytes(LET_WIRE_KIND_LEAF);
     size_t off = (size_t) rcount;   /* the records follow the kind bytes; off <= span throughout */
-    for(int j0 = 0; j0 < rcount; j0 += LET_DECODE_BLOCK_RECORDS)
-    {
-        const int j1 = (rcount - j0 > LET_DECODE_BLOCK_RECORDS) ? j0 + LET_DECODE_BLOCK_RECORDS : rcount;
-        blocks.push_back({stream, stream + off, stream + span, sender, j0, j1, slot_base});
-        for(int j = j0; j < j1; j++)
+    int pos = 0;                    /* first record not yet cut into a block */
+    /* cut records [pos, end) into blocks of one context */
+    auto cut = [&](int end, int lo, int hi, int exit_to) -> int {
+        for(int j0 = pos; j0 < end; j0 += LET_DECODE_BLOCK_RECORDS)
         {
-            const size_t sz = (stream[j] == LET_WIRE_KIND_FULL) ? full_bytes : (stream[j] == LET_WIRE_KIND_LEAF) ? leaf_bytes : 0;
-            if(sz == 0 || sz > span - off) {return 0;}
-            off += sz;
+            const int j1 = (end - j0 > LET_DECODE_BLOCK_RECORDS) ? j0 + LET_DECODE_BLOCK_RECORDS : end;
+            blocks.push_back({stream, stream + off, stream + span, sender, rcount, j0, j1, slot_base, lo, hi, exit_to});
+            for(int j = j0; j < j1; j++)
+            {
+                const size_t sz = (stream[j] == LET_WIRE_KIND_FULL) ? full_bytes : (stream[j] == LET_WIRE_KIND_LEAF) ? leaf_bytes : 0;
+                if(sz == 0 || sz > span - off) {return 0;}
+                off += sz;
+            }
         }
+        pos = end;
+        return 1;
+    };
+    for(int hh = 0; hh < hcount; hh++)
+    {
+        int topleaf_no, exit_to;
+        if(!let_header_target(&hdrs[hh], rcount, &topleaf_no, &exit_to)) {continue;}
+        if(hdrs[hh].wire_offset < pos) {return 0;}
+        if(!cut(hdrs[hh].wire_offset, 0, rcount, LET_WIRE_EXIT)) {return 0;}
+        if(!cut(hdrs[hh].wire_offset + hdrs[hh].count, hdrs[hh].wire_offset, hdrs[hh].wire_offset + hdrs[hh].count, exit_to)) {return 0;}
     }
+    if(!cut(rcount, 0, rcount, LET_WIRE_EXIT)) {return 0;}
     if(span - off >= LET_WIRE_UNIT_BYTES) {return 0;}
     for(size_t q = off; q < span; q++) {if(stream[q]) {return 0;}}
     return 1;
 }
 
-/* Decode one block, handing each record to the destination with its slot.  Returns 0 on a malformed record. */
+/* Decode one block, turn each record's wire links into node slots, and hand the record to the destination with
+ * its slot.  A link inside the block's subtree becomes that record's slot, and LET_WIRE_EXIT becomes the subtree's
+ * local topleaf continuation (left as it is in a block no header covers).  Returns 0 on a record that cannot be
+ * decoded or holds a link that is neither; the failing record and its raw links go to *bad_j, *bad_sib, *bad_next
+ * when asked for (the caller's report, after the parallel pass). */
 template <class Sink>
-static int let_wire_decode_block(const struct let_decode_block &b, Sink &sink)
+static int let_wire_decode_block(const struct let_decode_block &b, Sink &sink,
+                                 int *bad_j = NULL, int *bad_sib = NULL, int *bad_next = NULL)
 {
     let_wire_reader rd = {b.payload, b.end, 0};
     for(int j = b.j0; j < b.j1; j++)
     {
         struct LETNodeWire rec;
+        if(bad_j) {*bad_j = j;}
         if(!let_wire_decode(b.kinds[j], rd, &rec)) {return 0;}
+        int &sib = rec.node.u.d.sibling, &next = rec.node.u.d.nextnode;
+        const int sib_ok  = (sib == LET_WIRE_EXIT)  || (sib >= b.lo && sib < b.hi);
+        const int next_ok = (next == LET_WIRE_EXIT) || (next >= b.lo && next < b.hi);
+        if(!sib_ok || !next_ok)
+        {
+            if(bad_sib) {*bad_sib = sib;}
+            if(bad_next) {*bad_next = next;}
+            return 0;
+        }
+        sib  = (sib == LET_WIRE_EXIT)  ? b.exit_to : b.slot_base + sib;
+        next = (next == LET_WIRE_EXIT) ? b.exit_to : b.slot_base + next;
         sink.put(b.slot_base + j, rec);
     }
     return 1;
 }
+
+/* A destination that keeps nothing: re-decoding the failed block through it names the failing record. */
+struct let_discard_sink {
+    void put(int, const struct LETNodeWire &) const {}
+};
 
 /* Decode every block, in parallel: each record lands in its own slot, so the result is the same however the
  * work is split.  Returns the lowest failing block (so what is reported does not depend on thread timing),
@@ -2676,10 +2735,11 @@ static long long let_wire_decode_blocks(const std::vector<struct let_decode_bloc
     return (first_bad == LLONG_MAX) ? -1 : first_bad;
 }
 
-/* The install destination: a decoded record into its node slot and its foreign-leaf identity sidecar (at
+/* The install destination: a decoded record into its node slot, its foreign-leaf identity sidecar (at
  * foreign_slot = no - (TreeNodeIndexBase+MaxNodes), NOT the SoA index no-TreeNodeIndexBase; non-leaf records
- * carry leaf_tag 0). */
+ * carry leaf_tag 0), and the GPU mirror of both. */
 struct let_install_sink {
+    struct gpu_gravity_tree_soa_t *mirror;
     void put(int abs_idx, const struct LETNodeWire &rec) const
     {
         Nodes[abs_idx]    = rec.node;
@@ -2692,6 +2752,7 @@ struct let_install_sink {
             ForeignLeafZeta[foreign_slot] = rec.leaf_ags_zeta;
             ForeignLeafSoft[foreign_slot] = rec.leaf_force_softening;
         }
+        gpu_mirror_publish_imported_node(mirror, abs_idx, &rec);
     }
 };
 
@@ -2705,18 +2766,29 @@ extern "C" let_exchange_status_t let_unpack_and_install(const unsigned char *rec
                                        const int *foreign_slot_prefix)
 {
     /* Pass 1: check every sender's stream and cut it into blocks (one byte per record, in order), then
-     * decode all blocks of all senders in parallel.  The stream is its record count of kind bytes, then
+     * decode all blocks of all senders in parallel -- each record decoded, its links checked against its subtree
+     * and resolved, stored and mirrored in one visit.  The stream is its record count of kind bytes, then
      * the records, then zero padding to the end of its last unit; anything else -- an unknown kind, a
      * record running past the stream, unexplained bytes at its end -- is a malformed exchange, which every
      * rank then stops on together through the status. */
     std::vector<struct let_decode_block> blocks;
     {
         size_t unit_off = 0;  /* running offset into recv_buf, in stream units (per-sender) */
+        int hdr_scan = 0;     /* running offset into recv_hdr_buf (per-sender) */
         for(int r = 0; r < NTask; r++)
         {
             const int rcount = recv_count_per_rank[r], runits = recv_units_per_rank[r], hcount = recv_hdr_count_per_rank[r];
+            if(hcount < 0 || hcount > recv_hdr_count_total - hdr_scan)
+            {
+                printf("LET install: rank %d sent %d subtree headers but only %d of the %d received remain, on rank %d; stopping.\n",
+                       r, hcount, recv_hdr_count_total - hdr_scan, recv_hdr_count_total, ThisTask);
+                fflush(stdout);
+                return LET_UNPACK_INTERNAL;
+            }
             const unsigned char *stream = recv_buf + unit_off * LET_WIRE_UNIT_BYTES;
+            const struct LETSubtreeHeader *hdrs = recv_hdr_buf + hdr_scan;
             unit_off += (size_t) runits;
+            hdr_scan += hcount;
             if(rcount == 0)
             {
                 /* nothing from this sender -- which must then also mean no stream and no headers */
@@ -2744,26 +2816,55 @@ extern "C" let_exchange_status_t let_unpack_and_install(const unsigned char *rec
                 return LET_UNPACK_INTERNAL;
             }
             const int slot_base = All.TreeNodeIndexBase + MaxNodes + foreign_slot_prefix[r];
-            if(!let_wire_plan_stream(stream, rcount, runits, slot_base, r, blocks))
+            if(!let_wire_plan_stream(stream, rcount, runits, slot_base, r, hdrs, hcount, blocks))
             {
-                printf("LET install: the stream from rank %d (%d records in %d units) is malformed on rank %d; "
-                       "stopping.\n", r, rcount, runits, ThisTask);
+                printf("LET install: the stream from rank %d (%d records in %d units, %d subtree headers) is malformed or "
+                       "its headers overlap, on rank %d; stopping.\n", r, rcount, runits, hcount, ThisTask);
                 fflush(stdout);
                 return LET_UNPACK_INTERNAL;
             }
         }
-        let_install_sink sink;
+        if(hdr_scan != recv_hdr_count_total)
+        {
+            printf("LET install: %d subtree headers received but the senders' counts add to %d, on rank %d; stopping.\n",
+                   recv_hdr_count_total, hdr_scan, ThisTask);
+            fflush(stdout);
+            return LET_UNPACK_INTERNAL;
+        }
+        /* Every record is mirrored as it is decoded, so the mirror must hold every slot of the import: the build
+         * acquired it and the exchange grew it to the foreign storage, so a shortfall here is internal. */
+        struct gpu_gravity_tree_soa_t *mirror = gpu_gravity_tree_soa();
+        if(!blocks.empty() && (!mirror || !mirror->center || !mirror->foreign_leaf_tag
+                               || (long long) gpu_gravity_tree_capacity() < (long long) MaxNodes + AllocatedForeignNodes
+                               || mirror->foreign_leaf_cap < AllocatedForeignNodes))
+        {
+            printf("LET install: rank %d has no device mirror for its %d foreign slots (mirror %s, %d slots for %d local + foreign, "
+                   "identity mirror %d); stopping.\n", ThisTask, AllocatedForeignNodes, (mirror && mirror->center) ? "present" : "absent",
+                   gpu_gravity_tree_capacity(), MaxNodes + AllocatedForeignNodes, (mirror && mirror->foreign_leaf_tag) ? mirror->foreign_leaf_cap : 0);
+            fflush(stdout);
+            return LET_UNPACK_INTERNAL;
+        }
+        let_install_sink sink = {mirror};
         const long long bad = let_wire_decode_blocks(blocks, sink);
         if(bad >= 0)
         {
-            printf("LET install: a record from rank %d (records %d..%d) could not be decoded on rank %d; stopping.\n",
-                   blocks[(size_t) bad].sender, blocks[(size_t) bad].j0, blocks[(size_t) bad].j1 - 1, ThisTask);
+            const struct let_decode_block &b = blocks[(size_t) bad];
+            let_discard_sink discard;
+            int j = -1, sib = LET_WIRE_EXIT, next = LET_WIRE_EXIT;
+            let_wire_decode_block(b, discard, &j, &sib, &next);
+            if(sib == LET_WIRE_EXIT && next == LET_WIRE_EXIT)
+                printf("LET install: record %d from rank %d could not be decoded on rank %d; stopping.\n", j, b.sender, ThisTask);
+            else
+                printf("LET install: record %d from rank %d links outside its subtree's records %d..%d of %d (sibling %d, "
+                       "nextnode %d; %d marks an exit) on rank %d; stopping.\n", j, b.sender, b.lo, b.hi - 1, b.rcount, sib, next,
+                       LET_WIRE_EXIT, ThisTask);
             fflush(stdout);
             return LET_UNPACK_INTERNAL;
         }
     }
 
-    /* Passes 1b, 2 and 3, sender by sender, now that every record is in. */
+    /* Pass 2, sender by sender, now that every record is in, linked and mirrored: point each subtree's local
+     * topleaf at the subtree's root (AoS + SoA). */
     int hdr_off  = 0;     /* running offset into recv_hdr_buf (per-sender) */
     for(int r = 0; r < NTask; r++)
     {
@@ -2771,81 +2872,14 @@ extern "C" let_exchange_status_t let_unpack_and_install(const unsigned char *rec
         const int hcount = recv_hdr_count_per_rank[r];
         if(rcount == 0) {continue;}   /* and then no headers either, checked above */
         const int slot_base = All.TreeNodeIndexBase + MaxNodes + foreign_slot_prefix[r];
-
-        /* Pass 1b: rebase wire-local topology to absolute slots, once every record is in.
-         * The wire graph is self-contained -- pack RELABEL resolved every terminator to a
-         * wire index or LET_WIRE_EXIT -- so each sibling/nextnode is either LET_WIRE_EXIT
-         * (resolved to the local topleaf continuation in Pass 2) or an intra-sender wire
-         * index in [0,rcount).  No sender-index reconstruction. */
-        for(int j = 0; j < rcount; j++)
-        {
-            int abs_idx = slot_base + j;
-            int sib  = Nodes[abs_idx].u.d.sibling;
-            int next = Nodes[abs_idx].u.d.nextnode;
-            if(sib != LET_WIRE_EXIT)
-            {
-                if(sib >= 0 && sib < rcount) Nodes[abs_idx].u.d.sibling = slot_base + sib;
-                else { printf("LET install FATAL: node slot %d sibling wire %d out of [0,%d) and != EXIT "
-                              "(rank %d).\n", abs_idx, sib, rcount, ThisTask); fflush(stdout); endrun(90000074); }
-            }
-            if(next != LET_WIRE_EXIT)
-            {
-                if(next >= 0 && next < rcount) Nodes[abs_idx].u.d.nextnode = slot_base + next;
-                else { printf("LET install FATAL: node slot %d nextnode wire %d out of [0,%d) and != EXIT "
-                              "(rank %d).\n", abs_idx, next, rcount, ThisTask); fflush(stdout); endrun(90000075); }
-            }
-        }
-
-        /* Pass 2: resolve remaining plain sentinels (LET_EDGE_SENTINEL_BASE) to topleaf_sibling,
-         * and redirect each affected local topleaf's u.d.nextnode at the foreign subtree root. */
         for(int hh = 0; hh < hcount; hh++)
         {
             const struct LETSubtreeHeader *h = &recv_hdr_buf[hdr_off + hh];
-            int topleaf_idx = h->topleaf_idx;
-            int wire_off    = h->wire_offset;
-            int wire_cnt    = h->count;
-
-            /* Defensive bounds */
-            if(topleaf_idx < 0 || topleaf_idx >= NTopleaves) continue;
-            if(wire_off < 0 || wire_cnt <= 0 || wire_off + wire_cnt > rcount) continue;
-
-            int local_topleaf_no = DomainNodeIndex[topleaf_idx];
-            if(local_topleaf_no < All.TreeNodeIndexBase || local_topleaf_no >= All.TreeNodeIndexBase + MaxNodes) continue;
-
-            int topleaf_sibling = Nodes[local_topleaf_no].u.d.sibling;
-            int subtree_root    = slot_base + wire_off;
-
-            /* Map this subtree's LET_WIRE_EXIT markers to the local topleaf's continuation, and
-             * assert HEADER-RANGE CONFINEMENT: every intra-subtree topology link must stay within
-             * this header's foreign range [subtree_root, subtree_root+wire_cnt); the only edge that
-             * leaves it is the exit -> topleaf_sibling.  Pack builds wire indices per-subtree so this
-             * holds by construction; the check makes a cross-header link loud rather than silent. */
-            int sub_lo = subtree_root, sub_hi = subtree_root + wire_cnt;
-            for(int j = wire_off; j < wire_off + wire_cnt; j++)
-            {
-                int abs_idx = slot_base + j;
-                if(Nodes[abs_idx].u.d.sibling  == LET_WIRE_EXIT) Nodes[abs_idx].u.d.sibling  = topleaf_sibling;
-                if(Nodes[abs_idx].u.d.nextnode == LET_WIRE_EXIT) Nodes[abs_idx].u.d.nextnode = topleaf_sibling;
-                int s = Nodes[abs_idx].u.d.sibling, n = Nodes[abs_idx].u.d.nextnode;
-                if(s != topleaf_sibling && !(s >= sub_lo && s < sub_hi))
-                { printf("LET install FATAL: node slot %d sibling %d escapes header range [%d,%d) and "
-                         "!= topleaf_sibling %d (rank %d).\n", abs_idx, s, sub_lo, sub_hi, topleaf_sibling, ThisTask);
-                  fflush(stdout); endrun(90000077); }
-                if(n != topleaf_sibling && !(n >= sub_lo && n < sub_hi))
-                { printf("LET install FATAL: node slot %d nextnode %d escapes header range [%d,%d) and "
-                         "!= topleaf_sibling %d (rank %d).\n", abs_idx, n, sub_lo, sub_hi, topleaf_sibling, ThisTask);
-                  fflush(stdout); endrun(90000078); }
-            }
-
-            /* Redirect local topleaf at the foreign subtree root (AoS + SoA). */
-            Nodes[local_topleaf_no].u.d.nextnode = subtree_root;
-            gpu_set_soa_nextnode(local_topleaf_no, subtree_root);
-
+            int local_topleaf_no, exit_to;
+            if(!let_header_target(h, rcount, &local_topleaf_no, &exit_to)) {continue;}
+            Nodes[local_topleaf_no].u.d.nextnode = slot_base + h->wire_offset;
+            gpu_set_soa_nextnode(local_topleaf_no, slot_base + h->wire_offset);
         }
-        /* Pass 3: AoS -> SoA scatter for the foreign-node range we just
-         * installed.  GPU walk reads node fields via SoA only; without this
-         * the foreign nodes would have garbage SoA entries. */
-        gpu_scatter_foreign_to_soa(slot_base, rcount);
 
         Numforeignnodes += rcount;
         if((long long) Numforeignnodes > Numforeignnodes_highwater) {Numforeignnodes_highwater = Numforeignnodes;}

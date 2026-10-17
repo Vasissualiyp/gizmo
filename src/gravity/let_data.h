@@ -282,7 +282,7 @@ static_assert(sizeof(struct LETNodeWire) % 8 == 0,
  * storage (in force_treeallocate for the storage it reserves, in force_tree_grow_foreign_storage for a
  * larger import) and freed in force_treefree; the install writes every slot of the import, and a slot
  * past it is reachable from no node.  The GPU mirror lives in the tree SoA
- * (foreign_leaf_*), scattered from these in gpu_scatter_foreign_to_soa.
+ * (foreign_leaf_*), copied from these by gpu_mirror_publish_imported_node.
  * ---------------------------------------------------------------------- */
 extern int     *ForeignLeafTag;   /* one of LET_LEAF_TAG_* above: NODE (descendable), REAL_LEAF, or
                                    * TRUNCATED_AGGREGATE.  Read it through grav_classify_node -- the
