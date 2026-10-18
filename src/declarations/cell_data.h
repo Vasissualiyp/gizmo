@@ -553,7 +553,7 @@ extern struct gas_cell_data
         return Density;
     }
 
-    inline void enforce_temperature_floor() { /*!< clamp internal energy to minimum temperature */
+    GIZMO_GPU_FUNCTION inline void enforce_temperature_floor() { /*!< clamp internal energy to minimum temperature */
         if(All.MinEgySpec) {
             if(InternalEnergy < All.MinEgySpec) {
                 InternalEnergy = All.MinEgySpec;
@@ -569,7 +569,7 @@ extern struct gas_cell_data
         return 1;
     }
 
-    inline double pressure() const {return Pressure;} /*!< gas pressure */
+    GIZMO_GPU_FUNCTION inline double pressure() const {return Pressure;} /*!< gas pressure */
     GIZMO_GPU_FUNCTION inline double temperature() const {return Temperature;} /*!< gas temperature (must be precomputed) */
     /*!< gas temperature implied by a given specific internal energy, at the cached composition.
          this is the general way to ask for a temperature: it costs two multiplies and stays
@@ -640,7 +640,7 @@ extern struct gas_cell_data
 #endif
     }
 
-    inline double fast_MHD_wavespeed() const { /*!< fast MHD wave speed: sqrt(cs^2 + vA^2) */
+    GIZMO_GPU_FUNCTION inline double fast_MHD_wavespeed() const { /*!< fast MHD wave speed: sqrt(cs^2 + vA^2) */
         double cs = thermal_soundspeed(), vA = Alfven_speed();
         return sqrt(cs*cs + vA*vA);
     }

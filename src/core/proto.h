@@ -1296,7 +1296,9 @@ GIZMO_GPU_FUNCTION inline double rt_diffusion_coefficient(int i, int k_freq, str
 }
 #endif
 GIZMO_GPU_FUNCTION void rt_eddington_update_calculation(int j, struct particle_data *pp, struct gas_cell_data *cell);
+#ifdef RADTRANSFER
 GIZMO_GPU_FUNCTION void rt_update_driftkick(int i, double dt_entr, int mode, struct particle_data *pp, struct gas_cell_data *cell);
+#endif
 #endif
 #ifdef RT_SOURCE_INJECTION
 void rt_source_injection(void);
