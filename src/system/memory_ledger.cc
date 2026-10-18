@@ -348,7 +348,7 @@ static void report_memory_ledger_impl(const char *when, int always)
                 }
             n += snprintf(buf + n, (n < (int) sizeof(buf)) ? sizeof(buf) - n : 0,
                           "  kokkos %.0f cur / %.0f hw: SoA %.0f tree-AoS %.0f tree-SoA %.0f walk %.0f runner %.0f sidecar %.0f"
-                          " tscratch-b %.0f tscratch-m %.0f ngl-sidx %.0f ngl-pairs %.0f ngl-other %.0f"
+                          " tscratch-b %.0f tscratch-m %.0f ngl-sidx %.0f ngl-pairs %.0f ngl-packet %.0f (peak %.0f) ngl-other %.0f"
                           " mg-graph %.0f (peak %.0f) mg-insert %.0f (peak %.0f; HYPRE's own memory is not observed) unclass %.0f\n",
                           node_kok_cur / (1024.0 * 1024.0), node_kok_hw / (1024.0 * 1024.0),
                           bkt_mb[GIZMO_KOKBUCKET_PARTICLE_SOA], bkt_mb[GIZMO_KOKBUCKET_TREE_ARRAYS],
@@ -356,6 +356,7 @@ static void report_memory_ledger_impl(const char *when, int always)
                           bkt_mb[GIZMO_KOKBUCKET_MODEA_RUNNER], bkt_mb[GIZMO_KOKBUCKET_FINE_SIDECAR],
                           bkt_mb[GIZMO_KOKBUCKET_TREESCRATCH_BUILD], bkt_mb[GIZMO_KOKBUCKET_TREESCRATCH_MOMENT],
                           bkt_mb[GIZMO_KOKBUCKET_NGL_SIDX], bkt_mb[GIZMO_KOKBUCKET_NGL_PAIRS],
+                          bkt_mb[GIZMO_KOKBUCKET_NGL_PACKET], bkt_hw_mb[GIZMO_KOKBUCKET_NGL_PACKET],
                           bkt_mb[GIZMO_KOKBUCKET_NGL],
                           bkt_mb[GIZMO_KOKBUCKET_MG_GRAPH], bkt_hw_mb[GIZMO_KOKBUCKET_MG_GRAPH],
                           bkt_mb[GIZMO_KOKBUCKET_MG_INSERT], bkt_hw_mb[GIZMO_KOKBUCKET_MG_INSERT],

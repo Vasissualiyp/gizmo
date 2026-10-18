@@ -42,6 +42,7 @@
 #include "neighbor_loop_runner.h"
 #include "gpu_neighbor_list.h"
 #include "device_tree_walk.h"          /* the one device traversal; Mode D enters it from the root */
+#include "device_packet_walk.h"        /* packets: several queries sharing one traversal (shared with the gravity walk) */
 #include "../declarations/gpu_recorder_claim.h"   /* gx_touched_set_claim_in, the fused walk's touched-set claim */
 #include "kernel.h"  /* MUST precede sink_env1_loop.h (kernel_main, NEAREST_XYZ) */
 #include "ghost_writeback.h"             /* ghost_get_num_local */
@@ -4080,6 +4081,624 @@ struct NlrRecordLeaf {
     }
 };
 
+/* ============================================================================
+ * PACKETS: several queries of one batch sharing one traversal.
+ *
+ * The flat device walk gives each query one lane and its own walk.  Below about
+ * half the device's lanes per query that leaves most of the device idle while each
+ * lane chases its own pointer chain, so a batch in that band walks as PACKETS
+ * instead: TREE_QUERY_PACKET_SIZE adjacent queries of the batch share one traversal
+ * (mesh/device_packet_walk.h, the same mechanics the gravity walk uses), each still
+ * deciding every node for itself, and each member then evaluates the leaves its
+ * own decisions reached, in the order its own flat walk would have reached them.
+ * With one walker per packet the result is therefore the flat walk's, bit for bit.
+ *
+ * Routing, per batch, on the batch's own query count M on this rank:
+ *   - below the device tier (nlr_walk_runs_on_device) the batch runs on the host;
+ *   - the RECORDING pass walks as packets while 4 M < lanes, the EVALUATING pass
+ *     while 2 M < lanes; each was measured to win on FIRE-dwarf and fire2ics in
+ *     that band (record traversal 4096-65k, evaluation 4096-112k) and to lose
+ *     above it, so the two are selected independently;
+ *   - otherwise the flat device walk.
+ * A packet size of 1 walks flat: a packet of one is the flat walk plus bookkeeping.
+ *
+ * Evaluation through packets is limited to loops whose pair kernel only reduces
+ * into the query's own accumulator -- no neighbour-side writes, motion marks,
+ * ghost writeback or scatter -- because a packet that gives up is discarded and
+ * its members are walked again flat; anything a discarded packet had published
+ * would then be applied twice.  That is a structural property of the loop, tested
+ * here, and every loop that has it takes packets.  The recording pass serves every
+ * loop: its claims are idempotent, so a packet that gives up keeps the claims it
+ * made and the flat replay completes the set.
+ *
+ * A packet gives up, and its members are replayed flat, when its continuations run
+ * out of room, when a round makes no progress, or when the start nodes its received
+ * members carry cannot be put in one depth-first order.  A malformed tree index is
+ * reported through the walk's anomaly word, which stops the run; its packet's members
+ * are replayed flat too, so they leave exactly what the flat walk leaves on its way
+ * to the same report.
+ * ========================================================================== */
+
+#define MODE_D_PACKET_LOCAL_STACK 16      /* continuations the walker keeps itself; the oldest moves to the frontier */
+#define MODE_D_PACKET_CHUNK       1024    /* leaves recorded between two evaluations by the members */
+#define MODE_D_PACKET_STEPS       64      /* node steps the walker takes per round */
+#define MODE_D_PACKET_TEAM_MAX    256     /* members, and so threads, per packet at most */
+
+enum {
+    MODE_D_PACKET_FAIL_NONE = 0,
+    MODE_D_PACKET_FAIL_MALFORMED,        /* an index of no class, or a start past the tree's storage: fatal (the replay reports it too) */
+    MODE_D_PACKET_FAIL_NO_CONTINUATION,  /* local stack and frontier both full */
+    MODE_D_PACKET_FAIL_NO_PROGRESS,      /* a round in which the walker neither advanced nor waited on the chunk */
+    MODE_D_PACKET_FAIL_START_ORDER,      /* received start nodes not in the top tree's depth-first order */
+    MODE_D_PACKET_FAIL_START_ROOM,       /* more distinct received start nodes than the frontier holds */
+    MODE_D_PACKET_FAIL_REASONS
+};
+
+/* Whether a batch of M queries on this rank walks as packets, for a pass that needs fewer than `ratio`
+ * lanes of the device per query to gain from sharing a traversal. */
+static inline bool nlr_mode_d_packets_for(int M, int ratio)
+{
+    return TREE_QUERY_PACKET_SIZE > 1 && nlr_walk_runs_on_device(M) &&
+           !device_packet_lanes_saturated(M, ratio, gizmo_gpu_lane_count());
+}
+
+/* A loop whose evaluation may run in packets: its pair kernel writes nothing but the query's own
+ * accumulator, so a discarded packet has published nothing. */
+template <typename Spec>
+constexpr bool nlr_mode_d_evaluates_in_packets_v =
+    (Spec::write_pattern == WritePattern::ActiveReduceOnly) &&
+    (nlr_spec_modeb_eval_omp<Spec>() == ModeBEvalOMP::BitwiseReadonly) &&
+    !nlr_spec_writes_neighbour_motion_v<Spec> && !Spec::uses_ghost_writeback &&
+    std::is_same_v<typename Spec::ScatterData, NoScatter>;
+
+/* The packet walk's device workspace: a give-up flag per batch member, the give-ups by reason, each
+ * top-level node's position in the top tree's depth-first order (the order a sender's export walk appends
+ * the start nodes it ships, which a packet of received queries orders their union by), and the single-rank
+ * path's query buffer.  It persists across calls, grows only when a batch actually walks as packets, and is
+ * released where the tree is freed (nlr_mode_d_packet_workspace_release).  A growth the device refuses keeps
+ * the old allocation, sends only that batch down the flat walk, and is not asked for again until the next
+ * release.  Its labels give it its own line in the memory ledger (ngl-packet, current and peak), and a
+ * refused growth is reported once, by the rank it happened on. */
+struct NlrModeDPacketWorkspace {
+    int *member_failed = nullptr; int member_capacity = 0; int member_refused = 0;
+    int *failed_by_reason = nullptr;
+    int *top_rank = nullptr; int top_rank_capacity = 0; int top_rank_refused = 0;
+    int top_rank_span = 0; int top_rank_current = 0;   /* the map describes the tree as built; cleared by every build */
+    void *queries = nullptr; size_t query_bytes = 0; size_t query_refused = 0;
+};
+static NlrModeDPacketWorkspace g_mode_d_packets;
+
+void nlr_mode_d_packet_workspace_release(void)
+{
+    NlrModeDPacketWorkspace &w = g_mode_d_packets;
+    if(w.member_failed)    {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(w.member_failed);}
+    if(w.failed_by_reason) {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(w.failed_by_reason);}
+    if(w.top_rank)         {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(w.top_rank);}
+    if(w.queries)          {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(w.queries);}
+    w = NlrModeDPacketWorkspace{};
+}
+
+/* A growth the device refused: said once (it is not asked for again until the next release), by the rank. */
+static void nlr_mode_d_packet_refused(const char *what, size_t bytes)
+{
+    printf("[Mode D packets] Task %d: the device refused %.1f MB for the packet walk's %s; batches needing more walk flat "
+           "until the tree is next freed.\n", ThisTask, (double) bytes / (1024.0 * 1024.0), what);
+    fflush(stdout);
+}
+
+/* Room for M batch members' give-up flags and the reason tally, or false: the batch then walks flat. */
+static bool nlr_mode_d_packet_workspace_reserve(int M)
+{
+    NlrModeDPacketWorkspace &w = g_mode_d_packets;
+    if(!w.failed_by_reason) {
+        w.failed_by_reason = (int *) nlr_shared_alloc_bytes((size_t) MODE_D_PACKET_FAIL_REASONS * sizeof(int), "ngl_packet_reasons");
+        if(!w.failed_by_reason) {return false;}
+    }
+    if(w.member_capacity >= M) {return true;}
+    if(w.member_refused && M >= w.member_refused) {return false;}
+    const int capacity = (M + M / 8 + 1 > M) ? (M + M / 8 + 1) : M;
+    int *grown = (int *) nlr_shared_alloc_bytes((size_t) capacity * sizeof(int), "ngl_packet_member_failed");
+    if(!grown) {w.member_refused = M; nlr_mode_d_packet_refused("give-up flags", (size_t) capacity * sizeof(int)); return false;}
+    if(w.member_failed) {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(w.member_failed);}
+    w.member_failed = grown; w.member_capacity = capacity;
+    return true;
+}
+
+/* Room for a single-rank batch's query buffer, or null: the batch then walks flat. */
+static void *nlr_mode_d_packet_query_buffer(size_t bytes)
+{
+    NlrModeDPacketWorkspace &w = g_mode_d_packets;
+    if(w.query_bytes >= bytes) {return w.queries;}
+    if(w.query_refused && bytes >= w.query_refused) {return nullptr;}
+    const size_t capacity = bytes + bytes / 8;
+    void *grown = nlr_shared_alloc_bytes(capacity, "ngl_packet_queries");
+    if(!grown) {w.query_refused = bytes; nlr_mode_d_packet_refused("query buffer", capacity); return nullptr;}
+    if(w.queries) {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(w.queries);}
+    w.queries = grown; w.query_bytes = capacity;
+    return w.queries;
+}
+
+/* Walk the top-level tree depth-first through the same node arrays the device walk reads, calling visit(kn)
+ * on every top-level node in order: an internal top-level node descends to its first child, which is itself
+ * top-level, and a top leaf continues at its sibling.  A top leaf's own child link is never followed -- it is
+ * the one top-level link that changes between builds (pointer fixups when particles move between chains, and
+ * the redirect of a remote top leaf into the imported tree) -- so the order computed after a build stays the
+ * order until the next one.  Node indices are NOT depth-first (siblings are numbered before descendants),
+ * which is why a rank has to be computed at all. */
+template <class Visit>
+static void nlr_mode_d_top_tree_depth_first(const GxDeviceTreeView &tree, Visit visit)
+{
+    int guard = 0;
+    for(int no = tree.node_base; no >= tree.node_base && no < tree.foreign_base && guard < tree.node_capacity; guard++) {
+        const int kn = no - tree.node_base;
+        const unsigned int flags = tree.node_bitflags[kn];
+        if(!(flags & (1u << BITFLAG_TOPLEVEL))) {no = tree.node_sibling[kn]; continue;}
+        visit(kn);
+        no = (flags & (1u << BITFLAG_INTERNAL_TOPLEVEL)) ? tree.node_nextnode[kn] : tree.node_sibling[kn];
+    }
+}
+
+/* Each top-level node's depth-first rank, indexed by node offset over the span the top-level nodes occupy
+ * (the first nodes a build creates); -1 for the other nodes in that span.  Computed from the node arrays the
+ * device walk reads, at the first use after a build, and kept until the next build: the top-level links do not
+ * change between builds (the imported-tree redirects run inside the build, and the in-place pointer fixups
+ * between builds touch particle chains, not the top level).  Kept rather than recomputed per batch because
+ * reading those arrays on the host pulls their pages away from the device on a backend without coherent
+ * host access.  Null when it cannot be had (the batch walks flat). */
+void nlr_mode_d_packet_tree_rebuilt(void) {g_mode_d_packets.top_rank_current = 0;}
+
+static const int *nlr_mode_d_packet_top_rank(const GxDeviceTreeView &tree, int *span_out)
+{
+    NlrModeDPacketWorkspace &w = g_mode_d_packets;
+    if(w.top_rank_current) {*span_out = w.top_rank_span; return w.top_rank;}
+    int span = 0;
+    nlr_mode_d_top_tree_depth_first(tree, [&](int kn) {if(kn + 1 > span) {span = kn + 1;}});
+    if(span <= 0) {return nullptr;}
+    if(w.top_rank_capacity < span) {
+        if(w.top_rank_refused && span >= w.top_rank_refused) {return nullptr;}
+        int *grown = (int *) nlr_shared_alloc_bytes((size_t) span * sizeof(int), "ngl_packet_top_rank");
+        if(!grown) {w.top_rank_refused = span; nlr_mode_d_packet_refused("top-level order", (size_t) span * sizeof(int)); return nullptr;}
+        if(w.top_rank) {Kokkos::kokkos_free<GIZMO_KOKKOS_SHARED_SPACE>(w.top_rank);}
+        w.top_rank = grown; w.top_rank_capacity = span;
+    }
+    int *rank = w.top_rank;
+    for(int kn = 0; kn < span; kn++) {rank[kn] = -1;}
+    int r = 0;
+    nlr_mode_d_top_tree_depth_first(tree, [&](int kn) {rank[kn] = r++;});
+    w.top_rank_span = span; w.top_rank_current = 1;
+    *span_out = span;
+    return rank;
+}
+
+/* Where a packet's team keeps its state, in level-0 scratch: each member's query (position and reach) and
+ * accumulator, the frontier, the record chunk, the walker's own continuations and masks, and the counters,
+ * last.  The accumulators live here rather than in each member's registers because the walker is member 0:
+ * a register accumulator would stay live through the whole traversal, so the walk would carry a member's
+ * full state on top of its own -- the largest loops' accumulators then spill.  In scratch, a member's
+ * accumulator is in registers only while that member evaluates its records. */
+struct NlrModeDPacketPlan {
+    size_t queries, accums, frontier, frontier_masks, records, record_masks, local, local_masks, walker_masks, walker_state, counters, bytes;
+};
+
+/* The walker's position in the traversal, kept in team scratch between its rounds: it must survive each round
+ * boundary and the members' evaluation of the record chunk, and kept in registers it would stay live through
+ * that evaluation beside the members' accumulators. */
+struct NlrModeDPacketWalkerState {int no, exit, item_live, local_head, local_count;};
+static NlrModeDPacketPlan nlr_mode_d_packet_plan(int q, int mask_words, int frontier_cap, int chunk_cap, size_t accum_bytes)
+{
+    NlrModeDPacketPlan p;
+    DevicePacketScratchLayout layout;
+    p.queries        = layout.take((size_t) q * 4 * sizeof(double), alignof(double));
+    p.accums         = layout.take((size_t) q * accum_bytes, 16);
+    p.frontier       = layout.take((size_t) frontier_cap * sizeof(device_packet_item_t), alignof(device_packet_item_t));
+    p.frontier_masks = layout.take((size_t) frontier_cap * mask_words * sizeof(device_packet_mask_word_t), alignof(device_packet_mask_word_t));
+    p.records        = layout.take((size_t) chunk_cap * sizeof(int), alignof(int));
+    p.record_masks   = layout.take((size_t) chunk_cap * mask_words * sizeof(device_packet_mask_word_t), alignof(device_packet_mask_word_t));
+    p.local          = layout.take((size_t) MODE_D_PACKET_LOCAL_STACK * sizeof(device_packet_item_t), alignof(device_packet_item_t));
+    p.local_masks    = layout.take((size_t) MODE_D_PACKET_LOCAL_STACK * mask_words * sizeof(device_packet_mask_word_t), alignof(device_packet_mask_word_t));
+    p.walker_masks   = layout.take((size_t) 2 * mask_words * sizeof(device_packet_mask_word_t), alignof(device_packet_mask_word_t));   /* the item's mask + the open mask */
+    p.walker_state   = layout.take(sizeof(NlrModeDPacketWalkerState), alignof(NlrModeDPacketWalkerState));
+    p.counters       = layout.take(DEVICE_PACKET_COUNTER_SLOTS * sizeof(int), alignof(long long));
+    p.bytes = layout.bytes;
+    return p;
+}
+
+/* One packet per team: thread 0 walks, thread m < q owns member m.  A batch holds its root queries in
+ * [0, n_local) and its received queries in [n_local, n_total); a packet never mixes the two, so its entry
+ * is either the root or the union of its members' start nodes.
+ *
+ * The client supplies the batch and what happens at a leaf:
+ *   static constexpr bool evaluates;  using Accum;   int n_local, n_total;
+ *   GxDeviceTreeView tree; unsigned int type_mask; int *anomaly;
+ *   void query(int kk, double *x4) const;                           position and reach
+ *   void starts(int kk, const int *&nodes, int &n) const;           a received query's start nodes
+ *   evaluating:  void begin(Accum &) const; void evaluate(int kk, int j, const double *x4, Accum &) const;
+ *                void commit(int kk, const Accum &) const;
+ *   recording:   void claim(int j) const; */
+template <class Client>
+struct NlrModeDPacketWalk {
+    using TeamMember = Kokkos::TeamPolicy<>::member_type;
+    Client cl;
+    DevicePacketTraversal<MODE_D_PACKET_LOCAL_STACK> trav;
+    NlrModeDPacketPlan plan;
+    int q, n_local_packets;
+    int *member_failed, *failed_by_reason;
+    const int *top_rank; int top_rank_span;
+
+    /* The walker: advance its item until its step budget runs out, the chunk is full, it runs out of work,
+     * or the packet gives up -- deciding every node the way gx_device_tree_walk_impl decides it, for every
+     * member of the item at once. */
+    KOKKOS_INLINE_FUNCTION void walk(int resume, int &no, int &exit, int &item_live, int &local_head, int &local_count,
+                                     device_packet_mask_word_t *mask, device_packet_mask_word_t *open_mask,
+                                     device_packet_item_t *local, device_packet_mask_word_t *lmasks,
+                                     const double *queries, device_packet_item_t *frontier, device_packet_mask_word_t *fmasks,
+                                     int *records, device_packet_mask_word_t *rmasks, int *ctr) const
+    {
+        const GxDeviceTreeView &tree = cl.tree;
+        const int W = trav.mask_words;
+        int budget = trav.steps_per_round, stepped = 0;
+        while(1) {
+            if(!item_live || no == exit || no < 0) {
+                if(trav.next_item(no, exit, mask, item_live, local_head, local_count, local, lmasks, ctr, frontier, fmasks)) {continue;}
+                break;
+            }
+            if(budget <= 0) {break;}   /* back to the round boundary, item intact */
+            budget--; stepped++;
+            if(no >= tree.particle_slots && no < tree.node_base) {
+                Kokkos::atomic_store(cl.anomaly, GX_WALK_ANOMALY_MALFORMED_TREE);
+                trav.fail(ctr, MODE_D_PACKET_FAIL_MALFORMED); break;
+            }
+            if(no < tree.particle_slots) {
+                if(no < tree.local_particle_slots) {   /* imported ghosts above the owned locals are stepped over */
+                    if constexpr (Client::evaluates) {
+                        const int r = trav.record_reserve(ctr);
+                        if(r < 0) {break;}   /* chunk full: the members evaluate it, then the walk resumes here */
+                        records[r] = no; device_packet_mask_copy(rmasks + (size_t) r * W, mask, W);
+                    } else {
+                        cl.claim(no);
+                    }
+                }
+                no = tree.nextnode_aux[no];
+                continue;
+            }
+            if(no >= tree.pseudo_start) {   /* pseudo-particle: another rank's subtree, nothing local below it */
+                no = tree.nextnode_aux[tree.particle_slots + (no - tree.pseudo_start)];
+                continue;
+            }
+            const int kn = no - tree.node_base;
+            if(kn < 0 || kn >= tree.node_capacity) {
+                Kokkos::atomic_store(cl.anomaly, GX_WALK_ANOMALY_MALFORMED_TREE);
+                trav.fail(ctr, MODE_D_PACKET_FAIL_MALFORMED); break;
+            }
+            /* a resumed walk ends where it re-enters the top-level tree; a walk from the root descends it */
+            if(resume && (tree.node_bitflags[kn] & (1u << BITFLAG_TOPLEVEL))) {item_live = 0; continue;}
+            double len_eff = (double) tree.node_len[kn];
+            if(tree.node_vmax && tree.node_ti && tree.drift_tables_ok) {
+                const double dl = motion_bound_widening((double) tree.node_vmax[kn], tree.node_ti[kn], tree.ti_now, &tree.drift_tables);
+                if(!motion_bound_widening_is_valid(dl)) {Kokkos::atomic_store(cl.anomaly, GX_WALK_ANOMALY_MALFORMED_TREE);}
+                else {len_eff += dl;}
+            }
+            const double hw = 0.5 * len_eff;
+            device_packet_mask_clear(open_mask, W);
+            const int pruned = (cl.type_mask && tree.type_mask_trusted && !(NODE_TYPE_PRESENCE(tree.node_bitflags[kn]) & cl.type_mask));
+            if(!pruned) {
+                for(int m = 0; m < q; m++) {
+                    if(!device_packet_mask_test(mask, m)) {continue;}
+                    const double *x = queries + 4 * m;
+                    if(gx_extended_overlap_wrap_and_test((double) tree.node_center[kn][0] - x[0], (double) tree.node_center[kn][1] - x[1],
+                                                         (double) tree.node_center[kn][2] - x[2], hw, hw, hw, x[3])) {device_packet_mask_set(open_mask, m);}
+                }
+            }
+            const int child = tree.node_nextnode[kn], sibling = tree.node_sibling[kn];
+            /* nobody opens it, or it is an imported foreign subtree, which holds no locally-owned particles */
+            if(!device_packet_mask_any(open_mask, W) || (child >= tree.foreign_base && child < tree.pseudo_start)) {no = sibling; continue;}
+            if(!trav.descend(child, sibling, no, exit, mask, open_mask, local_head, local_count, local, lmasks,
+                             ctr, frontier, fmasks, MODE_D_PACKET_FAIL_NO_CONTINUATION)) {break;}
+        }
+        if(stepped) {trav.ctr_add(&ctr[DEVICE_PACKET_CTR_STEPPED], stepped);}
+    }
+
+    /* The received members' entries: one item per distinct start node, its mask the members that carry it.
+     * Every member's list must be strictly increasing in the top tree's depth-first rank (the order its
+     * sender's export walk appended them in), and the union is pushed in decreasing rank, so the walker's
+     * newest-first pop takes the items in each member's own order.  Run by thread 0; returns 0 when the
+     * packet gave up. */
+    KOKKOS_INLINE_FUNCTION int received_entries(int first, int q_eff, device_packet_item_t *frontier, device_packet_mask_word_t *fmasks, int *ctr) const
+    {
+        const GxDeviceTreeView &tree = cl.tree;
+        const int W = trav.mask_words;
+        int nu = 0;
+        for(int m = 0; m < q_eff; m++) {
+            const int *starts; int n_start;
+            cl.starts(first + m, starts, n_start);
+            int last_rank = -1;
+            for(int k = 0; k < n_start; k++) {
+                const int start = starts[k];
+                const GxStartNode cls = gx_classify_start_node(start, tree);
+                if(cls == GxStartNode::EndOfList) {break;}
+                if(cls == GxStartNode::Skip) {continue;}
+                if(cls == GxStartNode::Malformed) {
+                    Kokkos::atomic_store(cl.anomaly, GX_WALK_ANOMALY_MALFORMED_TREE);
+                    trav.fail(ctr, MODE_D_PACKET_FAIL_MALFORMED); return 0;
+                }
+                const int kn = start - tree.node_base;
+                if(kn >= top_rank_span || top_rank[kn] < 0 || top_rank[kn] <= last_rank) {   /* not top-level, or out of order */
+                    trav.fail(ctr, MODE_D_PACKET_FAIL_START_ORDER); return 0;
+                }
+                last_rank = top_rank[kn];
+                int pos = -1;
+                for(int u = 0; u < nu; u++) {if(frontier[u].no == start) {pos = u; break;}}
+                if(pos < 0) {
+                    if(nu >= trav.frontier_cap) {trav.fail(ctr, MODE_D_PACKET_FAIL_START_ROOM); return 0;}
+                    pos = nu++;
+                    frontier[pos].no = start; frontier[pos].exit = last_rank;   /* exit holds the rank until the sort */
+                    device_packet_mask_clear(fmasks + (size_t) pos * W, W);
+                }
+                device_packet_mask_set(fmasks + (size_t) pos * W, m);
+            }
+        }
+        /* decreasing rank (insertion sort over a handful of start nodes, each mask moving with its item),
+           then each start node becomes its item */
+        for(int a = 1; a < nu; a++) {
+            const device_packet_item_t it = frontier[a];
+            device_packet_mask_word_t it_mask[MODE_D_PACKET_TEAM_MAX / DEVICE_PACKET_MASK_BITS];
+            device_packet_mask_copy(it_mask, fmasks + (size_t) a * W, W);
+            int b = a - 1;
+            while(b >= 0 && frontier[b].exit < it.exit) {
+                frontier[b + 1] = frontier[b];
+                device_packet_mask_copy(fmasks + (size_t) (b + 1) * W, fmasks + (size_t) b * W, W);
+                b--;
+            }
+            frontier[b + 1] = it;
+            device_packet_mask_copy(fmasks + (size_t) (b + 1) * W, it_mask, W);
+        }
+        for(int u = 0; u < nu; u++) {
+            const int kn = frontier[u].no - tree.node_base;
+            frontier[u].no = tree.node_nextnode[kn]; frontier[u].exit = tree.node_sibling[kn];   /* open the exported node */
+        }
+        ctr[DEVICE_PACKET_CTR_FR_PUB] = nu;
+        return 1;
+    }
+
+    /* A region of the team's scratch.  Each phase takes the regions it uses, so that none is held across the
+     * phases that do not. */
+    template <class T> KOKKOS_INLINE_FUNCTION static T *region(char *scratch, size_t offset) {return (T *) (scratch + offset);}
+
+    KOKKOS_INLINE_FUNCTION void operator()(const TeamMember &team) const
+    {
+        const int W = trav.mask_words;
+        const int p = team.league_rank(), t = team.team_rank();
+        const int resume = (p >= n_local_packets);
+        const int first = resume ? cl.n_local + (p - n_local_packets) * q : p * q;
+        const int end   = resume ? cl.n_total : cl.n_local;
+        const int q_eff = (end - first < q) ? (end - first) : q;
+        char *scratch = (char *) team.team_scratch(0).get_shmem(plan.bytes);
+        int  *ctr     = region<int>(scratch, plan.counters);
+
+        if(t < q_eff) {cl.query(first + t, region<double>(scratch, plan.queries) + 4 * t);}
+        if(t == 0) {for(int c = 0; c < DEVICE_PACKET_COUNTER_SLOTS; c++) {ctr[c] = 0;}}
+        team.team_barrier();
+
+        if(t == 0) {
+            device_packet_mask_word_t *mask = region<device_packet_mask_word_t>(scratch, plan.walker_masks);
+            NlrModeDPacketWalkerState &ws = *region<NlrModeDPacketWalkerState>(scratch, plan.walker_state);
+            ws.no = -1; ws.exit = -1; ws.item_live = 0; ws.local_head = 0; ws.local_count = 0;
+            device_packet_mask_clear(mask, W);
+            if(!resume) {
+                for(int m = 0; m < q_eff; m++) {device_packet_mask_set(mask, m);}
+                ws.no = cl.tree.node_base; ws.exit = -1; ws.item_live = (q_eff > 0);   /* the root: its own overlap test runs */
+            } else {
+                received_entries(first, q_eff, region<device_packet_item_t>(scratch, plan.frontier),
+                                 region<device_packet_mask_word_t>(scratch, plan.frontier_masks), ctr);   /* a failure is seen at the first round boundary */
+            }
+        }
+        if constexpr (Client::evaluates) {if(t < q_eff) {cl.begin(region<typename Client::Accum>(scratch, plan.accums)[t]);}}
+
+        while(1) {
+            if(t == 0 && !ctr[DEVICE_PACKET_CTR_FAILED]) {
+                /* the walker's phase: its state from scratch, the traversal, its state back */
+                NlrModeDPacketWalkerState &ws = *region<NlrModeDPacketWalkerState>(scratch, plan.walker_state);
+                device_packet_mask_word_t *mask = region<device_packet_mask_word_t>(scratch, plan.walker_masks);
+                int no = ws.no, exit = ws.exit, item_live = ws.item_live, local_head = ws.local_head, local_count = ws.local_count;
+                walk(resume, no, exit, item_live, local_head, local_count, mask, mask + W,
+                     region<device_packet_item_t>(scratch, plan.local), region<device_packet_mask_word_t>(scratch, plan.local_masks),
+                     region<double>(scratch, plan.queries),
+                     region<device_packet_item_t>(scratch, plan.frontier), region<device_packet_mask_word_t>(scratch, plan.frontier_masks),
+                     region<int>(scratch, plan.records), region<device_packet_mask_word_t>(scratch, plan.record_masks), ctr);
+                if(item_live || local_count > 0) {trav.ctr_add(&ctr[DEVICE_PACKET_CTR_WORKING], 1);}
+                ws.no = no; ws.exit = exit; ws.item_live = item_live; ws.local_head = local_head; ws.local_count = local_count;
+            }
+            const int chunk_full = trav.round_boundary(team, ctr, region<device_packet_item_t>(scratch, plan.frontier),
+                                                       region<device_packet_mask_word_t>(scratch, plan.frontier_masks),
+                                                       MODE_D_PACKET_FAIL_NO_PROGRESS);
+            if(chunk_full < 0) {break;}   /* the packet gave up */
+            if constexpr (Client::evaluates) {
+                /* the chunk is full, or the traversal has finished: each member evaluates its own records, in order */
+                if(ctr[DEVICE_PACKET_CTR_RECORDS] > 0 && (chunk_full || ctr[DEVICE_PACKET_CTR_DONE])) {
+                    if(t < q_eff) {
+                        const double *x = region<double>(scratch, plan.queries) + 4 * t;
+                        const int *records = region<int>(scratch, plan.records);
+                        const device_packet_mask_word_t *rmasks = region<device_packet_mask_word_t>(scratch, plan.record_masks);
+                        typename Client::Accum *accums = region<typename Client::Accum>(scratch, plan.accums);
+                        const int n_rec = ctr[DEVICE_PACKET_CTR_RECORDS];
+                        typename Client::Accum acc = accums[t];   /* in registers for this flush only */
+                        for(int r = 0; r < n_rec; r++) {
+                            if(device_packet_mask_test(rmasks + (size_t) r * W, t)) {cl.evaluate(first + t, records[r], x, acc);}
+                        }
+                        accums[t] = acc;
+                    }
+                    team.team_barrier();
+                    if(t == 0) {ctr[DEVICE_PACKET_CTR_RECORDS] = 0;}
+                }
+            }
+            if(ctr[DEVICE_PACKET_CTR_DONE]) {break;}
+        }
+
+        if(ctr[DEVICE_PACKET_CTR_FAILED]) {
+            const int reason = ctr[DEVICE_PACKET_CTR_FAIL_REASON];
+            if(t == 0) {Kokkos::atomic_fetch_add(&failed_by_reason[(reason > 0 && reason < MODE_D_PACKET_FAIL_REASONS) ? reason : 0], 1);}
+            if(t < q_eff) {member_failed[first + t] = 1;}   /* replayed flat; a malformed index then raises the flat walk's own report */
+            return;
+        }
+        if constexpr (Client::evaluates) {if(t < q_eff) {cl.commit(first + t, region<typename Client::Accum>(scratch, plan.accums)[t]);}}
+    }
+};
+
+/* Run a batch as packets.  Returns true with each member's give-up flag in the workspace (the caller replays
+ * the flagged members flat), or false when the batch cannot walk as packets here -- no workspace, no legal
+ * team, or no depth-first ranks for its received members -- in which case nothing has run and the caller
+ * walks the whole batch flat.  Every allocation happens before the launch, so nothing a packet publishes is
+ * ever followed by a refusal. */
+template <class Client>
+static bool nlr_mode_d_packet_run(const Client &cl, const char *label, const int **member_failed_out)
+{
+    const int M = cl.n_total;
+    /* an unfilled view is the flat walk's to report: it stops the run on it */
+    if(M <= 0 || cl.tree.local_particle_slots < 0 || !nlr_mode_d_packet_workspace_reserve(M)) {return false;}
+    const int *top_rank = nullptr; int top_rank_span = 0;
+    if(M > cl.n_local) {top_rank = nlr_mode_d_packet_top_rank(cl.tree, &top_rank_span); if(!top_rank) {return false;}}
+    NlrModeDPacketWorkspace &w = g_mode_d_packets;
+
+    NlrModeDPacketWalk<Client> f{cl};
+    int q = (TREE_QUERY_PACKET_SIZE < MODE_D_PACKET_TEAM_MAX) ? TREE_QUERY_PACKET_SIZE : MODE_D_PACKET_TEAM_MAX;
+    f.trav.n_walkers = 1; f.trav.steps_per_round = MODE_D_PACKET_STEPS;
+    f.trav.chunk_cap = Client::evaluates ? MODE_D_PACKET_CHUNK : 1;   /* a recording packet reserves no records */
+    /* The frontier is the single walker's overflow store for its oldest continuations, and the home of a
+     * received packet's entries; it is sized for both rather than left at zero. */
+    auto shape = [&](int qq) {
+        f.q = qq; f.trav.mask_words = device_packet_mask_words(qq);
+        f.trav.frontier_cap = (qq * NODELISTLENGTH > 16) ? qq * NODELISTLENGTH : 16;
+        f.plan = nlr_mode_d_packet_plan(qq, f.trav.mask_words, f.trav.frontier_cap, Client::evaluates ? MODE_D_PACKET_CHUNK : 0,
+                                        Client::evaluates ? sizeof(typename Client::Accum) : 0);
+    };
+    /* The packet width this backend can launch is found once and kept: it is a property of the kernel, the
+     * backend and the scratch request, none of which change during a run.  A packet wider than the legal
+     * team is walked as more, narrower packets, never truncated; 0 means no width of 2 or more launches. */
+    static int launch_width = -1;
+    if(launch_width < 0) {
+        int qq = q;
+        while(qq >= 2) {shape(qq); if(gizmo_gpu_team_size_max(f, f.plan.bytes) >= qq) {break;} qq--;}
+        launch_width = (qq >= 2) ? qq : 0;
+    }
+    if(launch_width < 2) {return false;}
+    q = launch_width;
+    shape(q);
+    f.n_local_packets = (cl.n_local + q - 1) / q;
+    const int league = f.n_local_packets + (M - cl.n_local + q - 1) / q;
+    f.member_failed = w.member_failed; f.failed_by_reason = w.failed_by_reason;
+    f.top_rank = top_rank; f.top_rank_span = top_rank_span;
+    int *mf = w.member_failed, *fr = w.failed_by_reason;
+    gizmo_gpu_kernel_launch("ngl_packet_clear", M, KOKKOS_LAMBDA(int k) {
+        mf[k] = 0;
+        if(k < MODE_D_PACKET_FAIL_REASONS) {fr[k] = 0;}
+    });
+    if(M < MODE_D_PACKET_FAIL_REASONS) {for(int k = M; k < MODE_D_PACKET_FAIL_REASONS; k++) {fr[k] = 0;}}
+    gizmo_gpu_team_kernel_launch(label, league, q, f.plan.bytes, f);
+    /* Members to replay only when some packet gave up for a reason that replays. */
+    int replay = 0;
+    for(int k = 1; k < MODE_D_PACKET_FAIL_REASONS; k++) {replay += w.failed_by_reason[k];}
+    *member_failed_out = replay ? w.member_failed : nullptr;
+    return true;
+}
+
+/* The evaluating client: the batch's queries as the fused walk holds them, root queries first, and the
+ * production leaf at every leaf a member's own decisions reached. */
+template <typename Spec, bool Mirror>
+struct NlrModeDPacketEvaluate {
+    static constexpr bool evaluates = true;
+    using Accum = typename Spec::AccumData;
+    using ActiveData = typename Spec::ActiveData;
+    typename Spec::DeviceContext ctx;
+    typename Spec::CallScalars cs;
+    const ActiveData *ql = nullptr, *q_d = nullptr;   /* root queries, received queries */
+    const int *nodes_d = nullptr, *nn_d = nullptr;     /* received start nodes, strided by NODELISTLENGTH */
+    const double *reach = nullptr;                     /* the search radius when the caller walks with its own; else the query's */
+    int n_local = 0, n_total = 0;
+    GxDeviceTreeView tree;
+    unsigned int type_mask = 0;
+    int *anomaly = nullptr;
+    struct GxMotionTargetSet motion_targets{};
+    GxLeafMirrorView leaf_mirror{};
+    struct GxTouchedSet mass_verdicts{};
+    int use_mass_verdict = 0;
+    Accum *acc_out = nullptr;
+
+    KOKKOS_INLINE_FUNCTION const ActiveData &act(int kk) const {return (kk < n_local) ? ql[kk] : q_d[kk - n_local];}
+    KOKKOS_INLINE_FUNCTION void query(int kk, double *x4) const
+    {
+        const ActiveData &a = act(kk);
+        x4[0] = (double) a.pos[0]; x4[1] = (double) a.pos[1]; x4[2] = (double) a.pos[2];
+        x4[3] = reach ? reach[kk] : (double) a.h_search;
+    }
+    KOKKOS_INLINE_FUNCTION void starts(int kk, const int *&nodes, int &n) const
+    {
+        const int kr = kk - n_local; nodes = nodes_d + (size_t) kr * NODELISTLENGTH; n = nn_d[kr];
+    }
+    KOKKOS_INLINE_FUNCTION void begin(Accum &acc) const {memset((void *) &acc, 0, sizeof(Accum)); Spec::zero_accum(acc);}
+    KOKKOS_INLINE_FUNCTION void evaluate(int kk, int j, const double *x4, Accum &acc) const
+    {
+        typename Spec::ScatterData sd{};
+        NlrModeDReduceLeaf<Spec, Mirror> leaf{&ctx, &act(kk), &acc, &sd, type_mask, &cs};
+        leaf.motion_targets = motion_targets;
+        if constexpr (Mirror) {leaf.leaf_mirror = leaf_mirror;}
+        leaf.mass_verdicts = mass_verdicts; leaf.use_mass_verdict = use_mass_verdict;
+        leaf.visit(j, x4[0], x4[1], x4[2], x4[3]);
+    }
+    KOKKOS_INLINE_FUNCTION void commit(int kk, const Accum &acc) const {acc_out[kk] = acc;}
+};
+
+/* The recording client: one claim per reached local slot, through the production recording leaf. */
+template <class QueryFn>
+struct NlrModeDPacketRecord {
+    static constexpr bool evaluates = false;
+    struct Accum {};
+    QueryFn query_fn;
+    int n_local = 0, n_total = 0;
+    GxDeviceTreeView tree;
+    unsigned int type_mask = 0;
+    int *anomaly = nullptr;
+    NlrRecordLeaf leaf{};
+
+    KOKKOS_INLINE_FUNCTION void query(int kk, double *x4) const
+    {
+        const int *nodes; int n;
+        query_fn(kk, x4[0], x4[1], x4[2], x4[3], nodes, n);
+    }
+    KOKKOS_INLINE_FUNCTION void starts(int kk, const int *&nodes, int &n) const
+    {
+        double x, y, z, reach;
+        query_fn(kk, x, y, z, reach, nodes, n);
+        if(n < 0) {n = 0;}
+    }
+    KOKKOS_INLINE_FUNCTION void claim(int j) const {leaf.visit(j, 0, 0, 0, 0);}
+};
+
+/* Evaluate a batch -- root queries [0, n_local), received ones after -- as packets.  Returns false when it
+ * did not run (the caller walks the whole batch flat); true with *replay set to the members to walk flat, or
+ * null when every packet completed. */
+template <typename Spec>
+static bool nlr_mode_d_packet_evaluate(const typename Spec::DeviceContext &ctx, const typename Spec::CallScalars &cs,
+                                       const typename Spec::ActiveData *ql, const typename Spec::ActiveData *q_d,
+                                       const int *nodes_d, const int *nn_d, const double *reach, int n_local, int M,
+                                       const GxDeviceTreeView &tree, unsigned int type_mask, int *anomaly,
+                                       const struct GxMotionTargetSet &motion_targets, const GxLeafMirrorView &leaf_mirror,
+                                       const struct GxTouchedSet &mass_verdicts, int use_mass_verdict,
+                                       typename Spec::AccumData *acc_out, const int **replay)
+{
+    auto fill = [&](auto &cl) {
+        cl.ctx = ctx; cl.cs = cs; cl.ql = ql; cl.q_d = q_d; cl.nodes_d = nodes_d; cl.nn_d = nn_d; cl.reach = reach;
+        cl.n_local = n_local; cl.n_total = M; cl.tree = tree; cl.type_mask = type_mask; cl.anomaly = anomaly;
+        cl.motion_targets = motion_targets; cl.mass_verdicts = mass_verdicts; cl.use_mass_verdict = use_mass_verdict;
+        cl.acc_out = acc_out;
+    };
+    if(leaf_mirror.pos && leaf_mirror.type) {
+        NlrModeDPacketEvaluate<Spec, true> cl; fill(cl); cl.leaf_mirror = leaf_mirror;
+        return nlr_mode_d_packet_run(cl, Spec::loop_name, replay);
+    }
+    NlrModeDPacketEvaluate<Spec, false> cl; fill(cl);
+    return nlr_mode_d_packet_run(cl, Spec::loop_name, replay);
+}
+
 /* Bring current exactly the local particles a fused walk is about to reach.
  *
  * Runs the traversal once with the recording policy, waits for it, advances the
@@ -4104,15 +4723,16 @@ struct NlrRecordLeaf {
  *
  * `query` is device-callable and yields this work item's position, reach, and
  * either its start-node list or a negative count meaning "walk from the root".
- * Callers keep the two kinds in CONTIGUOUS index ranges so that the entry a
- * work item takes does not alternate between neighbouring lanes. */
+ * Callers keep the two kinds in CONTIGUOUS index ranges, the `n_root` root
+ * queries first, so that the entry a work item takes does not alternate between
+ * neighbouring lanes and a packet never mixes the two. */
 template <class QueryFn>
 static void nlr_record_and_drift(const struct particle_data *P,
                                  unsigned int supply_mask,
                                  int use_mass_verdict,
                                  const unsigned char *mirror_type,
                                  const GxDeviceTreeView &tree,
-                                 int n, int *anomaly,
+                                 int n, int n_root, int *anomaly,
                                  const char *label,
                                  QueryFn query)
 {
@@ -4145,7 +4765,22 @@ static void nlr_record_and_drift(const struct particle_data *P,
         return;
     }
     GIZMO_GPU_ENSURE_ALL_FRESH();
+    /* In the packet band the batch records as packets; members of a packet that gave up are then recorded by
+     * the flat walk below, which completes the set (the claims a discarded packet made are kept: they are
+     * deduplicated per call, and the drift consumes the set once). */
+    const int *replay = nullptr;
+    if(nlr_mode_d_packets_for(n, 4)) {
+        NlrModeDPacketRecord<QueryFn> cl{query};
+        cl.n_local = n_root; cl.n_total = n; cl.tree = tree; cl.type_mask = supply_mask; cl.anomaly = anomaly;
+        cl.leaf = NlrRecordLeaf{P, ts, supply_mask, anomaly};
+        cl.leaf.use_mass_verdict = use_mass_verdict; cl.leaf.mirror_type = mirror_type;
+        if(nlr_mode_d_packet_run(cl, "nlr_mode_d_record_packets", &replay) && !replay) {
+            gx_touched_set_drift_and_mark(All.Ti_Current);
+            return;
+        }
+    }
     nlr_walk_for_sources(label, n, KOKKOS_LAMBDA(int kk) {
+        if(replay && !replay[kk]) {return;}   /* only the members of packets that gave up */
         double qx = 0, qy = 0, qz = 0, reach = 0;
         const int *start_nodes = nullptr;
         int n_start = -1;                 /* negative: this one walks from the root */
@@ -4252,7 +4887,7 @@ static void nlr_mode_d_local_reduce(const typename Spec::DeviceContext &ctx,
     const int use_mass_verdict = nlr_mode_d_keeps_mass_verdict<Spec>(n);
     const GxLeafMirrorView record_mirror = nlr_mode_d_leaf_mirror(n, tree);
     nlr_record_and_drift(
-        ctx.P, supply_mask, use_mass_verdict, record_mirror.type, tree, n, anomaly, "nlr_mode_d_self_record",
+        ctx.P, supply_mask, use_mass_verdict, record_mirror.type, tree, n, n, anomaly, "nlr_mode_d_self_record",
         KOKKOS_LAMBDA(int kk, double &qx, double &qy, double &qz, double &reach,
                       const int *&start_nodes, int &n_start) {
             const ActiveData a_rec = Spec::load_active(ctx, active_slot[kk], active_idx[kk], radii[kk], cs);
@@ -4266,8 +4901,31 @@ static void nlr_mode_d_local_reduce(const typename Spec::DeviceContext &ctx,
     const struct GxTouchedSet mass_verdicts = use_mass_verdict ? gx_touched_set_view() : GxTouchedSet{};
     /* As on the multi-rank batch: the leaf mirror on a device batch when this rank has it, else the particle records. */
     const GxLeafMirrorView leaf_mirror = nlr_mode_d_leaf_mirror(n, tree);
-    if(leaf_mirror.pos && leaf_mirror.type) {
+    /* In the packet band the batch is evaluated by the same packet client as a multi-rank batch, every query a
+     * root query, from a query buffer built where the particles are; the flat walk below then evaluates only
+     * the members of packets that gave up, or the whole batch when packets did not run.  The buffer is built
+     * only once packets are chosen, so a batch outside the band pays nothing for it. */
+    bool packets_ran = false;
+    const int *replay = nullptr;
+    if constexpr (nlr_mode_d_evaluates_in_packets_v<Spec>) {
+        if(nlr_mode_d_packets_for(n, 2)) {
+            ActiveData *queries = (ActiveData *) nlr_mode_d_packet_query_buffer((size_t) n * sizeof(ActiveData));
+            if(queries) {
+                gizmo_gpu_kernel_launch("nlr_mode_d_build_packet_queries", n, KOKKOS_LAMBDA(int k) {
+                    queries[k] = Spec::load_active(ctx, active_slot[k], active_idx[k], radii[k], cs);
+                });
+                /* the walk's reach is the runner's radius, as the recording pass and the flat walk take it */
+                packets_ran = nlr_mode_d_packet_evaluate<Spec>(ctx, cs, queries, nullptr, nullptr, nullptr, radii, n, n, tree, supply_mask,
+                                                               anomaly, motion_targets, leaf_mirror, mass_verdicts, use_mass_verdict,
+                                                               accums_out, &replay);
+            }
+        }
+    }
+    if(packets_ran && !replay) {
+        /* every packet completed */
+    } else if(leaf_mirror.pos && leaf_mirror.type) {
         nlr_walk_for_sources(Spec::loop_name, n, KOKKOS_LAMBDA(int kk) {
+            if(replay && !replay[kk]) {return;}
             Spec::zero_accum(accums_out[kk]);
             const int i = active_idx[kk];
             ActiveData  a = Spec::load_active(ctx, active_slot[kk], i, radii[kk], cs);
@@ -4281,6 +4939,7 @@ static void nlr_mode_d_local_reduce(const typename Spec::DeviceContext &ctx,
         });
     } else {
         nlr_walk_for_sources(Spec::loop_name, n, KOKKOS_LAMBDA(int kk) {
+            if(replay && !replay[kk]) {return;}
             Spec::zero_accum(accums_out[kk]);
             const int i = active_idx[kk];
             ActiveData  a = Spec::load_active(ctx, active_slot[kk], i, radii[kk], cs);
@@ -4519,7 +5178,7 @@ struct NlrPeerAnswerDeviceFused {
         const int use_mass_verdict = nlr_mode_d_keeps_mass_verdict<Spec>(M);
         const GxLeafMirrorView record_mirror = nlr_mode_d_leaf_mirror(M, tree);
         nlr_record_and_drift(
-            ctx.P, neighbor_type_mask, use_mass_verdict, record_mirror.type, tree, M, anomaly_d, "nlr_mode_d_record",
+            ctx.P, neighbor_type_mask, use_mass_verdict, record_mirror.type, tree, M, n_local, anomaly_d, "nlr_mode_d_record",
             KOKKOS_LAMBDA(int kk, double &qx, double &qy, double &qz, double &reach,
                           const int *&start_nodes, int &n_start) {
                 const ActiveData& a = (kk < n_local) ? ql[kk] : q_d[kk - n_local];
@@ -4539,8 +5198,22 @@ struct NlrPeerAnswerDeviceFused {
         /* A device batch reads type and position from the leaf mirror when this rank has it current; otherwise, and
          * on the host tier, from the particle records.  Either source gives the same answer, so the choice is rank-local. */
         const GxLeafMirrorView leaf_mirror = nlr_mode_d_leaf_mirror(M, tree);
-        if(leaf_mirror.pos && leaf_mirror.type) {
+        /* In the packet band a loop whose evaluation may run in packets takes them; the flat walk below then
+         * evaluates only the members of packets that gave up, or the whole batch when packets did not run. */
+        bool packets_ran = false;
+        const int *replay = nullptr;
+        if constexpr (nlr_mode_d_evaluates_in_packets_v<Spec>) {
+            if(nlr_mode_d_packets_for(M, 2)) {
+                packets_ran = nlr_mode_d_packet_evaluate<Spec>(ctx, cs, ql, q_d, nodes_d, nn_d, nullptr, n_local, M, tree, neighbor_type_mask,
+                                                               anomaly_d, motion_targets, leaf_mirror, mass_verdicts, use_mass_verdict,
+                                                               acc_d, &replay);
+            }
+        }
+        if(packets_ran && !replay) {
+            /* every packet completed */
+        } else if(leaf_mirror.pos && leaf_mirror.type) {
             nlr_walk_for_sources(Spec::loop_name, M, KOKKOS_LAMBDA(int kk) {
+                if(replay && !replay[kk]) {return;}
                 Spec::zero_accum(acc_d[kk]);
                 const ActiveData& a = (kk < n_local) ? ql[kk] : q_d[kk - n_local];
                 ScatterData s{};
@@ -4552,6 +5225,7 @@ struct NlrPeerAnswerDeviceFused {
             });
         } else {
             nlr_walk_for_sources(Spec::loop_name, M, KOKKOS_LAMBDA(int kk) {
+                if(replay && !replay[kk]) {return;}
                 Spec::zero_accum(acc_d[kk]);
                 const ActiveData& a = (kk < n_local) ? ql[kk] : q_d[kk - n_local];
                 ScatterData s{};

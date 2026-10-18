@@ -769,6 +769,7 @@ int force_treebuild_single(int npart, struct unbind_data *mp)
     MyFloat lenhalf;
     peanokey key, morton, th_key, *morton_list;
     
+    nlr_mode_d_packet_tree_rebuilt();   /* every build, in place or not: the packet walk's top-level order is recomputed */
     /* create an empty root node  */
     nfree = All.TreeNodeIndexBase;        /* index of first free node */
     nfreep = &Nodes[nfree];    /* select first node */
@@ -3995,6 +3996,7 @@ void force_treefree(void)
         gpu_gravity_tree_invalidate_currency();
         gpu_gravity_tree_release();
         gpu_leaf_mirror_release();   /* the device leaf mirror lives and dies with the tree */
+        nlr_mode_d_packet_workspace_release();   /* so does the packet walk's workspace (its top-level order is this tree's) */
         if(Nextnode)      {gpu_tree_free_bytes(Nextnode);      Nextnode      = NULL;}
         if(Extnodes_base) {gpu_tree_free_bytes(Extnodes_base); Extnodes_base = NULL;}
         if(Nodes_base)    {gpu_tree_free_bytes(Nodes_base);    Nodes_base    = NULL;}

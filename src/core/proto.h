@@ -432,6 +432,7 @@ enum {
   GIZMO_KOKBUCKET_TREESCRATCH_MOMENT,   /* label prefix treescratch_moment_ (moment-refresh pools)  */
   GIZMO_KOKBUCKET_NGL_SIDX,             /* label prefix ngl_sidx_  (tile/BVH/pool/compact-position spatial index) */
   GIZMO_KOKBUCKET_NGL_PAIRS,            /* label prefix ngl_pairs_ (per-dispatch active list, CSR offsets/neighbours, search scratch) */
+  GIZMO_KOKBUCKET_NGL_PACKET,           /* label prefix ngl_packet_ (the fused neighbour walk's packet workspace, kept between calls) */
   GIZMO_KOKBUCKET_NGL,                  /* label prefix ngl_ (remaining neighbour-list memory: build/refresh scratch) */
   GIZMO_KOKBUCKET_MG_GRAPH,             /* label prefix mg_graph_  (MG div(B) face graph, its per-row values and build scratch) */
   GIZMO_KOKBUCKET_MG_INSERT,            /* label prefix mg_insert_ (MG solver insertion arrays, freed once HYPRE has assembled) */

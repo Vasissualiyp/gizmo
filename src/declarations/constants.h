@@ -236,7 +236,12 @@
  * and the shape actually launched -- team, members, walkers and the capacities behind them -- is written
  * into each call's timings record. A device call whose targets reach about half the device's lanes walks
  * one target per lane instead (independent walks then keep the device busy and are faster), so on the
- * device this value matters only below that. The host walk's packets are unaffected. */
+ * device this value matters only below that. The host walk's packets are unaffected.
+ *
+ * The same value sets the packets of the fused neighbour walk (Mode D: density and the other loops whose
+ * pair kernel reduces only into the query's own accumulator), where a device batch of a few thousand to
+ * about a hundred thousand queries per rank walks as packets of this many queries sharing one traversal,
+ * one thread per query; 8 was measured there too. 1 walks every query alone. */
 #ifndef TREE_QUERY_PACKET_SIZE
 #define TREE_QUERY_PACKET_SIZE 8
 #endif
