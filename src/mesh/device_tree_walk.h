@@ -99,6 +99,27 @@ enum class GxWalkEntry {
     LocalRoot        /* from this rank's own root; descend the top level */
 };
 
+/* What a walk may do with one entry of a received start-node list.  The list arrived over MPI, so it is
+ * validated rather than trusted.  A start is a top leaf this rank owns, so it must be a node of the LOCAL
+ * tree, never an imported one; anything else in range is skipped.  An index inside the local tree's range
+ * but past its storage is a malformed tree, which the caller reports and the run stops on.  Every walk that
+ * resumes from such a list -- one query at a time, or a packet sharing one traversal -- classifies its
+ * entries here, so they cannot disagree about which starts are walked. */
+enum class GxStartNode {
+    EndOfList,   /* -1 terminates the list */
+    Skip,        /* not a node of the local tree: walked by nobody */
+    Walk,        /* a node of the local tree: its children are walked */
+    Malformed    /* inside the local tree's range but past its storage */
+};
+KOKKOS_INLINE_FUNCTION
+GxStartNode gx_classify_start_node(int start, const GxDeviceTreeView &tree)
+{
+    if(start < 0) {return GxStartNode::EndOfList;}
+    if(start < tree.node_base || start >= tree.foreign_base) {return GxStartNode::Skip;}
+    if(start - tree.node_base >= tree.node_capacity) {return GxStartNode::Malformed;}   /* precondition leaves this unreachable */
+    return GxStartNode::Walk;
+}
+
 /* Walk one query against the local tree.
  *
  * `anomaly` reports the single state the host walk treats as fatal, an index in
@@ -135,11 +156,10 @@ void gx_device_tree_walk_impl(double qx, double qy, double qz, double reach,
             no = tree.node_base;
         } else {
             const int start = start_nodes[k];
-            if(start < 0) {break;}                   /* -1 terminates the list */
-            /* The start list arrived over MPI, so it is validated rather than trusted: a start is a
-             * top leaf this rank owns, so it must be a node of the local tree, not an imported one. */
-            if(start < tree.node_base || start >= tree.foreign_base) {continue;}
-            if(start - tree.node_base >= tree.node_capacity) {   /* precondition leaves this unreachable */
+            const GxStartNode cls = gx_classify_start_node(start, tree);
+            if(cls == GxStartNode::EndOfList) {break;}
+            if(cls == GxStartNode::Skip) {continue;}
+            if(cls == GxStartNode::Malformed) {
                 Kokkos::atomic_store(anomaly, GX_WALK_ANOMALY_MALFORMED_TREE);
                 break;
             }
