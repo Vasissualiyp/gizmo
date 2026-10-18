@@ -512,6 +512,9 @@ double ThermalProperties(double u, double rho, int target, double *mu_guess, dou
 #ifdef EOS_HELMHOLTZ
 #include "helmholtz/helmholtz.h"
 #endif
+#if defined(MHD_BATTERY_MECHANISMS) && (MHD_BATTERY_MECHANISMS & (4|8))
+#include "../solids/dust_battery_functions.h"
+#endif
 
 /* The tables a call to set_eos_pressure_impl may need, as data.
 
@@ -623,11 +626,13 @@ static KOKKOS_INLINE_FUNCTION int eos_validate(const HelmTable *tab, struct eos_
   {
     BITMASK_SET_FLAG(*bitmask, EOS_ERR_RHO_LT_RHOMIN);
     vars_adj->rho = rho_ye_min / vars_adj->Ye;
+    while(vars_adj->rho * vars_adj->Ye < rho_ye_min) {vars_adj->rho = nextafter(vars_adj->rho, HUGE_VAL);} /* rounding must not leave the clamped value outside the table */
   }
   if(vars->rho * vars_adj->Ye > rho_ye_max)
   {
     BITMASK_SET_FLAG(*bitmask, EOS_ERR_RHO_GT_RHOMAX);
     vars_adj->rho = rho_ye_max / vars_adj->Ye;
+    while(vars_adj->rho * vars_adj->Ye > rho_ye_max) {vars_adj->rho = nextafter(vars_adj->rho, -HUGE_VAL);}
   }
 
   /* check energy range by evaluating at table T boundaries */
