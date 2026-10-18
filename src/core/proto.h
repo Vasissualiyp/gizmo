@@ -147,8 +147,8 @@ GIZMO_GPU_FUNCTION static inline int wakeup_timebin_from_flag(int flag) {return 
    the solve is kappa |A|^2, so the solve minimises sum_faces (flux change)^2 / (kappa |A|^2). By default kappa = r^2/8 (Tu et al.).
    Under MHD_MODIFIED_GRADIENT_RELATIVE_FIELD_WEIGHT, kappa = B_e^2 / <|B|^2> + 0.01, with B_e = (|B_i| + |B_j|)/2 the symmetric pair
    field scale of the two cells (not a reconstructed face field) and <|B|^2> the mean over the cells of the solve (inv_mean_Bsq is its
-   inverse, 0 if the field is zero everywhere): the solve then minimises the flux changes relative to |A| B_e, i.e. relative to the
-   field through each face, with a floor of 0.1 times the rms field. Dividing by <|B|^2> leaves the correction (c kappa) unchanged in
+   inverse, 0 if the field is zero everywhere): the solve then minimises the flux changes relative to the symmetric field-flux scale
+   |A| B_e (not the normal flux |B.A|), with a floor of 0.1 times the rms field. Dividing by <|B|^2> leaves the correction (c kappa) unchanged in
    exact arithmetic but makes the coefficients independent of the field's units and amplitude. Bsq_i and Bsq_j are the cells' |B|^2.
    Every consumer (the solve's coefficients, the hydro face shift, the constrained-gradient face sum, the envelope cap) calls this. */
 GIZMO_GPU_FUNCTION static inline double mg_face_shift_factor(double r2, double Bsq_i, double Bsq_j, double inv_mean_Bsq)
