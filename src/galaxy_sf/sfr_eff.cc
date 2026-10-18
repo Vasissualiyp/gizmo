@@ -685,6 +685,7 @@ void star_formation_parent_routine(void)
 #endif
                         { if(P[i_star].Type != 5) {P[i_star].Type = 4;} } // if we didn't set to type 5 above, default to type 4
                         force_tree_note_type_presence(i_star);  /* the element's type is final here, so tell the standing tree before anything walks it looking for that type */
+                        if(i_star != i) {gravity_note_inserted_motion_bound(i_star);}  /* a spawned element's speed is readable only now */
 
 #ifdef SINK_SEED_FROM_LOCALGAS
                     } /* closes else for decision to make a sink particle */

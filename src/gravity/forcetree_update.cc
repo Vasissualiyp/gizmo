@@ -323,6 +323,35 @@ static inline void raise_node_motion_bound(int no, MyFloat vmax)
     (void) force_soa_raise_vmax(no, Extnodes[no].vmax);
 }
 
+/* Raise every node above particle i to its speed bound.  With stop_at_bounded, a node already holding
+ * the bound ends the walk, since its ancestors hold it too; an insertion walks the whole chain instead,
+ * because the node it joins may bound a speed its ancestors were never told of. */
+/* A top-level node is shared with every rank: listed once for the flush.  The rest of a chain is raised
+ * locally as well, so this rank's own walks see it before the exchange. */
+static inline void list_pending_topnode(int no)
+{
+    const int t = no - All.TreeNodeIndexBase;
+    if(t >= 0 && t < g_pending_topnode_cap && g_pending_topnode_stamp[t] != g_pending_stamp)
+    {
+        g_pending_topnode_stamp[t] = g_pending_stamp;
+        g_pending_topnode_list[g_pending_topnode_n++] = no;
+    }
+}
+
+static void raise_chain_motion_bound(int i, int stop_at_bounded)
+{
+    const MyFloat vmax = (MyFloat) particle_motion_speed_bound(i, P, CellP);
+    for(int no = Father[i]; no >= 0; no = Nodes[no].u.d.father)
+    {
+        const int bounded = (Extnodes[no].vmax >= vmax);
+        if(bounded && stop_at_bounded) {break;}
+        if(!bounded) {raise_node_motion_bound(no, vmax);}
+        /* An insertion lists its top-level nodes whether or not they were raised here, so other ranks'
+         * copies never depend on how an earlier local raise was published. */
+        if(Nodes[no].u.d.bitflags & (1 << BITFLAG_TOPLEVEL)) {list_pending_topnode(no);}
+    }
+}
+
 void gravity_note_motion_bound(const int *idx, int n)
 {
     if(n <= 0 || !idx || !Father || !Nodes || !Extnodes) {return;}
@@ -330,31 +359,26 @@ void gravity_note_motion_bound(const int *idx, int n)
     for(int k = 0; k < n; k++)
     {
         const int i = idx[k];
-        /* Father[] covers the slots the standing tree was built for; a particle
-         * created since then has no node above it until the next build. */
+        /* Father[] covers the slots the standing tree was built for.  A particle inserted since then
+         * was raised at its insertion and is reachable here once its creator re-sequences it under
+         * NumPart; nothing changes its velocity in between. */
         if(i < 0 || i >= NumPart || i >= All.TreeParticleSlots) {continue;}
-        const MyFloat vmax = (MyFloat) particle_motion_speed_bound(i, P, CellP);
-        int no = Father[i];
-        while(no >= 0)
-        {
-            /* A node already holding the bound has ancestors that do too. */
-            if(Extnodes[no].vmax >= vmax) {break;}
-            raise_node_motion_bound(no, vmax);
-            if(Nodes[no].u.d.bitflags & (1 << BITFLAG_TOPLEVEL))
-            {
-                /* Shared with every rank: listed once for the flush.  The rest of
-                 * the chain is raised here too, so this rank's own walks see it
-                 * before the exchange. */
-                const int t = no - All.TreeNodeIndexBase;
-                if(t >= 0 && t < g_pending_topnode_cap && g_pending_topnode_stamp[t] != g_pending_stamp)
-                {
-                    g_pending_topnode_stamp[t] = g_pending_stamp;
-                    g_pending_topnode_list[g_pending_topnode_n++] = no;
-                }
-            }
-            no = Nodes[no].u.d.father;
-        }
+        raise_chain_motion_bound(i, 1);
     }
+}
+
+/* A particle force_add_element_to_tree has just linked into the standing tree.  Its slot may lie past
+ * NumPart until the creating routine re-sequences the particles, so it is admitted up to the tree's
+ * particle slots.  Other ranks' copies of its top-level node receive the bound at the next flush. */
+void gravity_note_inserted_motion_bound(int i)
+{
+    if(i < 0 || i >= All.TreeParticleSlots || !Father || !Nodes || !Extnodes) {return;}
+    /* A gas-typed copy past the gas cells is a provisional type (star formation copies the gas element
+     * and settles the type afterwards): its speed cannot be read yet, and its creator calls this again
+     * once the type is final. */
+    if(P[i].Type == 0 && i >= All.MaxPartGas) {return;}
+    pending_topnodes_ensure();
+    raise_chain_motion_bound(i, 0);
 }
 
 /* A member's kernel length grows at particle_radius_growth_rate, which carries its dilation factor. That factor
@@ -377,15 +401,7 @@ void gravity_note_radius_growth_rates(const int *idx, int n)
             /* A node already bounding the rate has ancestors that do too. */
             if(Extnodes[no].divVmax >= rate) {break;}
             Extnodes[no].divVmax = rate;
-            if(Nodes[no].u.d.bitflags & (1 << BITFLAG_TOPLEVEL))
-            {
-                const int t = no - All.TreeNodeIndexBase;
-                if(t >= 0 && t < g_pending_topnode_cap && g_pending_topnode_stamp[t] != g_pending_stamp)
-                {
-                    g_pending_topnode_stamp[t] = g_pending_stamp;
-                    g_pending_topnode_list[g_pending_topnode_n++] = no;
-                }
-            }
+            if(Nodes[no].u.d.bitflags & (1 << BITFLAG_TOPLEVEL)) {list_pending_topnode(no);}
         }
     }
 #else
