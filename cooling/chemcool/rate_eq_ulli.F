@@ -604,10 +604,10 @@ c     Dust_Temperature and skipping here would freeze tdust.
       call calc_dust_temp(yn, chi_isrf, temp, abHI, RH2, Rdust, 0)
 #endif
 c
-      cr1  = crtab(1)  ! HI
-      cr1a = crtab(1)  ! DI (same rate as HI)
-      cr2  = crtab(2)  ! H2
-      cr6  = crtab(6)  ! HeI
+      cr1  = crtab(1) * cosmic_ray_ion_rate  ! HI
+      cr1a = crtab(1) * cosmic_ray_ion_rate  ! DI (same rate as HI)
+      cr2  = crtab(2) * cosmic_ray_ion_rate  ! H2
+      cr6  = crtab(6) * cosmic_ray_ion_rate  ! HeI
 c
 c Estimate whether we're optically thick to ionizing radiation
 c

@@ -2781,12 +2781,12 @@
    ],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1857,
-    1857
+    1859,
+    1859
    ],
-   "comment": "Primary cosmic ray ionization rates - calculated as scale factor * HI\ncosmic ray ion. rate. For cr3, cr4 we use scaling factors from\nLiszt (2003, A&A, 398, 621), based on data from the UMIST database.\nFor cr5 & cr7, we use L67, L78. For cr6, we use the scaling relative to\nthe HI rate given by UMIST.\n[NB Does not include photoionizations caused by CR-induced photons\n(i.e photons produced by excitation of HI or H2 by collisions with\nenergetic primary and secondary electrons)]\nHI:",
+   "comment": "Primary cosmic ray ionization rates - calculated as scale factor * HI\ncosmic ray ion. rate. For cr3, cr4 we use scaling factors from\nLiszt (2003, A&A, 398, 621), based on data from the UMIST database.\nFor cr5 & cr7, we use L67, L78. For cr6, we use the scaling relative to\nthe HI rate given by UMIST.\n[NB Does not include photoionizations caused by CR-induced photons\n(i.e photons produced by excitation of HI or H2 by collisions with\nenergetic primary and secondary electrons)]\ncrtab, crphot: per unit cosmic_ray_ion_rate; rate_eq applies the cell's\nHI:",
    "expression": [
-    "crtab(1) = cosmic_ray_ion_rate"
+    "crtab(1) = 1d0"
    ],
    "kind": "GENERATED"
   },
@@ -2798,12 +2798,12 @@
    ],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1861,
-    1861
+    1863,
+    1863
    ],
    "comment": "H2:",
    "expression": [
-    "crtab(2) = (2d0*cosmic_ray_ion_rate)"
+    "crtab(2) = 2d0"
    ],
    "kind": "GENERATED"
   },
@@ -2812,12 +2812,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1868,
-    1868
+    1870,
+    1870
    ],
    "comment": "CI:",
    "expression": [
-    "crtab(3) = (3.83d0*cosmic_ray_ion_rate)"
+    "crtab(3) = 3.83d0"
    ],
    "kind": "GENERATED"
   },
@@ -2826,12 +2826,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1872,
-    1872
+    1874,
+    1874
    ],
    "comment": "OI:",
    "expression": [
-    "crtab(4) = (5.67d0*cosmic_ray_ion_rate)"
+    "crtab(4) = 5.67d0"
    ],
    "kind": "GENERATED"
   },
@@ -2840,12 +2840,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1876,
-    1876
+    1878,
+    1878
    ],
    "comment": "SiI:",
    "expression": [
-    "crtab(5) = (6.5d0*cosmic_ray_ion_rate)"
+    "crtab(5) = 6.5d0"
    ],
    "kind": "GENERATED"
   },
@@ -2856,12 +2856,12 @@
    ],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1880,
-    1880
+    1882,
+    1882
    ],
    "comment": "HeI:",
    "expression": [
-    "crtab(6) = (1.09d0*cosmic_ray_ion_rate)"
+    "crtab(6) = 1.09d0"
    ],
    "kind": "GENERATED"
   },
@@ -2870,12 +2870,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1884,
-    1884
+    1886,
+    1886
    ],
    "comment": "Si+:",
    "expression": [
-    "crtab(7) = (2.5d0*cosmic_ray_ion_rate)"
+    "crtab(7) = 2.5d0"
    ],
    "kind": "GENERATED"
   },
@@ -2884,12 +2884,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1888,
-    1888
+    1890,
+    1890
    ],
    "comment": "CO: [NB. Direct ionization by cosmic rays]",
    "expression": [
-    "crtab(9) = (6.52d0*cosmic_ray_ion_rate)"
+    "crtab(9) = 6.52d0"
    ],
    "kind": "GENERATED"
   },
@@ -2900,12 +2900,12 @@
    ],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1862,
-    1862
+    1864,
+    1864
    ],
    "comment": "",
    "expression": [
-    "crtab(10) = (3.7d-2*cosmic_ray_ion_rate)"
+    "crtab(10) = 3.7d-2"
    ],
    "kind": "GENERATED"
   },
@@ -2916,12 +2916,12 @@
    ],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1863,
-    1863
+    1865,
+    1865
    ],
    "comment": "",
    "expression": [
-    "crtab(11) = (2.2d-1*cosmic_ray_ion_rate)"
+    "crtab(11) = 2.2d-1"
    ],
    "kind": "GENERATED"
   },
@@ -2930,12 +2930,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1864,
-    1864
+    1866,
+    1866
    ],
    "comment": "",
    "expression": [
-    "crtab(12) = (6.5d-4*cosmic_ray_ion_rate)"
+    "crtab(12) = 6.5d-4"
    ],
    "kind": "GENERATED"
   },
@@ -2944,12 +2944,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1893,
-    1893
+    1895,
+    1895
    ],
    "comment": "Cosmic-ray induced photoprocesses\nC -> C+ + e-",
    "expression": [
-    "crphot(1) = (2.8d3*cosmic_ray_ion_rate)"
+    "crphot(1) = 2.8d3"
    ],
    "kind": "GENERATED"
   },
@@ -2958,12 +2958,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1895,
-    1895
+    1897,
+    1897
    ],
    "comment": "CH -> C + H",
    "expression": [
-    "crphot(2) = (4d3*cosmic_ray_ion_rate)"
+    "crphot(2) = 4d3"
    ],
    "kind": "GENERATED"
   },
@@ -2972,12 +2972,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1897,
-    1897
+    1899,
+    1899
    ],
    "comment": "CH+ -> C+ + H",
    "expression": [
-    "crphot(3) = (9.6d2*cosmic_ray_ion_rate)"
+    "crphot(3) = 9.6d2"
    ],
    "kind": "GENERATED"
   },
@@ -2986,12 +2986,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1899,
-    1899
+    1901,
+    1901
    ],
    "comment": "CH2 -> CH2+ + e",
    "expression": [
-    "crphot(4) = (2.7d3*cosmic_ray_ion_rate)"
+    "crphot(4) = 2.7d3"
    ],
    "kind": "GENERATED"
   },
@@ -3000,12 +3000,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1901,
-    1901
+    1903,
+    1903
    ],
    "comment": "CH2 -> CH + H",
    "expression": [
-    "crphot(5) = (2.7d3*cosmic_ray_ion_rate)"
+    "crphot(5) = 2.7d3"
    ],
    "kind": "GENERATED"
   },
@@ -3014,12 +3014,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1903,
-    1903
+    1905,
+    1905
    ],
    "comment": "C2 -> C + C",
    "expression": [
-    "crphot(6) = (1.3d3*cosmic_ray_ion_rate)"
+    "crphot(6) = 1.3d3"
    ],
    "kind": "GENERATED"
   },
@@ -3028,12 +3028,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1905,
-    1905
+    1907,
+    1907
    ],
    "comment": "OH -> O + H",
    "expression": [
-    "crphot(7) = (2.8d3*cosmic_ray_ion_rate)"
+    "crphot(7) = 2.8d3"
    ],
    "kind": "GENERATED"
   },
@@ -3042,12 +3042,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1907,
-    1907
+    1909,
+    1909
    ],
    "comment": "H2O -> OH + H",
    "expression": [
-    "crphot(8) = (5.3d3*cosmic_ray_ion_rate)"
+    "crphot(8) = 5.3d3"
    ],
    "kind": "GENERATED"
   },
@@ -3056,12 +3056,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1909,
-    1909
+    1911,
+    1911
    ],
    "comment": "O2 -> O + O",
    "expression": [
-    "crphot(9) = (4.1d3*cosmic_ray_ion_rate)"
+    "crphot(9) = 4.1d3"
    ],
    "kind": "GENERATED"
   },
@@ -3070,12 +3070,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1911,
-    1911
+    1913,
+    1913
    ],
    "comment": "O2 -> O2+ + e",
    "expression": [
-    "crphot(10) = (6.4d2*cosmic_ray_ion_rate)"
+    "crphot(10) = 6.4d2"
    ],
    "kind": "GENERATED"
   },
@@ -3084,12 +3084,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1913,
-    1913
+    1915,
+    1915
    ],
    "comment": "CO -> C + O",
    "expression": [
-    "crphot(11) = (0.21d0*cosmic_ray_ion_rate)"
+    "crphot(11) = 0.21d0"
    ],
    "kind": "GENERATED"
   },
@@ -3098,12 +3098,12 @@
    "networks": [],
    "fortran_file": "cheminmo.F",
    "lines": [
-    1918,
-    1918
+    1920,
+    1920
    ],
    "comment": "NO -> N + O\nNote: this is actually the sum of two processes, direct photodissoc.\nand photoionization to NO+, which we assume then dissociatively\nrecombines to yield N + O...",
    "expression": [
-    "crphot(12) = (5.2d3*cosmic_ray_ion_rate)"
+    "crphot(12) = 5.2d3"
    ],
    "kind": "GENERATED"
   },

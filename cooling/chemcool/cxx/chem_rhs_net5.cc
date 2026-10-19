@@ -98,11 +98,11 @@ int chem_rhs_net5(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     double RH2, Rdust;
     cxx_calc_dust_temp(yn, c.chi_isrf, temp, abHI, &RH2, &Rdust, 0, c);
 
-    // --- cosmic rays (.F:269-272) ---
-    double cr1  = T.crtab[0];
-    double cr2  = T.crtab[1];
-    double cr10 = T.crtab[9];
-    double cr11 = T.crtab[10];
+    // --- cosmic rays (.F:269-272); table is per unit rate ---
+    double cr1  = T.crtab[0] * c.cosmic_ray_ion_rate;
+    double cr2  = T.crtab[1] * c.cosmic_ray_ion_rate;
+    double cr10 = T.crtab[9] * c.cosmic_ray_ion_rate;
+    double cr11 = T.crtab[10] * c.cosmic_ray_ion_rate;
 
     // --- protons (.F:276-281) ---
     ydot[ihp] = (ch11 * abe  * abHI

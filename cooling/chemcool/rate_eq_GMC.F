@@ -596,32 +596,33 @@ c
 c
 c Cosmic ray ionization
 c
-      cr1  = crtab(1)  ! HI
-      cr2  = crtab(2)  ! H2 -> H2+ + e-
-      cr10 = crtab(10) ! H2 -> H + H+ + e
-      cr11 = crtab(11) ! H2 -> H + H
-      cr12 = crtab(12) ! H2 -> H+ + H-
-      cr3  = crtab(3)  ! CI
-      cr4  = crtab(4)  ! OI
-      cr6  = crtab(6)  ! HeI
-      cr9  = crtab(9)  ! CO
+      cr1  = crtab(1) * cosmic_ray_ion_rate  ! HI
+      cr2  = crtab(2) * cosmic_ray_ion_rate  ! H2 -> H2+ + e-
+      cr10 = crtab(10) * cosmic_ray_ion_rate ! H2 -> H + H+ + e
+      cr11 = crtab(11) * cosmic_ray_ion_rate ! H2 -> H + H
+      cr12 = crtab(12) * cosmic_ray_ion_rate ! H2 -> H+ + H-
+      cr3  = crtab(3) * cosmic_ray_ion_rate  ! CI
+      cr4  = crtab(4) * cosmic_ray_ion_rate  ! OI
+      cr6  = crtab(6) * cosmic_ray_ion_rate  ! HeI
+      cr9  = crtab(9) * cosmic_ray_ion_rate  ! CO
 c
 c Cosmic ray photoprocesses
 c
-      cp1  = crphot(1)  ! C
-      cp2  = crphot(2)  ! CH
-      cp3  = crphot(3)  ! CH+
-      cp4  = crphot(4)  ! CH2 -> CH2+
-      cp5  = crphot(5)  ! CH2 -> CH
-      cp6  = crphot(6)  ! C2
-      cp7  = crphot(7)  ! OH
-      cp8  = crphot(8)  ! H2O
-      cp9  = crphot(9)  ! O2 -> O
-      cp10 = crphot(10) ! O2 -> O2+
+      cp1  = crphot(1) * cosmic_ray_ion_rate  ! C
+      cp2  = crphot(2) * cosmic_ray_ion_rate  ! CH
+      cp3  = crphot(3) * cosmic_ray_ion_rate  ! CH+
+      cp4  = crphot(4) * cosmic_ray_ion_rate  ! CH2 -> CH2+
+      cp5  = crphot(5) * cosmic_ray_ion_rate  ! CH2 -> CH
+      cp6  = crphot(6) * cosmic_ray_ion_rate  ! C2
+      cp7  = crphot(7) * cosmic_ray_ion_rate  ! OH
+      cp8  = crphot(8) * cosmic_ray_ion_rate  ! H2O
+      cp9  = crphot(9) * cosmic_ray_ion_rate  ! O2 -> O
+      cp10 = crphot(10) * cosmic_ray_ion_rate ! O2 -> O2+
 c NB cp11 rate per molecule scales as abco^(-1/2), so we fold in
 c the other factor of abco here to avoid numerical difficulties
 c when abco is small
-      cp11 = crphot(11) * dsqrt(temp) * abH2 * dsqrt(abco) ! CO
+      cp11 = crphot(11) * cosmic_ray_ion_rate * dsqrt(temp)
+     $       * abH2 * dsqrt(abco) ! CO
 c
       if (dust_to_gas_ratio .gt. 0d0) then
 c Rates for recombination on grain surfaces. These rates must be 

@@ -349,10 +349,10 @@ c
       ph44  = phrates(44)
       ph45  = phrates(45)
 
-      cr1  = crtab(1)  ! HI
-      cr1a = crtab(1)  ! DI, assumed same as HI
-      cr2  = crtab(2)  ! H2
-      cr6  = crtab(6)  ! HeI
+      cr1  = crtab(1) * cosmic_ray_ion_rate  ! HI
+      cr1a = crtab(1) * cosmic_ray_ion_rate  ! DI, assumed same as HI
+      cr2  = crtab(2) * cosmic_ray_ion_rate  ! H2
+      cr6  = crtab(6) * cosmic_ray_ion_rate  ! HeI
 c
 #ifdef DMA
 c Calculate heating rate, ionization rate due to DMA

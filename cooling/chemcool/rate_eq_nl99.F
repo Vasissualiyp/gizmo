@@ -245,10 +245,10 @@ c
 c Cosmic ray ionization rates: precomputed in cheminmo.
 c
 c HI:
-      cr1 = crtab(1)
-      cr2 = crtab(2)
+      cr1 = crtab(1) * cosmic_ray_ion_rate
+      cr2 = crtab(2) * cosmic_ray_ion_rate
 c HeI:
-      cr6 = crtab(6)
+      cr6 = crtab(6) * cosmic_ray_ion_rate
 c
 c H3+ equilibrium abundance
 c

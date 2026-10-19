@@ -240,11 +240,11 @@ int chem_rhs_net17(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     double RH2, Rdust;
     cxx_calc_dust_temp(yn, c.chi_isrf, temp, abHI, &RH2, &Rdust, 0, c);
 
-    // --- cosmic rays (.F:607-610) ---
-    double cr1  = T.crtab[0];
-    double cr1a = T.crtab[0];
-    double cr2  = T.crtab[1];
-    double cr6  = T.crtab[5];
+    // --- cosmic rays (.F:607-610); table is per unit rate ---
+    double cr1  = T.crtab[0] * c.cosmic_ray_ion_rate;
+    double cr1a = T.crtab[0] * c.cosmic_ray_ion_rate;
+    double cr2  = T.crtab[1] * c.cosmic_ray_ion_rate;
+    double cr6  = T.crtab[5] * c.cosmic_ray_ion_rate;
 
     // --- optical depth to He+-recombination photons (.F:614-618) ---
     NH = 0.5 * dl * yn;

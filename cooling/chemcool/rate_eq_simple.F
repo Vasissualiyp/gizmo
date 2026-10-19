@@ -263,13 +263,13 @@ c     Dust_Temperature and skipping here would freeze tdust.
       call calc_dust_temp(yn, chi_isrf, temp, abHI, RH2, Rdust, 0)
 #endif
 c
-c Cosmic ray ionization rates: precomputed in cheminmo.
+c Cosmic ray ionization rates: per unit rate from cheminmo, times the cell rate
 c
 c HI:
-      cr1  = crtab(1)  
-      cr2  = crtab(2)   ! H2 -> H2+ + e-
-      cr10 = crtab(10)  ! H2 -> H + H+ + e
-      cr11 = crtab(11)  ! H2 -> H + H
+      cr1  = crtab(1) * cosmic_ray_ion_rate  
+      cr2  = crtab(2) * cosmic_ray_ion_rate   ! H2 -> H2+ + e-
+      cr10 = crtab(10) * cosmic_ray_ion_rate  ! H2 -> H + H+ + e
+      cr11 = crtab(11) * cosmic_ray_ion_rate  ! H2 -> H + H
 c
 c Protons
 c 

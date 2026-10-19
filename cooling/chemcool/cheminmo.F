@@ -1852,70 +1852,72 @@ c [NB Does not include photoionizations caused by CR-induced photons
 c (i.e photons produced by excitation of HI or H2 by collisions with
 c energetic primary and secondary electrons)]
 c
+c  crtab, crphot: per unit cosmic_ray_ion_rate; rate_eq applies the cell's
+c
 c  HI:
 c
-      crtab(1) = cosmic_ray_ion_rate
+      crtab(1) = 1d0
 c
 c  H2: 
 c
-      crtab(2) = 2d0 * cosmic_ray_ion_rate   ! H2 -> H2+ + e-
-      crtab(10) = 3.7d-2 * cosmic_ray_ion_rate ! H2 -> H + H+ + e
-      crtab(11) = 2.2d-1 * cosmic_ray_ion_rate ! H2 -> H + H
-      crtab(12) = 6.5d-4 * cosmic_ray_ion_rate ! H2 -> H+ + H-
+      crtab(2) = 2d0   ! H2 -> H2+ + e-
+      crtab(10) = 3.7d-2 ! H2 -> H + H+ + e
+      crtab(11) = 2.2d-1 ! H2 -> H + H
+      crtab(12) = 6.5d-4 ! H2 -> H+ + H-
 c
 c  CI:
 c
-      crtab(3) = 3.83d0 * cosmic_ray_ion_rate
+      crtab(3) = 3.83d0
 c
 c  OI:
 c
-      crtab(4) = 5.67d0 * cosmic_ray_ion_rate
+      crtab(4) = 5.67d0
 c
 c  SiI:  
 c
-      crtab(5) = 6.5d0 * cosmic_ray_ion_rate
+      crtab(5) = 6.5d0
 c
 c  HeI: 
 c
-      crtab(6) = 1.09d0 * cosmic_ray_ion_rate
+      crtab(6) = 1.09d0
 c
 c  Si+:
 c
-      crtab(7) = 2.5d0 * cosmic_ray_ion_rate
+      crtab(7) = 2.5d0
 c
 c  CO: [NB. Direct ionization by cosmic rays] 
 c
-      crtab(9) = 6.52d0 * cosmic_ray_ion_rate
+      crtab(9) = 6.52d0
 c
 c Cosmic-ray induced photoprocesses
 c
 c C -> C+ + e-
-      crphot(1)  = 2.8d3 * cosmic_ray_ion_rate
+      crphot(1)  = 2.8d3
 c CH -> C + H
-      crphot(2)  = 4d3 * cosmic_ray_ion_rate
+      crphot(2)  = 4d3
 c CH+ -> C+ + H
-      crphot(3)  = 9.6d2 * cosmic_ray_ion_rate
+      crphot(3)  = 9.6d2
 c CH2 -> CH2+ + e
-      crphot(4)  = 2.7d3 * cosmic_ray_ion_rate
+      crphot(4)  = 2.7d3
 c CH2 -> CH + H
-      crphot(5)  = 2.7d3 * cosmic_ray_ion_rate
+      crphot(5)  = 2.7d3
 c C2 -> C + C
-      crphot(6)  = 1.3d3 * cosmic_ray_ion_rate
+      crphot(6)  = 1.3d3
 c OH -> O + H
-      crphot(7)  = 2.8d3 * cosmic_ray_ion_rate
+      crphot(7)  = 2.8d3
 c H2O -> OH + H
-      crphot(8)  = 5.3d3 * cosmic_ray_ion_rate
+      crphot(8)  = 5.3d3
 c O2 -> O + O
-      crphot(9)  = 4.1d3 * cosmic_ray_ion_rate
+      crphot(9)  = 4.1d3
 c O2 -> O2+ + e
-      crphot(10) = 6.4d2 * cosmic_ray_ion_rate
+      crphot(10) = 6.4d2
 c CO -> C + O
-      crphot(11) = 0.21d0 * cosmic_ray_ion_rate
+      crphot(11) = 0.21d0
 c NO -> N + O
 c Note: this is actually the sum of two processes, direct photodissoc.
 c and photoionization to NO+, which we assume then dissociatively 
 c recombines to yield N + O...
-      crphot(12) = 5.2d3 * cosmic_ray_ion_rate
+      crphot(12) = 5.2d3
 c
 c Setup tables for CO shielding
 c

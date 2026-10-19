@@ -607,16 +607,16 @@ c
       ph34c = (1d0 / 11d0)  * ph34    ! H2O+ + H
       ph34d = (1d0 / 3.3d0) * ph34    ! OH+  + H2
 
-      cr1  = crtab(1)  ! HI
-      cr1a = crtab(1)  ! DI, assumed same as HI
-      cr2  = crtab(2)  ! H2
-      cr3  = crtab(3)  ! CI
-      cr4  = crtab(4)  ! OI
-      cr5  = crtab(5)  ! SiI
-      cr6  = crtab(6)  ! HeI
-      cr7  = crtab(7)  ! Si+
+      cr1  = crtab(1) * cosmic_ray_ion_rate  ! HI
+      cr1a = crtab(1) * cosmic_ray_ion_rate  ! DI, assumed same as HI
+      cr2  = crtab(2) * cosmic_ray_ion_rate  ! H2
+      cr3  = crtab(3) * cosmic_ray_ion_rate  ! CI
+      cr4  = crtab(4) * cosmic_ray_ion_rate  ! OI
+      cr5  = crtab(5) * cosmic_ray_ion_rate  ! SiI
+      cr6  = crtab(6) * cosmic_ray_ion_rate  ! HeI
+      cr7  = crtab(7) * cosmic_ray_ion_rate  ! Si+
 c
-      cr9  = crtab(9)  ! CO
+      cr9  = crtab(9) * cosmic_ray_ion_rate  ! CO
 c
       if (dust_to_gas_ratio .gt. 0d0) then
 c Rates for recombination on grain surfaces. These rates must be 

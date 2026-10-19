@@ -1849,164 +1849,164 @@ double rate_ch173(double temp, const ChemGlobals& g) {
     return v_chtab_173_itemp;
 }
 
-/* cr1  cheminmo.F:1857-1857  nets:5,17 */
+/* cr1  cheminmo.F:1859-1859  nets:5,17 */
 double rate_cr1(double temp, const ChemGlobals& g) {
     double v_crtab_1 = GUARD_NAN;
-    v_crtab_1 = g.cosmic_ray_ion_rate;
+    v_crtab_1 = 1e0;
     return v_crtab_1;
 }
 
-/* cr2  cheminmo.F:1861-1861  nets:5,17 */
+/* cr2  cheminmo.F:1863-1863  nets:5,17 */
 double rate_cr2(double temp, const ChemGlobals& g) {
     double v_crtab_2 = GUARD_NAN;
-    v_crtab_2 = (2e0 * g.cosmic_ray_ion_rate);
+    v_crtab_2 = 2e0;
     return v_crtab_2;
 }
 
-/* cr3  cheminmo.F:1868-1868  nets:- */
+/* cr3  cheminmo.F:1870-1870  nets:- */
 double rate_cr3(double temp, const ChemGlobals& g) {
     double v_crtab_3 = GUARD_NAN;
-    v_crtab_3 = (3.83e0 * g.cosmic_ray_ion_rate);
+    v_crtab_3 = 3.83e0;
     return v_crtab_3;
 }
 
-/* cr4  cheminmo.F:1872-1872  nets:- */
+/* cr4  cheminmo.F:1874-1874  nets:- */
 double rate_cr4(double temp, const ChemGlobals& g) {
     double v_crtab_4 = GUARD_NAN;
-    v_crtab_4 = (5.67e0 * g.cosmic_ray_ion_rate);
+    v_crtab_4 = 5.67e0;
     return v_crtab_4;
 }
 
-/* cr5  cheminmo.F:1876-1876  nets:- */
+/* cr5  cheminmo.F:1878-1878  nets:- */
 double rate_cr5(double temp, const ChemGlobals& g) {
     double v_crtab_5 = GUARD_NAN;
-    v_crtab_5 = (6.5e0 * g.cosmic_ray_ion_rate);
+    v_crtab_5 = 6.5e0;
     return v_crtab_5;
 }
 
-/* cr6  cheminmo.F:1880-1880  nets:17 */
+/* cr6  cheminmo.F:1882-1882  nets:17 */
 double rate_cr6(double temp, const ChemGlobals& g) {
     double v_crtab_6 = GUARD_NAN;
-    v_crtab_6 = (1.09e0 * g.cosmic_ray_ion_rate);
+    v_crtab_6 = 1.09e0;
     return v_crtab_6;
 }
 
-/* cr7  cheminmo.F:1884-1884  nets:- */
+/* cr7  cheminmo.F:1886-1886  nets:- */
 double rate_cr7(double temp, const ChemGlobals& g) {
     double v_crtab_7 = GUARD_NAN;
-    v_crtab_7 = (2.5e0 * g.cosmic_ray_ion_rate);
+    v_crtab_7 = 2.5e0;
     return v_crtab_7;
 }
 
-/* cr9  cheminmo.F:1888-1888  nets:- */
+/* cr9  cheminmo.F:1890-1890  nets:- */
 double rate_cr9(double temp, const ChemGlobals& g) {
     double v_crtab_9 = GUARD_NAN;
-    v_crtab_9 = (6.52e0 * g.cosmic_ray_ion_rate);
+    v_crtab_9 = 6.52e0;
     return v_crtab_9;
 }
 
-/* cr10  cheminmo.F:1862-1862  nets:5 */
+/* cr10  cheminmo.F:1864-1864  nets:5 */
 double rate_cr10(double temp, const ChemGlobals& g) {
     double v_crtab_10 = GUARD_NAN;
-    v_crtab_10 = (3.7e-2 * g.cosmic_ray_ion_rate);
+    v_crtab_10 = 3.7e-2;
     return v_crtab_10;
 }
 
-/* cr11  cheminmo.F:1863-1863  nets:5 */
+/* cr11  cheminmo.F:1865-1865  nets:5 */
 double rate_cr11(double temp, const ChemGlobals& g) {
     double v_crtab_11 = GUARD_NAN;
-    v_crtab_11 = (2.2e-1 * g.cosmic_ray_ion_rate);
+    v_crtab_11 = 2.2e-1;
     return v_crtab_11;
 }
 
-/* cr12  cheminmo.F:1864-1864  nets:- */
+/* cr12  cheminmo.F:1866-1866  nets:- */
 double rate_cr12(double temp, const ChemGlobals& g) {
     double v_crtab_12 = GUARD_NAN;
-    v_crtab_12 = (6.5e-4 * g.cosmic_ray_ion_rate);
+    v_crtab_12 = 6.5e-4;
     return v_crtab_12;
 }
 
-/* crphot1  cheminmo.F:1893-1893  nets:- */
+/* crphot1  cheminmo.F:1895-1895  nets:- */
 double rate_crphot1(double temp, const ChemGlobals& g) {
     double v_crphot_1 = GUARD_NAN;
-    v_crphot_1 = (2.8e3 * g.cosmic_ray_ion_rate);
+    v_crphot_1 = 2.8e3;
     return v_crphot_1;
 }
 
-/* crphot2  cheminmo.F:1895-1895  nets:- */
+/* crphot2  cheminmo.F:1897-1897  nets:- */
 double rate_crphot2(double temp, const ChemGlobals& g) {
     double v_crphot_2 = GUARD_NAN;
-    v_crphot_2 = (4e3 * g.cosmic_ray_ion_rate);
+    v_crphot_2 = 4e3;
     return v_crphot_2;
 }
 
-/* crphot3  cheminmo.F:1897-1897  nets:- */
+/* crphot3  cheminmo.F:1899-1899  nets:- */
 double rate_crphot3(double temp, const ChemGlobals& g) {
     double v_crphot_3 = GUARD_NAN;
-    v_crphot_3 = (9.6e2 * g.cosmic_ray_ion_rate);
+    v_crphot_3 = 9.6e2;
     return v_crphot_3;
 }
 
-/* crphot4  cheminmo.F:1899-1899  nets:- */
+/* crphot4  cheminmo.F:1901-1901  nets:- */
 double rate_crphot4(double temp, const ChemGlobals& g) {
     double v_crphot_4 = GUARD_NAN;
-    v_crphot_4 = (2.7e3 * g.cosmic_ray_ion_rate);
+    v_crphot_4 = 2.7e3;
     return v_crphot_4;
 }
 
-/* crphot5  cheminmo.F:1901-1901  nets:- */
+/* crphot5  cheminmo.F:1903-1903  nets:- */
 double rate_crphot5(double temp, const ChemGlobals& g) {
     double v_crphot_5 = GUARD_NAN;
-    v_crphot_5 = (2.7e3 * g.cosmic_ray_ion_rate);
+    v_crphot_5 = 2.7e3;
     return v_crphot_5;
 }
 
-/* crphot6  cheminmo.F:1903-1903  nets:- */
+/* crphot6  cheminmo.F:1905-1905  nets:- */
 double rate_crphot6(double temp, const ChemGlobals& g) {
     double v_crphot_6 = GUARD_NAN;
-    v_crphot_6 = (1.3e3 * g.cosmic_ray_ion_rate);
+    v_crphot_6 = 1.3e3;
     return v_crphot_6;
 }
 
-/* crphot7  cheminmo.F:1905-1905  nets:- */
+/* crphot7  cheminmo.F:1907-1907  nets:- */
 double rate_crphot7(double temp, const ChemGlobals& g) {
     double v_crphot_7 = GUARD_NAN;
-    v_crphot_7 = (2.8e3 * g.cosmic_ray_ion_rate);
+    v_crphot_7 = 2.8e3;
     return v_crphot_7;
 }
 
-/* crphot8  cheminmo.F:1907-1907  nets:- */
+/* crphot8  cheminmo.F:1909-1909  nets:- */
 double rate_crphot8(double temp, const ChemGlobals& g) {
     double v_crphot_8 = GUARD_NAN;
-    v_crphot_8 = (5.3e3 * g.cosmic_ray_ion_rate);
+    v_crphot_8 = 5.3e3;
     return v_crphot_8;
 }
 
-/* crphot9  cheminmo.F:1909-1909  nets:- */
+/* crphot9  cheminmo.F:1911-1911  nets:- */
 double rate_crphot9(double temp, const ChemGlobals& g) {
     double v_crphot_9 = GUARD_NAN;
-    v_crphot_9 = (4.1e3 * g.cosmic_ray_ion_rate);
+    v_crphot_9 = 4.1e3;
     return v_crphot_9;
 }
 
-/* crphot10  cheminmo.F:1911-1911  nets:- */
+/* crphot10  cheminmo.F:1913-1913  nets:- */
 double rate_crphot10(double temp, const ChemGlobals& g) {
     double v_crphot_10 = GUARD_NAN;
-    v_crphot_10 = (6.4e2 * g.cosmic_ray_ion_rate);
+    v_crphot_10 = 6.4e2;
     return v_crphot_10;
 }
 
-/* crphot11  cheminmo.F:1913-1913  nets:- */
+/* crphot11  cheminmo.F:1915-1915  nets:- */
 double rate_crphot11(double temp, const ChemGlobals& g) {
     double v_crphot_11 = GUARD_NAN;
-    v_crphot_11 = (0.21e0 * g.cosmic_ray_ion_rate);
+    v_crphot_11 = 0.21e0;
     return v_crphot_11;
 }
 
-/* crphot12  cheminmo.F:1918-1918  nets:- */
+/* crphot12  cheminmo.F:1920-1920  nets:- */
 double rate_crphot12(double temp, const ChemGlobals& g) {
     double v_crphot_12 = GUARD_NAN;
-    v_crphot_12 = (5.2e3 * g.cosmic_ray_ion_rate);
+    v_crphot_12 = 5.2e3;
     return v_crphot_12;
 }
 

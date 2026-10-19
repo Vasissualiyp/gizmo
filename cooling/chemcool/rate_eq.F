@@ -323,14 +323,14 @@ c
       ykdh     = ch1 * h2var1
       ykdh2    = ch2 * h2var2
 c
-      cr1  = crtab(1)  ! HI
-      cr1a = crtab(1)  ! DI, assumed same as HI
-      cr2  = crtab(2)  ! H2
-      cr3  = crtab(3)  ! CI
-      cr4  = crtab(4)  ! OI
-      cr5  = crtab(5)  ! SiI
-      cr6  = crtab(6)  ! HeI
-      cr7  = crtab(7)  ! Si+
+      cr1  = crtab(1) * cosmic_ray_ion_rate  ! HI
+      cr1a = crtab(1) * cosmic_ray_ion_rate  ! DI, assumed same as HI
+      cr2  = crtab(2) * cosmic_ray_ion_rate  ! H2
+      cr3  = crtab(3) * cosmic_ray_ion_rate  ! CI
+      cr4  = crtab(4) * cosmic_ray_ion_rate  ! OI
+      cr5  = crtab(5) * cosmic_ray_ion_rate  ! SiI
+      cr6  = crtab(6) * cosmic_ray_ion_rate  ! HeI
+      cr7  = crtab(7) * cosmic_ray_ion_rate  ! Si+
 c
       if (dust_to_gas_ratio .gt. 0d0) then
 c
