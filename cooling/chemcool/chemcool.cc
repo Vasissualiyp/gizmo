@@ -86,7 +86,21 @@ void chemcool_init(void)
  * Mode = 2 ==> no update, return temperature
  * Mode = 3 ==> no update, return final energy
  */
+static double chemcool_step_core(int target, double dt, double dl, int mode, double u_code, int write_energy);
+
+/* legacy entry: starts from CellP.InternalEnergy and writes the result back */
 double do_chemcool_step(int target, double dt, double dl, int mode)
+{
+    return chemcool_step_core(target, dt, dl, mode, CellP[target].InternalEnergy, 1);
+}
+
+/* DoCooling backend: starts from u_old, returns the new specific energy; the caller owns InternalEnergy */
+double chemcool_cool_cell(int target, double u_old, double dt)
+{
+    return chemcool_step_core(target, dt, 0, 0, u_old, 0);
+}
+
+static double chemcool_step_core(int target, double dt, double dl, int mode, double u_code, int write_energy)
 {
     /* GATE 0 seam: fill -> commit -> Fortran -> read outputs.
      * All per-cell gathering logic (pre-refactor lines 173-721) was MOVED
@@ -100,6 +114,7 @@ double do_chemcool_step(int target, double dt, double dl, int mode)
     chem_in.dt_code = dt;
     chem_in.dl_code = dl;
     chem_in.mode    = mode;
+    chem_in.u_code  = u_code;
     chem_fill_inputs(target, &chem_in);
 
     /* [orig chemcool.cc:620-622] temperature-only query returns before any
@@ -120,7 +135,7 @@ double do_chemcool_step(int target, double dt, double dl, int mode)
     double abh2 = chem_in.abh2, abhd = chem_in.abhd, abco = chem_in.abco, abe = chem_in.abe;
     double *abundances = chem_in.abundances;  /* working buffer; EVOLVE_ABUNDANCES in/out */
     double column_est  = chem_in.column_est;
-    double ekn;
+    double ekn, u_new = u_code;
 
 
     CALC_PHOTO_WRAPPER(&temp, chem_in.rpar, &abh2, &abhd, &abco);
@@ -382,8 +397,8 @@ double do_chemcool_step(int target, double dt, double dl, int mode)
 #endif
         }
 #endif
-        CellP[target].InternalEnergy = energy / rho;
-        CellP[target].InternalEnergyPred = CellP[target].InternalEnergy;
+        u_new = energy / rho;
+        if(write_energy) {CellP[target].InternalEnergy = u_new; CellP[target].InternalEnergyPred = u_new;}
         CellP[target].Temp = temp;
         CellP[target].DustTemp = chem_out.tdust;
 #if defined(GALSF_RESOLVEDISM_G0_VARIABLE) || defined(RADTRANSFER)
@@ -481,7 +496,7 @@ double do_chemcool_step(int target, double dt, double dl, int mode)
         }
 #endif /* RADTRANSFER */
 
-        return CellP[target].InternalEnergy;
+        return u_new;
     } else if(mode == 1) {
         return cooling_rate;
     } else if(mode == 2) {

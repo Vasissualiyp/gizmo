@@ -29,7 +29,7 @@
 
 /* =========================================================================
  * chem_fill_inputs: gather the complete per-cell chemistry input state.
- * Caller must have seeded in->dt_code, in->dl_code, in->mode.
+ * Caller must have seeded in->dt_code, in->dl_code, in->mode, in->u_code.
  * No COMMON block is written here.  The only Fortran call is CALC_TEMP,
  * a pure table lookup (init-time temp/gamma tables + explicit args only).
  * ========================================================================= */
@@ -496,7 +496,7 @@ void chem_fill_inputs(int target, struct ChemInputs *in)
 
     /* [orig chemcool.cc:577-581]
        'energy' is internal energy density, NOT specific internal energy [in code units] */
-    energy = rho * CellP[target].InternalEnergy;
+    energy = rho * in->u_code;
     if(energy < rho * All.MinEgySpec) {
         energy = rho * All.MinEgySpec;
     }

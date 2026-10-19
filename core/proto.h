@@ -819,6 +819,7 @@ void cooling_parent_routine(void);
 #ifdef CHEMCOOL
 void chemcool_init(void);
 double do_chemcool_step(int target, double dt, double dl, int mode);
+double chemcool_cool_cell(int target, double u_old, double dt);
 extern double CumulCoolingEnergyLoss; /* cumulative cooling energy loss [code energy units] */
 #endif
 #ifdef GALSF_RESOLVEDISM_FB

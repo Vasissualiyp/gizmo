@@ -11,7 +11,7 @@
  * what is read back from the COMMON blocks after the Fortran solve.
  *
  * Contract (per cell, per call):
- *   1. caller seeds in->dt_code, in->dl_code, in->mode;
+ *   1. caller seeds in->dt_code, in->dl_code, in->mode, in->u_code;
  *   2. chem_fill_inputs(target, in)  -- ALL per-cell gathering logic (moved
  *      VERBATIM from do_chemcool_step; provenance comments in
  *      chem_interface.cc reference the pre-refactor chemcool.cc line
@@ -135,6 +135,7 @@ struct ChemInputs {
     double dt_code;            /* dt   [code units], seeded by caller        */
     double dl_code;            /* dl   [code units], seeded by caller        */
     int    mode;               /* do_chemcool_step mode, seeded by caller    */
+    double u_code;             /* specific internal energy [code], seeded by caller */
 
     /* --- hydro/thermo state (orig chemcool.cc:173-181,577-602,604-621) -- */
     double redshift;           /* -> COOLR.redshift                          */

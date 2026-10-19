@@ -288,8 +288,8 @@ void do_the_cooling_for_particle(int i, struct particle_data *pp, struct gas_cel
 
     if((dtime>0)&&(cell[i].Mass>0)&&(pp[i].Type==0))  // upon start-up, need to protect against dt==0 //
     {
-#ifdef CHEMCOOL
-        /* CHEMCOOL handles its own cooling, chemistry, and internal energy update internally */
+#if defined(CHEMCOOL) && defined(CHEMCOOL_LEGACY_COOLING)
+        /* legacy: CHEMCOOL handles its own cooling, chemistry, and internal energy update, bypassing the steps below */
 #if defined(RADTRANSFER)
         {int k_rt; for(k_rt=0;k_rt<N_RT_FREQ_BINS;k_rt++) {CellP[i].Lambda_RadiativeCooling_toRHDBins[k_rt]=0;}} /* prevent stale values from affecting RT solver */
 #endif
@@ -568,6 +568,13 @@ double DoCooling(double u_old, double rho, double dt, double ne_guess, double *n
 {
     double u, du; u=0; du=0;
     if(rho <= 0 || dt == 0) {return DMAX(u,All.MinEgySpec);}
+
+#if defined(CHEMCOOL) && !defined(CHEMCOOL_LEGACY_COOLING)
+    if(cell != CellP) {endrun(8858);} /* CHEMCOOL reads the global P/CellP by index, not the compact copies */
+    u = chemcool_cool_cell(target, u_old, dt);
+    *ne_eval = cell[target].Ne;
+    return DMAX(u, All.MinEgySpec);
+#endif
 
 #ifdef COOL_GRACKLE
 #ifndef COOLING_OPERATOR_SPLIT
