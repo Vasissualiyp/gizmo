@@ -13,6 +13,9 @@
 
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
+#ifdef CHEMCOOL
+#include "../cooling/chemcool/chemcool_network.h"
+#endif
 #include "../mesh/kernel.h"
 
 
@@ -1244,12 +1247,7 @@ int merge_particles_ij(int i, int j)
 #if defined(CHEMCOOL)
     {/* TracAbund is n_X/n_H (abundance ratio).  Convert to mass fractions
         using each cell's pre-merge X_H, mass-weight, then back to ratios using merged X_H. */
-#if (CHEMISTRYNETWORK == 17)
-     static const double trac_molwt[] = {2.0, 1.0, 28.0, 4.0, 4.0, 2.0, 3.0};
-#else
-     static const double trac_molwt[] = {2.0, 1.0, 28.0};
-#endif
-     static_assert(sizeof(trac_molwt)/sizeof(trac_molwt[0]) == TRAC_NUM, "TracAbund molecular weights are tabulated for CHEMISTRYNETWORK 5 and 17 only");
+     const double *trac_molwt = chemcool_trac_molwt;
      double X_H_i = X_H_i_premerge, X_H_j = X_H_j_premerge;
      double X_H_new = wt_j * X_H_j + wt_i * X_H_i;
      for(k=0;k<TRAC_NUM;k++) {

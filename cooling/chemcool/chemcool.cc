@@ -13,6 +13,7 @@
  * per-cell writer of COOLR/COOLI/CHEM_COMP/PROJECT; chemcool_init() below
  * retains the one-time init-time defaults. */
 #include "chem_interface.h"
+#include "chemcool_network.h"
 
 #ifdef CHEMCOOL
 
@@ -149,18 +150,7 @@ static double chemcool_step_core(int target, double dt, double dl, int mode, dou
     double energy_HII = temp_HII * 1.5 * BOLTZMANN_CGS * yn * (1.0 + ABHE + abe_HII);
     if(CellP[target].Ionized == 1) {
         skip_evolve_abundances = 1;
-        abundances[IH2] = 0.0;
-        abundances[IHP] = 0.9998;
-#if CHEMISTRYNETWORK != 4
-        abundances[ICO] = 0.0;
-#endif
-#if CHEMISTRYNETWORK == 1 || CHEMISTRYNETWORK == 17
-        /* In HII regions: He singly ionized, D fully ionized, HD destroyed */
-        abundances[IHEP]  = ABHE;        /* He -> He+ (13.6-54.4 eV photons) */
-        abundances[IHEPP] = 0.0;         /* He++ negligible for most O stars */
-        abundances[IDP]   = chem_in.abundD; /* D -> D+ (same IP as H) */
-        abundances[IHD]   = 0.0;         /* HD dissociated */
-#endif
+        chemcool_set_ionized(abundances, &chem_in);
         if(energy < energy_HII) energy = energy_HII;
     }
 #ifdef GALSF_RESOLVEDISM_ISOLATED_FB_TEST
@@ -276,34 +266,7 @@ static double chemcool_step_core(int target, double dt, double dl, int mode, dou
          * rank stop()s -> silent MPI hang).  Clamp here so the solver always
          * receives a consistent composition.  Amounts clamped are tiny
          * (trace species near their floors) so conservation is unaffected. */
-#if CHEMISTRYNETWORK != 4
-        {
-            double co_pool = (chem_in.abundc < chem_in.abundo) ? chem_in.abundc : chem_in.abundo;
-            if(co_pool < 0) co_pool = 0;
-            if(abundances[ICO] > co_pool) abundances[ICO] = co_pool;  /* CO <= min(C_gas, O_gas) */
-        }
-#endif
-#if CHEMISTRYNETWORK == 1 || CHEMISTRYNETWORK == 17
-        {
-            /* He+ + He++ <= abhe (He pool); D+ + HD <= abundD (D pool).
-             * Rescale the pair down proportionally if the sum overshoots
-             * (e.g. PI HII reset loads He+ exactly at abhe, then DVODE
-             * tolerance drift tips the sum ~0.1% over -> check_abundances veto). */
-            double abhe_pool = chem_in.abhe;
-            double he_sum = abundances[IHEP] + abundances[IHEPP];
-            if(he_sum > abhe_pool && he_sum > 0) {
-                double f = abhe_pool / he_sum;
-                abundances[IHEP]  *= f;
-                abundances[IHEPP] *= f;
-            }
-            double d_sum = abundances[IDP] + abundances[IHD];
-            if(d_sum > chem_in.abundD && d_sum > 0) {
-                double f = chem_in.abundD / d_sum;
-                abundances[IDP] *= f;
-                abundances[IHD] *= f;
-            }
-        }
-#endif
+        chemcool_clamp_pools(abundances, &chem_in);
 #ifdef CHEMCOOL_CXX
         /* C++/CVODE backend (cooling/chemcool/cxx/).  Same seam, same inputs:
          * everything it needs is already in the COMMON blocks courtesy of
@@ -388,23 +351,12 @@ static double chemcool_step_core(int target, double dt, double dl, int mode, dou
             double abHI_c = 1.0 - 2.0*abh2_c - abhp_c; if(abHI_c < 0) abHI_c = 0;
             CellP[target].HI  = abHI_c;                              /* neutral H fraction n_HI/n_H */
             CellP[target].HII = abhp_c;                             /* ionized H fraction n_HII/n_H */
-#if CHEMISTRYNETWORK == 1 || CHEMISTRYNETWORK == 17
-            /* nets with explicit He states: electrons include He+ and 2x He++ */
-            CellP[target].Ne  = abhp_c + abundances[IHEP] + 2.0*abundances[IHEPP]
-                                + chem_in.abundc + chem_in.abundsi;
-#else
-            CellP[target].Ne  = abhp_c + chem_in.abundc + chem_in.abundsi; /* electrons: H+ plus fixed metal pools */
-#endif
+            CellP[target].Ne  = chemcool_electrons(abundances, &chem_in);
         }
 #endif
         u_new = energy / rho;
         if(write_energy) {CellP[target].InternalEnergy = u_new; CellP[target].InternalEnergyPred = u_new;}
-        else { /* DoCooling backend: electrons per H from the chemistry (C, Si singly ionized), returned as Ne */
-            CellP[target].Ne = abundances[IHP] + chem_in.abundc + chem_in.abundsi;
-#if CHEMISTRYNETWORK == 1 || CHEMISTRYNETWORK == 17
-            CellP[target].Ne += abundances[IHEP] + 2.0*abundances[IHEPP];
-#endif
-        }
+        else {CellP[target].Ne = chemcool_electrons(abundances, &chem_in);} /* DoCooling backend: the chemistry's electrons per H */
         CellP[target].Temp = temp;
         CellP[target].DustTemp = chem_out.tdust;
 #if defined(GALSF_RESOLVEDISM_G0_VARIABLE) || defined(RADTRANSFER)

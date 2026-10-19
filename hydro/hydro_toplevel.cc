@@ -7,6 +7,9 @@
 #include <gsl/gsl_eigen.h>
 #include "../declarations/allvars.h"
 #include "../core/proto.h"
+#ifdef CHEMCOOL
+#include "../cooling/chemcool/chemcool_network.h"
+#endif
 #include "../mesh/kernel.h"
 
 /*! \file hydro_toplevel.c
@@ -504,12 +507,7 @@ static inline void particle2in_hydra(struct INPUT_STRUCT_NAME *in, int i, int lo
         diffusion solver: mass_frac_k = (n_k/n_H) * A_k * X_H.
         Network 5:  {H2(2), H+(1), CO(28)}
         Network 17: {H2(2), H+(1), CO(28), He+(4), He++(4), D+(2), HD(3)} */
-#if (CHEMISTRYNETWORK == 17)
-     static const double trac_molwt[] = {2.0, 1.0, 28.0, 4.0, 4.0, 2.0, 3.0};
-#else
-     static const double trac_molwt[] = {2.0, 1.0, 28.0};
-#endif
-     static_assert(sizeof(trac_molwt)/sizeof(trac_molwt[0]) == TRAC_NUM, "TracAbund molecular weights are tabulated for CHEMISTRYNETWORK 5 and 17 only");
+     const double *trac_molwt = chemcool_trac_molwt;
      double X_H_pack = DMAX(particle_hydrogen_massfrac(i), 1e-10);
      for(k=0;k<TRAC_NUM;k++) {
          double mf = CellP[i].TracAbund[k] * trac_molwt[k] * X_H_pack;
@@ -957,8 +955,7 @@ void hydro_final_operations_and_cleanup(void)
 #endif
 #if defined(CHEMCOOL) && defined(TURB_DIFF_METALS) && !defined(GALSF_RESOLVEDISM_METALS_INDIVIDUAL)
             {/* TracAbund-only path (no individual elements) — should not happen in practice */
-             static const double trac_molwt[] = {2.0, 1.0, 28.0};
-             static_assert(sizeof(trac_molwt)/sizeof(trac_molwt[0]) == TRAC_NUM, "TracAbund molecular weights are tabulated for CHEMISTRYNETWORK 5 and 17 only");
+             const double *trac_molwt = chemcool_trac_molwt;
              double X_H = DMAX(particle_hydrogen_massfrac(i), 1e-10);
              for(k=0;k<TRAC_NUM;k++) {
                  double da = CellP[i].Dyield[k_offset+k] / (P[i].Mass * trac_molwt[k] * X_H);

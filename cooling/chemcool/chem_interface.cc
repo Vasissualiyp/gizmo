@@ -143,6 +143,8 @@ void chem_fill_inputs(int target, struct ChemInputs *in)
                 in->Zmass[11] *= s;   /* scale metals only; leave He(0) and H(6) */
 #endif
             }
+            /* NL99 "M": depleted low-IP metals, CHEMCOOL_ABUNDM_SOLAR per H at solar Z, scaled with the (capped) cell Z */
+            in->abundM = CHEMCOOL_ABUNDM_SOLAR * DMIN(Zcell, Zmax_chem) / Z_solar_chem;
         }
     }
 #else
@@ -150,6 +152,7 @@ void chem_fill_inputs(int target, struct ChemInputs *in)
     in->abundc  = All.InitialMetallicity * 1.4e-4;
     in->abundo  = All.InitialMetallicity * 3.2e-4;
     in->abundsi = All.InitialMetallicity * 1.5e-5;
+    in->abundM  = All.InitialMetallicity * CHEMCOOL_ABUNDM_SOLAR;
 #endif
     /* [orig chemcool.cc:267-270] */
     in->abundD  = All.DeutAbund;
@@ -706,6 +709,7 @@ void chem_commit_to_fortran(const struct ChemInputs *in)
 #endif
 #endif
     COOLR.abundD = in->abundD;                           /* [orig chemcool.cc:267] */
+    COOLR.abundM = in->abundM;
 
     COOLR.G0    = in->G0;                                /* [orig chemcool.cc:268,344,367,420] */
     COOLR.G0_LW = in->G0_LW;                             /* [orig chemcool.cc:269,346,368,422] */

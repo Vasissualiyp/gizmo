@@ -39,6 +39,10 @@
 #ifndef CHEM_INTERFACE_H
 #define CHEM_INTERFACE_H
 
+#ifndef CHEMCOOL_ABUNDM_SOLAR
+#define CHEMCOOL_ABUNDM_SOLAR 1.0e-7  /* NL99 "M" per H at solar Z (Glover & Clark 2012; SGChem MAbund default) */
+#endif
+
 #include "../../declarations/allvars.h"
 #include "f2c.h"
 #include "chemcool_consts.h"
@@ -164,6 +168,7 @@ struct ChemInputs {
     double abundo;             /* -> COOLR.abundo                            */
     double abundsi;            /* -> COOLR.abundsi                           */
     double abundN;             /* -> COOLR.abundN [commit: GALSF_RESOLVEDISM_METALS_INDIVIDUAL] */
+    double abundM;             /* -> COOLR.abundM: NL99 low-IP metal "M" (network 15) */
     double abundD;             /* -> COOLR.abundD                            */
     double Zmass[12];          /* -> COOLR.Zmass  [commit: WSS_CIE_COOL && METALS_INDIVIDUAL]
                                   gadget_tnt_new ordering:
