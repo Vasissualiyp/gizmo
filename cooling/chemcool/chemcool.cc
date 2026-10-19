@@ -399,6 +399,12 @@ static double chemcool_step_core(int target, double dt, double dl, int mode, dou
 #endif
         u_new = energy / rho;
         if(write_energy) {CellP[target].InternalEnergy = u_new; CellP[target].InternalEnergyPred = u_new;}
+        else { /* DoCooling backend: electrons per H from the chemistry (C, Si singly ionized), returned as Ne */
+            CellP[target].Ne = abundances[IHP] + chem_in.abundc + chem_in.abundsi;
+#if CHEMISTRYNETWORK == 1 || CHEMISTRYNETWORK == 17
+            CellP[target].Ne += abundances[IHEP] + 2.0*abundances[IHEPP];
+#endif
+        }
         CellP[target].Temp = temp;
         CellP[target].DustTemp = chem_out.tdust;
 #if defined(GALSF_RESOLVEDISM_G0_VARIABLE) || defined(RADTRANSFER)

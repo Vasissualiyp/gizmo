@@ -571,6 +571,16 @@ double DoCooling(double u_old, double rho, double dt, double ne_guess, double *n
 
 #if defined(CHEMCOOL) && !defined(CHEMCOOL_LEGACY_COOLING)
     if(cell != CellP) {endrun(8858);} /* CHEMCOOL reads the global P/CellP by index, not the compact copies */
+#ifndef COOLING_OPERATOR_SPLIT
+    if(cell[target].CoolingIsOperatorSplitThisTimestep==0)
+    { /* unsplit: hydro heating enters as for grackle, half before the solve and a corrected half after */
+        du = dt * cell[target].DtInternalEnergy / ( (UNIT_SPECEGY_IN_CGS/UNIT_TIME_IN_CGS) * (PROTONMASS_CGS/HYDROGEN_MASSFRAC));
+        u_old += 0.5*du;
+        u = chemcool_cool_cell(target, u_old, dt);
+        double r=u/u_old; if(r>1) {r=1/r;} if(fabs(r-1)>1.e-4) {r=(r-1)/log(r);} r=DMAX(0,DMIN(r,1));
+        du *= 0.5*r; if(du<-0.5*u) {du=-0.5*u;} u+=du;
+    } else
+#endif
     u = chemcool_cool_cell(target, u_old, dt);
     *ne_eval = cell[target].Ne;
     return DMAX(u, All.MinEgySpec);
