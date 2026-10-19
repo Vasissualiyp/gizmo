@@ -135,10 +135,10 @@ int chem_rhs_net5(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     double rates_chem[6];
     rates_chem[0] = 4.48 * CHEM_EV * (ykdh  * abHI * abh2 +
                                       ykdh2 * abh2 * abh2 +
-                                      ch25  * abe  * abh2) * yn * yn;
+                                      ch25  * abe  * abh2) * (yn * yn);
     rates_chem[1] = -4e-1 * CHEM_EV * abh2 * yn * ykdis;
 
-    double cdex = (1.4 * std::exp(-1.81e4 / (temp + 1200)) * abh2
+    double cdex = ((double)1.4f * std::exp(-1.81e4 / (temp + 1200)) * abh2
                  + 1.0 * std::exp(-1e3 / temp) * abHI) * 1e-12 * std::sqrt(temp) * yn;
     double rdex = 2e-7;
     double fpheat = cdex / (cdex + rdex);
@@ -148,9 +148,9 @@ int chem_rhs_net5(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     double f_tot = c.h2_form_kin + f_ex;
     rates_chem[3] = -4.48 * CHEM_EV * f_tot * RH2;
 
-    rates_chem[4] = 13.6 * CHEM_EV * ch11 * abe * abHI * yn * yn;
+    rates_chem[4] = 13.6 * CHEM_EV * ch11 * abe * abHI * (yn * yn);
 
-    rates_chem[5] = CHEM_KBOLTZ * temp * abhp * (ch13 * abe + h_gr) * yn * yn;
+    rates_chem[5] = CHEM_KBOLTZ * temp * abhp * (ch13 * abe + h_gr) * (yn * yn);
     if (temp < 100.0) rates_chem[5] = 0.0;            // .F:412-414
 
     double ylam_chem = rates_chem[0] + rates_chem[1] + rates_chem[2]

@@ -435,7 +435,7 @@ int chem_rhs_net17(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     rc[1] = 1.83 * CHEM_EV * ch24 * abh2 * abhp * ynsq;
     rc[2] = -4e-1 * CHEM_EV * abh2 * yn * ykdis;
 
-    double cdex = (1.4 * std::exp(-1.81e4 / (temp + 1200)) * abh2
+    double cdex = ((double)1.4f * std::exp(-1.81e4 / (temp + 1200)) * abh2
                  + 1.0 * std::exp(-1e3 / temp) * abHI) * 1e-12 * std::sqrt(temp) * yn;
     double rdex = 2e-7;
     double fpheat = cdex / (cdex + rdex);

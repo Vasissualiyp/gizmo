@@ -62,7 +62,7 @@
 #define CHEM_KBOLTZ     1.3806599982553653e-16
 #define CHEM_PROTONMASS 1.6726000836652178e-24
 #define CHEM_GRAVITY    6.6719998415010195e-08
-#define CHEM_PI        3.14159265358979323846
+#define CHEM_PI        ((double)3.14159265358979323846f)  /* Fortran PI is a default-REAL literal */
 #define CHEM_COOL_EPS  1e-6
 #define CHEM_EPS_MAX   1e-4     /* validate_input reject threshold */
 
