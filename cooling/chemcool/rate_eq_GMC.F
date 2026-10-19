@@ -1,4 +1,4 @@
-#include "gadgetconfig.h"
+#include "../../GIZMO_config.h"
 #if CHEMISTRYNETWORK == 7 || CHEMISTRYNETWORK == 11
 c=======================================================================
 c

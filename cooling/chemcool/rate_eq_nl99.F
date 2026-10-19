@@ -1,4 +1,4 @@
-#include "gadgetconfig.h"
+#include "../../GIZMO_config.h"
 
 #if CHEMISTRYNETWORK == 15
 #ifndef KOYAMA
@@ -64,6 +64,7 @@ c
      $     dtch147
 c
       REAL ch106a
+      REAL rho_lj, cs2_lj, L_jeans, energy_dummy, fh3p_den
 c
       REAL cdex, rdex, fpheat
 c
@@ -235,9 +236,14 @@ c
 c H2 formation rate on dust -- we calculate this here, as this allows us to
 c vary tdust without needing to call cheminmo again
 c                  
-      if (yn .gt. 1d9 / dust_to_gas_ratio**1.5d0) then
-        tdust = temp
-        call calc_dust_temp(yn, chi_isrf, temp, abHI, RH2, Rdust, 1)
+c     (no dust, e.g. hot gas: skip the coupling test, which divides by it)
+      if (dust_to_gas_ratio .gt. 0d0) then
+        if (yn .gt. 1d9 / dust_to_gas_ratio**1.5d0) then
+          tdust = temp
+          call calc_dust_temp(yn, chi_isrf, temp, abHI, RH2, Rdust, 1)
+        else
+          call calc_dust_temp(yn, chi_isrf, temp, abHI, RH2, Rdust, 0)
+        endif
       else
         call calc_dust_temp(yn, chi_isrf, temp, abHI, RH2, Rdust, 0)
       endif
@@ -252,7 +258,13 @@ c HeI:
 c
 c H3+ equilibrium abundance
 c
-      fh3p = ch105 * abh2 / (ch105 * abh2 + cst(1) * abHI)
+      fh3p_den = ch105 * abh2 + cst(1) * abHI
+      if (fh3p_den .gt. 0d0) then
+        fh3p = ch105 * abh2 / fh3p_den
+      else
+c       fully ionized (no H2, no HI): no H3+
+        fh3p = 0d0
+      endif
 c
       num   = fh3p * ((cr2 / yn) * abh2 + cst(75) * abhep * abh2)
       denom = cst(84) * abcI + cst(86) * aboI + cst(59) * abco 
@@ -413,8 +425,14 @@ c
       abundances(11) = abhp
       abundances(12) = abHI
 c
-      call cool_func(temp, yn, dl, divv, G_dust, abundances, ylam,
-     $               rates, 0)
+c Local Jeans length and energy for cool_func, as in rate_eq_simple.F
+      rho_lj  = (1d0 + 4d0 * abhe) * PROTONMASS * yn
+      cs2_lj  = gamma * (gamma - 1d0) * energy / rho_lj
+      L_jeans = dsqrt(PI * cs2_lj /
+     $          (GRAVITY * rho_lj))
+      energy_dummy = energy
+      call cool_func(temp, yn, L_jeans, divv, G_dust, abundances, ylam,
+     $               rates, 0, energy_dummy)
 c
       ydot(itmp) = -(ylam + ylam_chem)
 

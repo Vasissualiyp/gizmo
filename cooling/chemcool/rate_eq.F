@@ -1,4 +1,4 @@
-#include "gadgetconfig.h"
+#include "../../GIZMO_config.h"
 c Low metallicity chemistry network as described in Glover & Jappsen (2007)
 #if CHEMISTRYNETWORK == 2
 c=======================================================================

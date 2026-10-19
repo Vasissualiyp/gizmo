@@ -41,6 +41,19 @@ c
      $             DTCOOL_SCALE_FACTOR/
       DATA used_for_stepsize_control /1, 1, 1, 1, 1, 1, 1, 1/
 #endif
+c Networks 3 and 15: Glover's original step-size control (gadget_tnt_new, SGChem)
+#if CHEMISTRYNETWORK == 3
+      DATA safety /1d-1, 1d-1, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0,
+     $             0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0, 0d0,
+     $             0d0, DTCOOL_SCALE_FACTOR/
+      DATA used_for_stepsize_control /1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
+     $                                0, 0, 0, 0, 0, 0, 0, 0, 0, 1/
+#endif
+#if CHEMISTRYNETWORK == 15
+      DATA safety /1d-1, 0d0, 1d-1, 0d0, 0d0, 1d-1, 0d0, 0d0,
+     $             0d0, DTCOOL_SCALE_FACTOR/
+      DATA used_for_stepsize_control /1, 0, 1, 0, 0, 1, 0, 0, 0, 1/
+#endif
 c
       integer I, J
 c
@@ -179,6 +192,35 @@ c
       ctrl_floor(ihep)  = max(atol(ihep),  eps_ctrl * abhe)
       ctrl_floor(ihepp) = max(atol(ihepp), eps_ctrl * abhe)
 #endif
+#if CHEMISTRYNETWORK == 15
+      co_pool = min(abundc, abundo)
+      ctrl_floor(ic)    = max(atol(ic),    eps_ctrl * abundc)
+      ctrl_floor(ichx)  = max(atol(ichx),  eps_ctrl * abundc)
+      ctrl_floor(iohx)  = max(atol(iohx),  eps_ctrl * abundo)
+      ctrl_floor(ico)   = max(atol(ico),   eps_ctrl * co_pool)
+      ctrl_floor(ihcop) = max(atol(ihcop), eps_ctrl * co_pool)
+      ctrl_floor(ihep)  = max(atol(ihep),  eps_ctrl * abhe)
+      ctrl_floor(imp)   = max(atol(imp),   eps_ctrl * abundM)
+#endif
+#if CHEMISTRYNETWORK == 3
+      co_pool = min(abundc, abundo)
+      do J = 1, nspec
+        if (J .eq. ic .or. J .eq. ic2 .or. J .eq. ich .or.
+     $      J .eq. ich2 .or. J .eq. ich3p)
+     $    ctrl_floor(J) = max(atol(J), eps_ctrl * abundc)
+        if (J .eq. io .or. J .eq. ioh .or. J .eq. ih2o .or.
+     $      J .eq. io2)
+     $    ctrl_floor(J) = max(atol(J), eps_ctrl * abundo)
+        if (J .eq. ico .or. J .eq. ihcop)
+     $    ctrl_floor(J) = max(atol(J), eps_ctrl * co_pool)
+        if (J .eq. isi .or. J .eq. isipp)
+     $    ctrl_floor(J) = max(atol(J), eps_ctrl * abundsi)
+        if (J .eq. idp .or. J .eq. ihd)
+     $    ctrl_floor(J) = max(atol(J), eps_ctrl * abundD)
+        if (J .eq. ihep .or. J .eq. ihepp)
+     $    ctrl_floor(J) = max(atol(J), eps_ctrl * abhe)
+      enddo
+#endif
 c
 c
 c Hot-gas equilibrium-cooling bypass (Uli 2026-07-04, both networks):
@@ -222,6 +264,33 @@ c bubble interiors carrying x_HI=1 in TracAbund (wrong snapshot ionization
 c and shielding columns).  CIE above 5e5 K: H+ = 1, He = He++, D = D+.
         y(ihp) = 1d0
 #if CHEMISTRYNETWORK == 1 || CHEMISTRYNETWORK == 17
+        y(ihep)  = 0d0
+        y(ihepp) = abhe
+        y(idp)   = abundD
+#endif
+#if CHEMISTRYNETWORK == 15
+c       no He++, C++ or M++ in this network: their highest tracked stages
+        y(ichx)  = 0d0
+        y(iohx)  = 0d0
+        y(ihcop) = 0d0
+        y(ic)    = abundc
+        y(ihep)  = abhe
+        y(imp)   = abundM
+#endif
+#if CHEMISTRYNETWORK == 3
+        y(ihd)   = 0d0
+        y(ic2)   = 0d0
+        y(ioh)   = 0d0
+        y(ih2o)  = 0d0
+        y(io2)   = 0d0
+        y(ihcop) = 0d0
+        y(ich)   = 0d0
+        y(ich2)  = 0d0
+        y(ich3p) = 0d0
+        y(ic)    = abundc
+        y(io)    = abundo
+        y(isi)   = 0d0
+        y(isipp) = abundsi
         y(ihep)  = 0d0
         y(ihepp) = abhe
         y(idp)   = abundD
