@@ -7,6 +7,7 @@ With CHEMCOOL_LEGACY_COOLING all three fail: the legacy path bypasses them.
 import os
 import shlex
 import subprocess
+import tempfile
 from os.path import abspath, dirname, join
 
 import pytest
@@ -48,11 +49,10 @@ def test_chemcool_cooling_path():
         build_gizmo_for_test(NAME, post_build=_link_driver)
     finally:
         os.chdir(cwd)
-    run = join(TEST_DIR, "output", "run")
-    os.makedirs(join(run, "output"), exist_ok=True)
-    link = join(run, "gizmo")  # CHEMCOOL and the stellar tables open their data under gizmo/
-    if not os.path.islink(link):
-        os.symlink(REPO, link)
+    # outside the test tree: the gizmo/ link to the repo root would otherwise make pytest collect the whole suite
+    run = tempfile.mkdtemp(prefix=f"{NAME}_")
+    os.makedirs(join(run, "output"))
+    os.symlink(REPO, join(run, "gizmo"))  # CHEMCOOL and the stellar tables open their data under gizmo/
     subprocess.run(["python3", join(TEST_DIR, f"make_{NAME}_ics.py"), join(run, f"{NAME}_ics.hdf5")], check=True)
     r = subprocess.run(["mpirun", "-np", "1", join(TEST_DIR, "output", f"{NAME}_driver"), join(TEST_DIR, f"{NAME}.params")],
                        capture_output=True, text=True, cwd=run)
