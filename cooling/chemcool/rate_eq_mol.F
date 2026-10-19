@@ -45,6 +45,8 @@ c
 c
       REAL phrates(npr)
 c
+      REAL rho_lj, cs2_lj, L_jeans, energy_dummy, RH2, Rdust
+      REAL cdex, rdex, fpheat
       REAL temp, yn, dl, divv, energy, gamma, yntot,
      $     ynsq, yncb, ekn
 c
@@ -682,6 +684,9 @@ c
      $                (1d0 + si2grvar1 * si2grvar2)
         endif
 c
+c Dust temperature and H2 formation on dust, as in rate_eq_simple.F
+        call calc_dust_temp(yn, chi_isrf, temp, abHI, RH2, Rdust, 0)
+c
 c H2 formation rate on dust -- we calculate this here, as this allows us to
 c vary tdust without needing to call cheminmo again
 c                  
@@ -698,6 +703,7 @@ c
         oii_gr  = 0d0
         si2_gr  = 0d0
         ch7     = 0d0
+        RH2     = 0d0
       endif
 c
 c Estimate whether we're optically thick to ionizing radiation;
@@ -1557,8 +1563,16 @@ c We assume 2 eV per UV photon (Burton, Hollenbach & Tielens 1990),
 c and adopt a pumping rate 8.5 times larger than the dissociation rate
 c (Draine & Bertoldi 1996, table 2). 
 c
-      rates_chem(4) = - 2d0 * eV * abH2 * yn * ykdis * 8.5d0 * 
-     $                  (1d0 - h2var0)
+c UV pumping: heats only through collisional de-excitation, as in
+c rate_eq_simple.F (nets 5, 15)
+      cdex = (1.4 * dexp(-1.81d4 / (temp + 1200)) * abH2
+     $     +  1.0 * dexp(-1d3 / temp) * abHI) * 1d-12 * dsqrt(temp) * yn
+      rdex = 2d-7
+      fpheat = cdex / (cdex + rdex)
+#ifdef CONST_NCRIT_UVPUMP
+      fpheat = 1.0 / (1.0 + 1e4 / yn)
+#endif
+      rates_chem(4) = - 2d0 * eV * abH2 * yn * ykdis * 8.5d0 * fpheat
 c
 c H2 formation heating -- we assume a similar depedence on n / n_crit to 
 c the collisional dissociation rates, although ideally one would like to
@@ -1571,8 +1585,8 @@ c H-   -- 3.53eV
 c H2+  -- 1.83eV
 c 3-body -- 4.48eV
 c
-      rates_chem(5) = - 4.48d0 * eV * (ch7 * abHI * ynsq)
-     $                * (1d0 - h2var0)
+c Dust route: the h2_form_kin share of 4.48 eV, as in nets 5, 15, 17
+      rates_chem(5) = - 4.48d0 * eV * h2_form_kin * RH2
 c
       rates_chem(6) = - 3.53d0 * eV * ch22 * abHI * abhm * ynsq
      $                * (1d0 - h2var0)
@@ -1654,6 +1668,9 @@ c
       ylam_chem = 0d0
       do I = 1, nrates_chem
         ylam_chem = ylam_chem + rates_chem(I)
+#ifdef OUTPUT_INDIVIDUAL_COOLRATES
+        lambda_chem(I) = rates_chem(I)
+#endif
       enddo
 c
 c Initialize all abundances to zero, then just set the non-zero ones
@@ -1688,8 +1705,14 @@ c
         return
       endif
 #endif
-      call cool_func(temp, yn, dl, divv, G_dust, abundances, ylam, 
-     $               rates, 0)
+c Local Jeans length and energy for cool_func, as in rate_eq_simple.F
+      rho_lj  = (1d0 + 4d0 * abhe) * PROTONMASS * yn
+      cs2_lj  = gamma * (gamma - 1d0) * energy / rho_lj
+      L_jeans = dsqrt(PI * cs2_lj /
+     $          (GRAVITY * rho_lj))
+      energy_dummy = energy
+      call cool_func(temp, yn, L_jeans, divv, G_dust, abundances, ylam,
+     $               rates, 0, energy_dummy)
 c
 c At high z, correct for effects of CMB. (In the local ISM, T_cmb
 c is too low for this to be important: other sources of heating
@@ -1697,8 +1720,9 @@ c will dominate at v. low T)
 c
       if (redshift .gt. 0d0) then
         CMB_temp  = 2.726d0 * (1d0 + redshift)
-        call cool_func(CMB_temp, yn, dl, divv, G_dust, abundances, 
-     $                 ylam_cmb, rates_cmb, 1)
+        energy_dummy = energy
+        call cool_func(CMB_temp, yn, L_jeans, divv, G_dust, abundances,
+     $                 ylam_cmb, rates_cmb, 1, energy_dummy)
       else
         ylam_cmb = 0d0
       endif
