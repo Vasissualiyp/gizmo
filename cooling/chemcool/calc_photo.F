@@ -331,6 +331,35 @@ c override below pins the key ones -- M1 already applied continuum dust attenuat
 #endif
             df25 = df25 + fac_uv_pix * exp(-2.5d0 * AV)
             df30 = df30 + fac_uv_pix * exp(-3.0d0 * AV)
+c           the other dust factors, per pixel as in the single-AV branch
+#if CHEMISTRYNETWORK != 4 && CHEMISTRYNETWORK != 5 && CHEMISTRYNETWORK != 6
+            df05 = df05 + fac_uv_pix * exp(-0.5d0 * AV)
+            df19 = df19 + fac_uv_pix * exp(-1.9d0 * AV)
+#endif
+#if CHEMISTRYNETWORK == 15
+            df15 = df15 + fac_uv_pix * exp(-1.5d0 * AV)
+            df17 = df17 + fac_uv_pix * exp(-1.5d0 * AV)
+#endif
+#if CHEMISTRYNETWORK == 3 || CHEMISTRYNETWORK == 7 || CHEMISTRYNETWORK == 8 || CHEMISTRYNETWORK == 11
+            df09 = df09 + fac_uv_pix * exp(-0.9d0 * AV)
+            df12 = df12 + fac_uv_pix * exp(-1.2d0 * AV)
+            df17 = df17 + fac_uv_pix * exp(-1.7d0 * AV)
+            df18 = df18 + fac_uv_pix * exp(-1.8d0 * AV)
+            df21 = df21 + fac_uv_pix * exp(-2.1d0 * AV)
+            df23 = df23 + fac_uv_pix * exp(-2.3d0 * AV)
+            df24 = df24 + fac_uv_pix * exp(-2.4d0 * AV)
+            df28 = df28 + fac_uv_pix * exp(-2.8d0 * AV)
+            df31 = df31 + fac_uv_pix * exp(-3.1d0 * AV)
+            df37 = df37 + fac_uv_pix * exp(-3.7d0 * AV)
+            df38 = df38 + fac_uv_pix * exp(-3.8d0 * AV)
+            df39 = df39 + fac_uv_pix * exp(-3.9d0 * AV)
+            if (AV .lt. 1.5d1) then
+              dfsp1 = dfsp1 + fac_uv_pix
+     $              * exp(-2.55d0 * AV + 1.65d-2 * AV**2)
+            else
+              dfsp1 = dfsp1 + fac_uv_pix * exp(-2.7975 * AV)
+            endif
+#endif
 
          enddo
 #endif /* RAYTRACE or TREE_RAD */
@@ -344,8 +373,24 @@ c
       f_dust   = 1d0
       chi_isrf = 1d0
       f_simp   = 1d0
+      df05     = 1d0
+      df09     = 1d0
+      df12     = 1d0
+      df15     = 1d0
+      df17     = 1d0
+      df18     = 1d0
+      df19     = 1d0
+      df21     = 1d0
+      df23     = 1d0
+      df24     = 1d0
       df25     = 1d0
+      df28     = 1d0
       df30     = 1d0
+      df31     = 1d0
+      df37     = 1d0
+      df38     = 1d0
+      df39     = 1d0
+      dfsp1    = 1d0
 #endif
 c
 c TREE_RAY: the tree walk attenuates the STELLAR bands along each source path
@@ -361,8 +406,24 @@ c
 #ifdef TREE_RAY
       f_dust   = 1d0
       f_simp   = 1d0
+      df05     = 1d0
+      df09     = 1d0
+      df12     = 1d0
+      df15     = 1d0
+      df17     = 1d0
+      df18     = 1d0
+      df19     = 1d0
+      df21     = 1d0
+      df23     = 1d0
+      df24     = 1d0
       df25     = 1d0
+      df28     = 1d0
       df30     = 1d0
+      df31     = 1d0
+      df37     = 1d0
+      df38     = 1d0
+      df39     = 1d0
+      dfsp1    = 1d0
 #endif
 c
 c CO self-shielding, shielding by H2.
