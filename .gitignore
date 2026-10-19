@@ -74,3 +74,5 @@ nbody_val/
 
 # stella-tables clone used by scripts/get_stella_tables.sh
 .stella-tables/
+galaxy_sf/stellar_tables/stella_tables.stamp
+*.replaced-[0-9]*
