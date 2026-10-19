@@ -97,7 +97,7 @@ c
       abe   = max(abhp + abcp + abhcop + abhep + abmp, 0d0)
       abHI  = max(1d0 - 2d0 * abh2 - abhp - abchx - abohx, 0d0)
       abheI = max(abhe - abhep, 0d0)
-      abcI  = max(abundc - abcp - abchx - abohx - abco - abhcop, 0d0)
+      abcI  = max(abundc - abcp - abchx - abco - abhcop, 0d0)
       aboI  = max(abundo - abohx - abco, 0d0)
       abmI  = max(abundM - abmp, 0d0)
 c
@@ -408,6 +408,9 @@ c
 c
       ylam_chem = rates_chem(1)  + rates_chem(2)  + rates_chem(3)  +
      $            rates_chem(4)  + rates_chem(5)  + rates_chem(6)
+      do i = 1, 6
+        lambda_chem(i) = rates_chem(i)
+      enddo
 c
 c Initialize all abundances to zero, then just set the non-zero ones
 c

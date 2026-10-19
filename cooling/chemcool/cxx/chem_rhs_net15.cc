@@ -9,7 +9,6 @@
 //    the port builds it too and returns CHEM_RHS_RECOVERABLE at the end (same
 //    for the temp<=0 path).  NaN input returns at once with ydot = 0.
 //  - NaN ydot: recoverable return (the Fortran has no validate_output here).
-//  - lambda_chem is not written, as in the Fortran.
 //  - default-REAL literals (PI, 1.4) are float32, as compiled.
 
 #include "chem_types.h"
@@ -23,7 +22,6 @@ int chem_rhs_net15(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     const int ih2 = C15_IH2, ihp = C15_IHP, ic = C15_IC, ichx = C15_ICHX,
               iohx = C15_IOHX, ico = C15_ICO, ihcop = C15_IHCOP,
               ihep = C15_IHEP, imp = C15_IMP, itmp = 9;
-    const double PI_f = (double)3.14159265358979323846f;   // default-REAL literal
 
     const double yn = c.yn, dl = c.dl, divv = c.divv;
     const double NH = 0.5 * yn * dl;                         // .F:77
@@ -49,7 +47,7 @@ int chem_rhs_net15(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     double abe   = abhp + abcp + abhcop + abhep + abmp;  if (abe < 0.0) abe = 0.0;
     double abHI  = 1.0 - 2.0 * abh2 - abhp - abchx - abohx;  if (abHI < 0.0) abHI = 0.0;
     double abheI = c.abhe - abhep;  if (abheI < 0.0) abheI = 0.0;
-    double abcI  = c.abundc - abcp - abchx - abohx - abco - abhcop;  if (abcI < 0.0) abcI = 0.0;
+    double abcI  = c.abundc - abcp - abchx - abco - abhcop;  if (abcI < 0.0) abcI = 0.0;
     double aboI  = c.abundo - abohx - abco;  if (aboI < 0.0) aboI = 0.0;
     double abmI  = c.abundM - abmp;  if (abmI < 0.0) abmI = 0.0;
 
@@ -253,6 +251,8 @@ int chem_rhs_net15(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     rc[5] = CHEM_KBOLTZ * temp * abhp * (ch13 * abe + h_gr) * ynsq;
 
     double ylam_chem = rc[0] + rc[1] + rc[2] + rc[3] + rc[4] + rc[5];
+    for (int i = 0; i < 6; i++) c.lambda_chem[i] = rc[i];
+    for (int i = 6; i < CHEM_NRATES_CHEM_MAX; i++) c.lambda_chem[i] = 0.0;
 
     // --- cool_func abundance vector (.F:414-426) ---
     double abundances[16];
@@ -270,7 +270,7 @@ int chem_rhs_net15(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     // --- local Jeans length (.F:429-432) ---
     double rho_lj  = (1.0 + 4.0 * c.abhe) * CHEM_PROTONMASS * yn;
     double cs2_lj  = gamma * (gamma - 1.0) * energy / rho_lj;
-    double L_jeans = std::sqrt(PI_f * cs2_lj / (CHEM_GRAVITY * rho_lj));
+    double L_jeans = std::sqrt(CHEM_PI * cs2_lj / (CHEM_GRAVITY * rho_lj));
 
     double ylam, rates[CHEM_NRATES];
     int cferr = cxx_cool_func(temp, yn, L_jeans, divv, c.G_dust, abundances,

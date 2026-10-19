@@ -390,10 +390,14 @@ Differences from nets 5/17 that the port reproduces, not "fixes":
 * `calc_H2_shielding_factor` is called for every `iphoto` (no `iphoto==0 →
   fshield=1` shortcut), `NH = 0.5*yn*dl`, grain recombination uses `phi < 1`
   and no `exp(-T/3e4)` factor, no `T < 100 K` zeroing of rates_chem(6).
-* `rate_eq_nl99.F` never writes `lambda_chem`, so the C++ cell publishes
-  zeros there too (they enter `cooling_rate` in `chemcool.cc`).
 * Default-REAL literals: `PI` in L_jeans (3.1415927410125732) and the `1.4`
-  in the UV-pumping `cdex` are float32, as compiled (D-10 class).
+  in the UV-pumping `cdex` are float32, as compiled (D-10 class); nets 5/17
+  now use the same values (`CHEM_PI`) and `(yn*yn)` for `yn**2`.
+
+Fixed in Fortran and C++ together: `rate_eq_nl99.F` now publishes
+`lambda_chem(1..6)`; neutral carbon no longer subtracts OHx; the bilinear
+branch of `compute_h2_heating_fraction` weighted density by dT and
+temperature by dn (table stride: +1 density, +29 temperature).
 
 Deviations (same classes as D-1/D-3): a NaN input species returns at once
 with ydot = 0 (Fortran continues with NaN); a NaN ydot returns recoverable

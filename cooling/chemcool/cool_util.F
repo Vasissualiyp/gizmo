@@ -639,9 +639,9 @@ c
           f2 = h2_rv_heat(offset + 1)
           f3 = h2_rv_heat(offset + 29)
           f4 = h2_rv_heat(offset + 30)
-          fr1 = f1 + dT * (f2 - f1)
-          fr2 = f3 + dT * (f4 - f3)
-          frac1 = fr1 + dn * (fr2 - fr1)
+          fr1 = f1 + dn * (f2 - f1)
+          fr2 = f3 + dn * (f4 - f3)
+          frac1 = fr1 + dT * (fr2 - fr1)
         endif
       endif
 c
@@ -670,9 +670,9 @@ c
             f2 = h2_rv_heat(offset + 1)
             f3 = h2_rv_heat(offset + 29)
             f4 = h2_rv_heat(offset + 30)
-            fr1 = f1 + dT * (f2 - f1)
-            fr2 = f3 + dT * (f4 - f3)
-            frac2 = fr1 + dn * (fr2 - fr1)
+            fr1 = f1 + dn * (f2 - f1)
+            fr2 = f3 + dn * (f4 - f3)
+            frac2 = fr1 + dT * (fr2 - fr1)
           endif
         endif
 
