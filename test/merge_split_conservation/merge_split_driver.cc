@@ -44,6 +44,7 @@ static void setup(int max_part, int max_part_gas)
     P = (struct particle_data *) zalloc_aligned(max_part * sizeof(struct particle_data));
     CellP = (struct gas_cell_data *) zalloc_aligned((max_part_gas + N_CANARY) * sizeof(struct gas_cell_data));
     memset((void *)(CellP + max_part_gas), CANARY, N_CANARY * sizeof(struct gas_cell_data));
+    NextInTimeBin.assign(max_part, -1); PrevInTimeBin.assign(max_part, -1);
     NumPart = N_gas = 0;
     for(int b = 0; b < TIMEBINS; b++) {TimeBinActive[b] = 0;} /* nothing active: merge_and_split_particles then only runs the SN spawn */
 }
@@ -250,7 +251,53 @@ static void test_nongas_never_touches_CellP()
     merge_particles_ij(32, 31); /* early return on a zero-mass star (i) */
     merge_particles_ij(31, 32); /* early return on a zero-mass star (j) */
     check("star_merge:no_CellP_write_past_MaxPartGas", canary_intact(), canary_intact(), 1);
+
+#ifndef MAINTAIN_TREE_IN_REARRANGE /* that path edits the tree, which the driver does not build */
+    /* rearrange_particle_sequence eliminates a zero-mass star past MaxPartGas */
+    setup(48, 8);
+    for(int i = 0; i < 4; i++) {make_gas(i, 0.2 + 0.1 * i, 0.5, 0.5, 1.0, 0.72, 0.27, 0.01, 0.1 * i);}
+    for(int i = 4; i < 30; i++) {make_other(i, 1, 1.0, 0.01 * i);}
+    make_other(30, 4, 0.0, 0.42);
+    NumPart = 31; N_gas = 4;
+    rearrange_particle_sequence();
+    check("rearrange:star_eliminated", NumPart == 30, NumPart, 30);
+    check("rearrange:no_CellP_write_past_MaxPartGas", canary_intact(), canary_intact(), 1);
+#endif
 }
+
+#ifdef MAGNETIC
+static void test_split_zero_density()
+{
+    /* a cell split before it has a density keeps its pre-split B, which density() restores from */
+    setup(64, 64);
+    make_gas(0, 0.5, 0.5, 0.5, 2.0, 0.70, 0.28, 0.02, 0.0);
+    make_gas(1, 0.6, 0.5, 0.5, 1.0, 0.72, 0.27, 0.01, 0.3);
+    make_gas(2, 0.5, 0.7, 0.5, 1.0, 0.72, 0.27, 0.01, 0.6);
+    CellP[0].Density = 0;
+    NumPart = N_gas = 3;
+    int ok = split_particle_i(0, 0, 1, 0.);
+    check("split_zero_density:succeeded", ok == 1, ok, 1);
+    double b0 = CellP[0].BField_prerefinement.norm(), b3 = CellP[3].BField_prerefinement.norm();
+    check("split_zero_density:prerefinement_B_kept", std::isfinite(b0) && b0 > 0 && b3 == b0, b0, b3);
+}
+#endif
+
+#if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))
+void hydro_final_operations_and_cleanup(void);
+static void test_metal_floor()
+{
+    /* an exchange taking 99.5% of a cell's metal is applied as is */
+    setup(8, 8);
+    make_gas(0, 0.5, 0.5, 0.5, 1.0, 0.72, 0.27, 0.02, 0.);
+    NumPart = N_gas = 1;
+    for(int k = 0; k < NPEND; k++) {CellP[0].Dyield_pending[k] = CellP[0].Dyield[k] = 0;}
+    double MZ0 = P[0].Mass * P[0].Metallicity[0], dMZ = -0.995 * MZ0;
+    CellP[0].Dyield[0] = dMZ;
+    ActiveParticleList.assign(1, 0);
+    hydro_final_operations_and_cleanup();
+    check_rel("metal_floor:exchange_applied_exactly", P[0].Mass * P[0].Metallicity[0], MZ0 + dMZ, MZ0);
+}
+#endif
 
 #if defined(GALSF_RESOLVEDISM_SN_SPAWN) && defined(GALSF_RESOLVEDISM_FB)
 static void make_sn_star(int i, double mass, double ej_mass, double ej_energy, double x)
@@ -346,6 +393,12 @@ int main(int argc, char **argv)
     test_merge();
     test_hydrogen_massfrac();
     test_nongas_never_touches_CellP();
+#ifdef MAGNETIC
+    test_split_zero_density();
+#endif
+#if defined(TURB_DIFF_METALS) || (defined(METALS) && defined(HYDRO_MESHLESS_FINITE_VOLUME))
+    test_metal_floor();
+#endif
 #if defined(GALSF_RESOLVEDISM_SN_SPAWN) && defined(GALSF_RESOLVEDISM_FB)
     test_sn_spawn();
 #endif
