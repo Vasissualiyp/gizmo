@@ -328,7 +328,7 @@ void cxx_calc_dust_temp(double yn, double chi_isrf, double temp, double abHI,
             dtemp = temp - T.temptab[itemp - 1];
         }
 
-        double ch7  = T.chtab[itemp - 1][6]  + dtemp * T.dtchtab[itemp - 1][6];
+        double ch7  = (T.chtab[itemp - 1][6]  + dtemp * T.dtchtab[itemp - 1][6]) * c.dust_to_gas_ratio; // table is per unit DGR
         double cl14 = T.cltab[itemp - 1][13] + dtemp * T.dtcltab[itemp - 1][13];
 
         double temp2, tdust2, fa, stick;

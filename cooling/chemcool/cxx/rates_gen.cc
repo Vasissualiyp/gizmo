@@ -228,15 +228,15 @@ double rate_ch6(double temp, const ChemGlobals& g) {
     return v_chtab_6_itemp;
 }
 
-/* ch7  cheminmo.F:319-319  nets:5,17 */
+/* ch7  cheminmo.F:320-320  nets:5,17 */
 double rate_ch7(double temp, const ChemGlobals& g) {
     double v_temp2 = GUARD_NAN, v_chtab_7_itemp = GUARD_NAN;
     v_temp2 = (temp * 1e-2);
-    v_chtab_7_itemp = (((g.dust_to_gas_ratio * g.deff) * 3e-17) * pow(v_temp2, .5e0));
+    v_chtab_7_itemp = ((g.deff * 3e-17) * pow(v_temp2, .5e0));
     return v_chtab_7_itemp;
 }
 
-/* ch8  cheminmo.F:326-330  nets:17 */
+/* ch8  cheminmo.F:327-331  nets:17 */
 double rate_ch8(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_8_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -248,7 +248,7 @@ double rate_ch8(double temp, const ChemGlobals& g) {
     return v_chtab_8_itemp;
 }
 
-/* ch9  cheminmo.F:339-341  nets:17 */
+/* ch9  cheminmo.F:340-342  nets:17 */
 double rate_ch9(double temp, const ChemGlobals& g) {
     double v_chtab_9_itemp = GUARD_NAN;
     if ((temp >= 3e0)) {
@@ -259,7 +259,7 @@ double rate_ch9(double temp, const ChemGlobals& g) {
     return v_chtab_9_itemp;
 }
 
-/* ch10  cheminmo.F:411-411  nets:17 */
+/* ch10  cheminmo.F:412-412  nets:17 */
 double rate_ch10(double temp, const ChemGlobals& g) {
     double v_heii_rec_di = GUARD_NAN, v_chtab_10_itemp = GUARD_NAN;
     v_heii_rec_di = (((1.9e-3 * exp((-(473421e0 / temp)))) * (1e0 + (0.3e0 * exp((-(94684e0 / temp)))))) / pow(temp, 1.5e0));
@@ -267,7 +267,7 @@ double rate_ch10(double temp, const ChemGlobals& g) {
     return v_chtab_10_itemp;
 }
 
-/* ch11  cheminmo.F:349-357  nets:5,17 */
+/* ch11  cheminmo.F:350-358  nets:5,17 */
 double rate_ch11(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_lnte = GUARD_NAN, v_chtab_11_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -276,7 +276,7 @@ double rate_ch11(double temp, const ChemGlobals& g) {
     return v_chtab_11_itemp;
 }
 
-/* ch12  cheminmo.F:365-366  nets:- */
+/* ch12  cheminmo.F:366-367  nets:- */
 double rate_ch12(double temp, const ChemGlobals& g) {
     double v_tinv = GUARD_NAN, v_chtab_12_itemp = GUARD_NAN;
     v_tinv = (1.e0 / temp);
@@ -284,7 +284,7 @@ double rate_ch12(double temp, const ChemGlobals& g) {
     return v_chtab_12_itemp;
 }
 
-/* ch13  cheminmo.F:370-371  nets:5,17 */
+/* ch13  cheminmo.F:371-372  nets:5,17 */
 double rate_ch13(double temp, const ChemGlobals& g) {
     double v_tinv = GUARD_NAN, v_chtab_13_itemp = GUARD_NAN;
     v_tinv = (1.e0 / temp);
@@ -292,7 +292,7 @@ double rate_ch13(double temp, const ChemGlobals& g) {
     return v_chtab_13_itemp;
 }
 
-/* ch14  cheminmo.F:377-385  nets:17 */
+/* ch14  cheminmo.F:378-386  nets:17 */
 double rate_ch14(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_lnte = GUARD_NAN, v_chtab_14_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -301,7 +301,7 @@ double rate_ch14(double temp, const ChemGlobals& g) {
     return v_chtab_14_itemp;
 }
 
-/* ch15  cheminmo.F:390-398  nets:17 */
+/* ch15  cheminmo.F:391-399  nets:17 */
 double rate_ch15(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_lnte = GUARD_NAN, v_chtab_15_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -310,7 +310,7 @@ double rate_ch15(double temp, const ChemGlobals& g) {
     return v_chtab_15_itemp;
 }
 
-/* ch16  cheminmo.F:431-431  nets:- */
+/* ch16  cheminmo.F:432-432  nets:- */
 double rate_ch16(double temp, const ChemGlobals& g) {
     double v_heii_rec_di = GUARD_NAN, v_heii_rec_a = GUARD_NAN, v_chtab_16_itemp = GUARD_NAN;
     v_heii_rec_di = (((1.9e-3 * exp((-(473421e0 / temp)))) * (1e0 + (0.3e0 * exp((-(94684e0 / temp)))))) / pow(temp, 1.5e0));
@@ -319,7 +319,7 @@ double rate_ch16(double temp, const ChemGlobals& g) {
     return v_chtab_16_itemp;
 }
 
-/* ch17  cheminmo.F:435-436  nets:17 */
+/* ch17  cheminmo.F:436-437  nets:17 */
 double rate_ch17(double temp, const ChemGlobals& g) {
     double v_heii_rec_di = GUARD_NAN, v_heii_rec_a = GUARD_NAN, v_heii_rec_b = GUARD_NAN, v_heii_rec_gs = GUARD_NAN, v_chtab_17_itemp = GUARD_NAN;
     v_heii_rec_di = (((1.9e-3 * exp((-(473421e0 / temp)))) * (1e0 + (0.3e0 * exp((-(94684e0 / temp)))))) / pow(temp, 1.5e0));
@@ -330,7 +330,7 @@ double rate_ch17(double temp, const ChemGlobals& g) {
     return v_chtab_17_itemp;
 }
 
-/* ch18  cheminmo.F:441-442  nets:17 */
+/* ch18  cheminmo.F:442-443  nets:17 */
 double rate_ch18(double temp, const ChemGlobals& g) {
     double v_heii_rec_di = GUARD_NAN, v_heii_rec_a = GUARD_NAN, v_heii_rec_b = GUARD_NAN, v_heii_rec_gs = GUARD_NAN, v_chtab_17_itemp = GUARD_NAN, v_chtab_18_itemp = GUARD_NAN;
     v_heii_rec_di = (((1.9e-3 * exp((-(473421e0 / temp)))) * (1e0 + (0.3e0 * exp((-(94684e0 / temp)))))) / pow(temp, 1.5e0));
@@ -342,7 +342,7 @@ double rate_ch18(double temp, const ChemGlobals& g) {
     return v_chtab_18_itemp;
 }
 
-/* ch19  cheminmo.F:450-452  nets:- */
+/* ch19  cheminmo.F:451-453  nets:- */
 double rate_ch19(double temp, const ChemGlobals& g) {
     double v_tinv = GUARD_NAN, v_chtab_19_itemp = GUARD_NAN;
     v_tinv = (1.e0 / temp);
@@ -350,7 +350,7 @@ double rate_ch19(double temp, const ChemGlobals& g) {
     return v_chtab_19_itemp;
 }
 
-/* ch20  cheminmo.F:456-458  nets:17 */
+/* ch20  cheminmo.F:457-459  nets:17 */
 double rate_ch20(double temp, const ChemGlobals& g) {
     double v_tinv = GUARD_NAN, v_chtab_20_itemp = GUARD_NAN;
     v_tinv = (1.e0 / temp);
@@ -358,7 +358,7 @@ double rate_ch20(double temp, const ChemGlobals& g) {
     return v_chtab_20_itemp;
 }
 
-/* ch21  cheminmo.F:474-482  nets:17 */
+/* ch21  cheminmo.F:475-483  nets:17 */
 double rate_ch21(double temp, const ChemGlobals& g) {
     double v_chtab_21_itemp = GUARD_NAN;
     if ((temp <= 6000)) {
@@ -369,7 +369,7 @@ double rate_ch21(double temp, const ChemGlobals& g) {
     return v_chtab_21_itemp;
 }
 
-/* ch22  cheminmo.F:490-503  nets:17 */
+/* ch22  cheminmo.F:491-504  nets:17 */
 double rate_ch22(double temp, const ChemGlobals& g) {
     double v_chtab_22_itemp = GUARD_NAN;
     if ((g.iflag_ad == 1)) {
@@ -389,14 +389,14 @@ double rate_ch22(double temp, const ChemGlobals& g) {
     return v_chtab_22_itemp;
 }
 
-/* ch23  cheminmo.F:512-515  nets:17 */
+/* ch23  cheminmo.F:513-516  nets:17 */
 double rate_ch23(double temp, const ChemGlobals& g) {
     double v_chtab_23_itemp = GUARD_NAN;
     v_chtab_23_itemp = pow(10e0, ((((-19.38e0) - (1.523e0 * log10(temp))) + (1.118e0 * fpowi(log10(temp), 2))) - (0.1269e0 * fpowi(log10(temp), 3))));
     return v_chtab_23_itemp;
 }
 
-/* ch24  cheminmo.F:531-541  nets:17 */
+/* ch24  cheminmo.F:532-542  nets:17 */
 double rate_ch24(double temp, const ChemGlobals& g) {
     double v_chtab_24_itemp = GUARD_NAN;
     if ((temp <= 3e4)) {
@@ -407,14 +407,14 @@ double rate_ch24(double temp, const ChemGlobals& g) {
     return v_chtab_24_itemp;
 }
 
-/* ch25  cheminmo.F:548-549  nets:5,17 */
+/* ch25  cheminmo.F:549-550  nets:5,17 */
 double rate_ch25(double temp, const ChemGlobals& g) {
     double v_chtab_25_itemp = GUARD_NAN;
     v_chtab_25_itemp = ((4.4886e-9 * pow(temp, 0.109127e0)) * exp((-(1.01858e5 / temp))));
     return v_chtab_25_itemp;
 }
 
-/* ch26  cheminmo.F:554-562  nets:17 */
+/* ch26  cheminmo.F:555-563  nets:17 */
 double rate_ch26(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_lnte = GUARD_NAN, v_chtab_26_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -423,7 +423,7 @@ double rate_ch26(double temp, const ChemGlobals& g) {
     return v_chtab_26_itemp;
 }
 
-/* ch27  cheminmo.F:568-579  nets:17 */
+/* ch27  cheminmo.F:569-580  nets:17 */
 double rate_ch27(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_lnte = GUARD_NAN, v_chtab_27_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -436,7 +436,7 @@ double rate_ch27(double temp, const ChemGlobals& g) {
     return v_chtab_27_itemp;
 }
 
-/* ch28  cheminmo.F:586-596  nets:17 */
+/* ch28  cheminmo.F:587-597  nets:17 */
 double rate_ch28(double temp, const ChemGlobals& g) {
     double v_chtab_28_itemp = GUARD_NAN;
     if ((g.iflag_mn == 1)) {
@@ -452,7 +452,7 @@ double rate_ch28(double temp, const ChemGlobals& g) {
     return v_chtab_28_itemp;
 }
 
-/* ch29  cheminmo.F:606-608  nets:17 */
+/* ch29  cheminmo.F:607-609  nets:17 */
 double rate_ch29(double temp, const ChemGlobals& g) {
     double v_chtab_29_itemp = GUARD_NAN;
     if ((temp <= 8e3)) {
@@ -463,7 +463,7 @@ double rate_ch29(double temp, const ChemGlobals& g) {
     return v_chtab_29_itemp;
 }
 
-/* ch30  cheminmo.F:626-628  nets:17 */
+/* ch30  cheminmo.F:627-629  nets:17 */
 double rate_ch30(double temp, const ChemGlobals& g) {
     double v_chtab_30_itemp = GUARD_NAN;
     if ((temp <= 6.17e2)) {
@@ -474,21 +474,21 @@ double rate_ch30(double temp, const ChemGlobals& g) {
     return v_chtab_30_itemp;
 }
 
-/* ch31  cheminmo.F:634-634  nets:17 */
+/* ch31  cheminmo.F:635-635  nets:17 */
 double rate_ch31(double temp, const ChemGlobals& g) {
     double v_chtab_31_itemp = GUARD_NAN;
     v_chtab_31_itemp = ((4.1e-17 * fpowi(temp, 2)) * exp((-(19870e0 / temp))));
     return v_chtab_31_itemp;
 }
 
-/* ch32  cheminmo.F:641-641  nets:17 */
+/* ch32  cheminmo.F:642-642  nets:17 */
 double rate_ch32(double temp, const ChemGlobals& g) {
     double v_chtab_32_itemp = GUARD_NAN;
     v_chtab_32_itemp = (1.2e-15 * pow((temp / 3e2), 0.25e0));
     return v_chtab_32_itemp;
 }
 
-/* ch33  cheminmo.F:650-653  nets:17 */
+/* ch33  cheminmo.F:651-654  nets:17 */
 double rate_ch33(double temp, const ChemGlobals& g) {
     double v_chtab_33_itemp = GUARD_NAN;
     if ((temp <= 1e4)) {
@@ -499,49 +499,49 @@ double rate_ch33(double temp, const ChemGlobals& g) {
     return v_chtab_33_itemp;
 }
 
-/* ch34  cheminmo.F:675-675  nets:5,17 */
+/* ch34  cheminmo.F:676-676  nets:5,17 */
 double rate_ch34(double temp, const ChemGlobals& g) {
     double v_chtab_34_itemp = GUARD_NAN;
     v_chtab_34_itemp = (5.087e2 * pow(temp, 1.586e-2));
     return v_chtab_34_itemp;
 }
 
-/* ch35  cheminmo.F:677-677  nets:5,17 */
+/* ch35  cheminmo.F:678-678  nets:5,17 */
 double rate_ch35(double temp, const ChemGlobals& g) {
     double v_chtab_35_itemp = GUARD_NAN;
     v_chtab_35_itemp = ((-0.4723e0) - (1.102e-5 * log(temp)));
     return v_chtab_35_itemp;
 }
 
-/* ch36  cheminmo.F:681-681  nets:- */
+/* ch36  cheminmo.F:682-682  nets:- */
 double rate_ch36(double temp, const ChemGlobals& g) {
     double v_chtab_36_itemp = GUARD_NAN;
     v_chtab_36_itemp = (4.331e2 * pow(temp, 4.845e-2));
     return v_chtab_36_itemp;
 }
 
-/* ch37  cheminmo.F:683-683  nets:- */
+/* ch37  cheminmo.F:684-684  nets:- */
 double rate_ch37(double temp, const ChemGlobals& g) {
     double v_chtab_37_itemp = GUARD_NAN;
     v_chtab_37_itemp = ((-0.8120e0) - (1.333e-4 * log(temp)));
     return v_chtab_37_itemp;
 }
 
-/* ch38  cheminmo.F:687-687  nets:- */
+/* ch38  cheminmo.F:688-688  nets:- */
 double rate_ch38(double temp, const ChemGlobals& g) {
     double v_chtab_38_itemp = GUARD_NAN;
     v_chtab_38_itemp = (4.375e4 * pow(temp, 1.635e-6));
     return v_chtab_38_itemp;
 }
 
-/* ch39  cheminmo.F:689-689  nets:- */
+/* ch39  cheminmo.F:690-690  nets:- */
 double rate_ch39(double temp, const ChemGlobals& g) {
     double v_chtab_39_itemp = GUARD_NAN;
     v_chtab_39_itemp = ((-0.8964e0) - (7.538e-5 * log(temp)));
     return v_chtab_39_itemp;
 }
 
-/* ch40  cheminmo.F:708-714  nets:- */
+/* ch40  cheminmo.F:709-715  nets:- */
 double rate_ch40(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_40_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -555,7 +555,7 @@ double rate_ch40(double temp, const ChemGlobals& g) {
     return v_chtab_40_itemp;
 }
 
-/* ch41  cheminmo.F:733-739  nets:- */
+/* ch41  cheminmo.F:734-740  nets:- */
 double rate_ch41(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_41_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -571,7 +571,7 @@ double rate_ch41(double temp, const ChemGlobals& g) {
     return v_chtab_41_itemp;
 }
 
-/* ch42  cheminmo.F:751-756  nets:- */
+/* ch42  cheminmo.F:752-757  nets:- */
 double rate_ch42(double temp, const ChemGlobals& g) {
     double v_chtab_42_itemp = GUARD_NAN;
     if ((temp <= 4e2)) {
@@ -582,7 +582,7 @@ double rate_ch42(double temp, const ChemGlobals& g) {
     return v_chtab_42_itemp;
 }
 
-/* ch43  cheminmo.F:766-769  nets:- */
+/* ch43  cheminmo.F:767-770  nets:- */
 double rate_ch43(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_u = GUARD_NAN, v_chtab_43_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -595,7 +595,7 @@ double rate_ch43(double temp, const ChemGlobals& g) {
     return v_chtab_43_itemp;
 }
 
-/* ch44  cheminmo.F:777-780  nets:- */
+/* ch44  cheminmo.F:778-781  nets:- */
 double rate_ch44(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_u = GUARD_NAN, v_chtab_44_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -609,7 +609,7 @@ double rate_ch44(double temp, const ChemGlobals& g) {
     return v_chtab_44_itemp;
 }
 
-/* ch45  cheminmo.F:788-791  nets:- */
+/* ch45  cheminmo.F:789-792  nets:- */
 double rate_ch45(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_u = GUARD_NAN, v_chtab_45_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -624,21 +624,21 @@ double rate_ch45(double temp, const ChemGlobals& g) {
     return v_chtab_45_itemp;
 }
 
-/* ch46  cheminmo.F:798-799  nets:- */
+/* ch46  cheminmo.F:799-800  nets:- */
 double rate_ch46(double temp, const ChemGlobals& g) {
     double v_chtab_46_itemp = GUARD_NAN;
     v_chtab_46_itemp = ((2.08e-9 * pow((temp / 1e4), 0.405e0)) + (1.11e-11 * pow((temp / 1e4), (-0.458e0))));
     return v_chtab_46_itemp;
 }
 
-/* ch47  cheminmo.F:809-811  nets:- */
+/* ch47  cheminmo.F:810-812  nets:- */
 double rate_ch47(double temp, const ChemGlobals& g) {
     double v_chtab_47_itemp = GUARD_NAN;
     v_chtab_47_itemp = (((1.26e-9 * pow((temp / 1e4), 0.517e0)) + (4.25e-10 * pow((temp / 1e4), 6.69e-3))) * exp((-(227e0 / temp))));
     return v_chtab_47_itemp;
 }
 
-/* ch48  cheminmo.F:818-822  nets:- */
+/* ch48  cheminmo.F:819-823  nets:- */
 double rate_ch48(double temp, const ChemGlobals& g) {
     double v_chtab_48_itemp = GUARD_NAN;
     if ((temp <= 1e5)) {
@@ -649,7 +649,7 @@ double rate_ch48(double temp, const ChemGlobals& g) {
     return v_chtab_48_itemp;
 }
 
-/* ch49  cheminmo.F:836-838  nets:- */
+/* ch49  cheminmo.F:837-839  nets:- */
 double rate_ch49(double temp, const ChemGlobals& g) {
     double v_chtab_49_itemp = GUARD_NAN;
     if ((temp <= 1e4)) {
@@ -660,7 +660,7 @@ double rate_ch49(double temp, const ChemGlobals& g) {
     return v_chtab_49_itemp;
 }
 
-/* ch50  cheminmo.F:843-843  nets:- */
+/* ch50  cheminmo.F:844-844  nets:- */
 double rate_ch50(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_50_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -668,7 +668,7 @@ double rate_ch50(double temp, const ChemGlobals& g) {
     return v_chtab_50_itemp;
 }
 
-/* ch51  cheminmo.F:847-847  nets:- */
+/* ch51  cheminmo.F:848-848  nets:- */
 double rate_ch51(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_51_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -676,7 +676,7 @@ double rate_ch51(double temp, const ChemGlobals& g) {
     return v_chtab_51_itemp;
 }
 
-/* ch52  cheminmo.F:851-851  nets:- */
+/* ch52  cheminmo.F:852-852  nets:- */
 double rate_ch52(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_52_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -684,7 +684,7 @@ double rate_ch52(double temp, const ChemGlobals& g) {
     return v_chtab_52_itemp;
 }
 
-/* ch53  cheminmo.F:855-855  nets:- */
+/* ch53  cheminmo.F:856-856  nets:- */
 double rate_ch53(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_53_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -692,7 +692,7 @@ double rate_ch53(double temp, const ChemGlobals& g) {
     return v_chtab_53_itemp;
 }
 
-/* ch54  cheminmo.F:859-859  nets:- */
+/* ch54  cheminmo.F:860-860  nets:- */
 double rate_ch54(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_54_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -700,7 +700,7 @@ double rate_ch54(double temp, const ChemGlobals& g) {
     return v_chtab_54_itemp;
 }
 
-/* ch55  cheminmo.F:863-863  nets:- */
+/* ch55  cheminmo.F:864-864  nets:- */
 double rate_ch55(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_55_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -708,7 +708,7 @@ double rate_ch55(double temp, const ChemGlobals& g) {
     return v_chtab_55_itemp;
 }
 
-/* ch56  cheminmo.F:873-873  nets:- */
+/* ch56  cheminmo.F:874-874  nets:- */
 double rate_ch56(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_56_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -716,7 +716,7 @@ double rate_ch56(double temp, const ChemGlobals& g) {
     return v_chtab_56_itemp;
 }
 
-/* ch57  cheminmo.F:880-883  nets:- */
+/* ch57  cheminmo.F:881-884  nets:- */
 double rate_ch57(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_57_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -728,14 +728,14 @@ double rate_ch57(double temp, const ChemGlobals& g) {
     return v_chtab_57_itemp;
 }
 
-/* ch58  cheminmo.F:891-892  nets:- */
+/* ch58  cheminmo.F:892-893  nets:- */
 double rate_ch58(double temp, const ChemGlobals& g) {
     double v_chtab_58_itemp = GUARD_NAN;
     v_chtab_58_itemp = ((6.08e-14 * pow((temp / 1e4), 1.96e0)) * exp((-(1.7e5 / temp))));
     return v_chtab_58_itemp;
 }
 
-/* ch59  cheminmo.F:898-898  nets:- */
+/* ch59  cheminmo.F:899-899  nets:- */
 double rate_ch59(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_59_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -743,14 +743,14 @@ double rate_ch59(double temp, const ChemGlobals& g) {
     return v_chtab_59_itemp;
 }
 
-/* ch60  cheminmo.F:904-904  nets:- */
+/* ch60  cheminmo.F:905-905  nets:- */
 double rate_ch60(double temp, const ChemGlobals& g) {
     double v_chtab_60_itemp = GUARD_NAN;
     v_chtab_60_itemp = (1.0e-10 * exp((-(4.64e3 / temp))));
     return v_chtab_60_itemp;
 }
 
-/* ch61  cheminmo.F:910-910  nets:- */
+/* ch61  cheminmo.F:911-911  nets:- */
 double rate_ch61(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_61_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -758,14 +758,14 @@ double rate_ch61(double temp, const ChemGlobals& g) {
     return v_chtab_61_itemp;
 }
 
-/* ch62  cheminmo.F:916-916  nets:- */
+/* ch62  cheminmo.F:917-917  nets:- */
 double rate_ch62(double temp, const ChemGlobals& g) {
     double v_chtab_62_itemp = GUARD_NAN;
     v_chtab_62_itemp = (1.0e-9 * exp((-(7.08e3 / temp))));
     return v_chtab_62_itemp;
 }
 
-/* ch63  cheminmo.F:924-924  nets:- */
+/* ch63  cheminmo.F:925-925  nets:- */
 double rate_ch63(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_63_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -773,7 +773,7 @@ double rate_ch63(double temp, const ChemGlobals& g) {
     return v_chtab_63_itemp;
 }
 
-/* ch64  cheminmo.F:925-925  nets:- */
+/* ch64  cheminmo.F:926-926  nets:- */
 double rate_ch64(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_64_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -781,7 +781,7 @@ double rate_ch64(double temp, const ChemGlobals& g) {
     return v_chtab_64_itemp;
 }
 
-/* ch65  cheminmo.F:926-926  nets:- */
+/* ch65  cheminmo.F:927-927  nets:- */
 double rate_ch65(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_65_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -789,14 +789,14 @@ double rate_ch65(double temp, const ChemGlobals& g) {
     return v_chtab_65_itemp;
 }
 
-/* ch66  cheminmo.F:932-932  nets:- */
+/* ch66  cheminmo.F:933-933  nets:- */
 double rate_ch66(double temp, const ChemGlobals& g) {
     double v_chtab_66_itemp = GUARD_NAN;
     v_chtab_66_itemp = (7e-10 * exp((-(1.056e4 / temp))));
     return v_chtab_66_itemp;
 }
 
-/* ch67  cheminmo.F:939-939  nets:- */
+/* ch67  cheminmo.F:940-940  nets:- */
 double rate_ch67(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_67_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -804,7 +804,7 @@ double rate_ch67(double temp, const ChemGlobals& g) {
     return v_chtab_67_itemp;
 }
 
-/* ch68  cheminmo.F:940-940  nets:- */
+/* ch68  cheminmo.F:941-941  nets:- */
 double rate_ch68(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_68_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -812,7 +812,7 @@ double rate_ch68(double temp, const ChemGlobals& g) {
     return v_chtab_68_itemp;
 }
 
-/* ch69  cheminmo.F:941-941  nets:- */
+/* ch69  cheminmo.F:942-942  nets:- */
 double rate_ch69(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_69_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -820,14 +820,14 @@ double rate_ch69(double temp, const ChemGlobals& g) {
     return v_chtab_69_itemp;
 }
 
-/* ch70  cheminmo.F:948-948  nets:- */
+/* ch70  cheminmo.F:949-949  nets:- */
 double rate_ch70(double temp, const ChemGlobals& g) {
     double v_chtab_70_itemp = GUARD_NAN;
     v_chtab_70_itemp = (5.46e-10 * exp((-(1.943e3 / temp))));
     return v_chtab_70_itemp;
 }
 
-/* ch71  cheminmo.F:954-954  nets:- */
+/* ch71  cheminmo.F:955-955  nets:- */
 double rate_ch71(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_71_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -835,7 +835,7 @@ double rate_ch71(double temp, const ChemGlobals& g) {
     return v_chtab_71_itemp;
 }
 
-/* ch72  cheminmo.F:960-960  nets:- */
+/* ch72  cheminmo.F:961-961  nets:- */
 double rate_ch72(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_72_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -843,7 +843,7 @@ double rate_ch72(double temp, const ChemGlobals& g) {
     return v_chtab_72_itemp;
 }
 
-/* ch73  cheminmo.F:966-966  nets:- */
+/* ch73  cheminmo.F:967-967  nets:- */
 double rate_ch73(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_73_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -851,7 +851,7 @@ double rate_ch73(double temp, const ChemGlobals& g) {
     return v_chtab_73_itemp;
 }
 
-/* ch74  cheminmo.F:972-972  nets:- */
+/* ch74  cheminmo.F:973-973  nets:- */
 double rate_ch74(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_74_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -859,7 +859,7 @@ double rate_ch74(double temp, const ChemGlobals& g) {
     return v_chtab_74_itemp;
 }
 
-/* ch75  cheminmo.F:978-978  nets:- */
+/* ch75  cheminmo.F:979-979  nets:- */
 double rate_ch75(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_75_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -867,14 +867,14 @@ double rate_ch75(double temp, const ChemGlobals& g) {
     return v_chtab_75_itemp;
 }
 
-/* ch76  cheminmo.F:982-982  nets:- */
+/* ch76  cheminmo.F:983-983  nets:- */
 double rate_ch76(double temp, const ChemGlobals& g) {
     double v_chtab_76_itemp = GUARD_NAN;
     v_chtab_76_itemp = 0e0;
     return v_chtab_76_itemp;
 }
 
-/* ch77  cheminmo.F:990-992  nets:- */
+/* ch77  cheminmo.F:991-993  nets:- */
 double rate_ch77(double temp, const ChemGlobals& g) {
     double v_chtab_77_itemp = GUARD_NAN;
     if ((temp <= 2e3)) {
@@ -885,14 +885,14 @@ double rate_ch77(double temp, const ChemGlobals& g) {
     return v_chtab_77_itemp;
 }
 
-/* ch78  cheminmo.F:999-999  nets:- */
+/* ch78  cheminmo.F:1000-1000  nets:- */
 double rate_ch78(double temp, const ChemGlobals& g) {
     double v_chtab_78_itemp = GUARD_NAN;
     v_chtab_78_itemp = (6.64e-10 * exp((-(1.17e4 / temp))));
     return v_chtab_78_itemp;
 }
 
-/* ch79  cheminmo.F:1005-1006  nets:- */
+/* ch79  cheminmo.F:1006-1007  nets:- */
 double rate_ch79(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_79_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -900,14 +900,14 @@ double rate_ch79(double temp, const ChemGlobals& g) {
     return v_chtab_79_itemp;
 }
 
-/* ch80  cheminmo.F:1012-1012  nets:- */
+/* ch80  cheminmo.F:1013-1013  nets:- */
 double rate_ch80(double temp, const ChemGlobals& g) {
     double v_chtab_80_itemp = GUARD_NAN;
     v_chtab_80_itemp = (1.31e-10 * exp((-(8e1 / temp))));
     return v_chtab_80_itemp;
 }
 
-/* ch81  cheminmo.F:1024-1026  nets:- */
+/* ch81  cheminmo.F:1025-1027  nets:- */
 double rate_ch81(double temp, const ChemGlobals& g) {
     double v_chtab_81_itemp = GUARD_NAN;
     if ((temp <= 2.61e2)) {
@@ -918,7 +918,7 @@ double rate_ch81(double temp, const ChemGlobals& g) {
     return v_chtab_81_itemp;
 }
 
-/* ch82  cheminmo.F:1033-1033  nets:- */
+/* ch82  cheminmo.F:1034-1034  nets:- */
 double rate_ch82(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_82_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -926,7 +926,7 @@ double rate_ch82(double temp, const ChemGlobals& g) {
     return v_chtab_82_itemp;
 }
 
-/* ch83  cheminmo.F:1041-1044  nets:- */
+/* ch83  cheminmo.F:1042-1045  nets:- */
 double rate_ch83(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_83_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -938,7 +938,7 @@ double rate_ch83(double temp, const ChemGlobals& g) {
     return v_chtab_83_itemp;
 }
 
-/* ch84  cheminmo.F:1051-1051  nets:- */
+/* ch84  cheminmo.F:1052-1052  nets:- */
 double rate_ch84(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_84_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -946,21 +946,21 @@ double rate_ch84(double temp, const ChemGlobals& g) {
     return v_chtab_84_itemp;
 }
 
-/* ch85  cheminmo.F:1058-1058  nets:- */
+/* ch85  cheminmo.F:1059-1059  nets:- */
 double rate_ch85(double temp, const ChemGlobals& g) {
     double v_chtab_85_itemp = GUARD_NAN;
     v_chtab_85_itemp = (2.61e-10 * exp((-(8.156e3 / temp))));
     return v_chtab_85_itemp;
 }
 
-/* ch86  cheminmo.F:1064-1064  nets:- */
+/* ch86  cheminmo.F:1065-1065  nets:- */
 double rate_ch86(double temp, const ChemGlobals& g) {
     double v_chtab_86_itemp = GUARD_NAN;
     v_chtab_86_itemp = (3.16e-10 * exp((-(2.189e4 / temp))));
     return v_chtab_86_itemp;
 }
 
-/* ch87  cheminmo.F:1070-1070  nets:- */
+/* ch87  cheminmo.F:1071-1071  nets:- */
 double rate_ch87(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_87_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -968,7 +968,7 @@ double rate_ch87(double temp, const ChemGlobals& g) {
     return v_chtab_87_itemp;
 }
 
-/* ch88  cheminmo.F:1084-1084  nets:- */
+/* ch88  cheminmo.F:1085-1085  nets:- */
 double rate_ch88(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_88_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -976,7 +976,7 @@ double rate_ch88(double temp, const ChemGlobals& g) {
     return v_chtab_88_itemp;
 }
 
-/* ch89  cheminmo.F:1090-1091  nets:- */
+/* ch89  cheminmo.F:1091-1092  nets:- */
 double rate_ch89(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_89_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -984,7 +984,7 @@ double rate_ch89(double temp, const ChemGlobals& g) {
     return v_chtab_89_itemp;
 }
 
-/* ch90  cheminmo.F:1102-1104  nets:- */
+/* ch90  cheminmo.F:1103-1105  nets:- */
 double rate_ch90(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_90_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -996,7 +996,7 @@ double rate_ch90(double temp, const ChemGlobals& g) {
     return v_chtab_90_itemp;
 }
 
-/* ch91  cheminmo.F:1127-1131  nets:- */
+/* ch91  cheminmo.F:1128-1132  nets:- */
 double rate_ch91(double temp, const ChemGlobals& g) {
     double v_chtab_91_itemp = GUARD_NAN;
     if ((temp > 7e0)) {
@@ -1007,7 +1007,7 @@ double rate_ch91(double temp, const ChemGlobals& g) {
     return v_chtab_91_itemp;
 }
 
-/* ch92  cheminmo.F:1140-1142  nets:17 */
+/* ch92  cheminmo.F:1141-1143  nets:17 */
 double rate_ch92(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_92_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1018,7 +1018,7 @@ double rate_ch92(double temp, const ChemGlobals& g) {
     return v_chtab_92_itemp;
 }
 
-/* ch93  cheminmo.F:1149-1149  nets:- */
+/* ch93  cheminmo.F:1150-1150  nets:- */
 double rate_ch93(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_93_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1026,7 +1026,7 @@ double rate_ch93(double temp, const ChemGlobals& g) {
     return v_chtab_93_itemp;
 }
 
-/* ch94  cheminmo.F:1158-1162  nets:- */
+/* ch94  cheminmo.F:1159-1163  nets:- */
 double rate_ch94(double temp, const ChemGlobals& g) {
     double v_chtab_94_itemp = GUARD_NAN;
     if ((temp <= 2e2)) {
@@ -1039,7 +1039,7 @@ double rate_ch94(double temp, const ChemGlobals& g) {
     return v_chtab_94_itemp;
 }
 
-/* ch95  cheminmo.F:1171-1175  nets:- */
+/* ch95  cheminmo.F:1172-1176  nets:- */
 double rate_ch95(double temp, const ChemGlobals& g) {
     double v_chtab_95_itemp = GUARD_NAN;
     if ((temp <= 1e6)) {
@@ -1050,7 +1050,7 @@ double rate_ch95(double temp, const ChemGlobals& g) {
     return v_chtab_95_itemp;
 }
 
-/* ch96  cheminmo.F:1184-1189  nets:- */
+/* ch96  cheminmo.F:1185-1190  nets:- */
 double rate_ch96(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_chtab_96_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -1065,7 +1065,7 @@ double rate_ch96(double temp, const ChemGlobals& g) {
     return v_chtab_96_itemp;
 }
 
-/* ch97  cheminmo.F:1203-1209  nets:- */
+/* ch97  cheminmo.F:1204-1210  nets:- */
 double rate_ch97(double temp, const ChemGlobals& g) {
     double v_chtab_97_itemp = GUARD_NAN;
     if ((temp <= 1e6)) {
@@ -1082,7 +1082,7 @@ double rate_ch97(double temp, const ChemGlobals& g) {
     return v_chtab_97_itemp;
 }
 
-/* ch98  cheminmo.F:1231-1236  nets:17 */
+/* ch98  cheminmo.F:1232-1237  nets:17 */
 double rate_ch98(double temp, const ChemGlobals& g) {
     double v_chtab_98_itemp = GUARD_NAN;
     if ((temp <= 2.7e0)) {
@@ -1095,28 +1095,28 @@ double rate_ch98(double temp, const ChemGlobals& g) {
     return v_chtab_98_itemp;
 }
 
-/* ch99  cheminmo.F:1244-1245  nets:17 */
+/* ch99  cheminmo.F:1245-1246  nets:17 */
 double rate_ch99(double temp, const ChemGlobals& g) {
     double v_chtab_99_itemp = GUARD_NAN;
     v_chtab_99_itemp = (((2.06e-10 * pow(temp, 0.396e0)) * exp((-(33e0 / temp)))) + (2.03e-9 * pow(temp, (-0.332e0))));
     return v_chtab_99_itemp;
 }
 
-/* ch100  cheminmo.F:1253-1254  nets:17 */
+/* ch100  cheminmo.F:1254-1255  nets:17 */
 double rate_ch100(double temp, const ChemGlobals& g) {
     double v_chtab_100_itemp = GUARD_NAN;
     v_chtab_100_itemp = (((0.417e0 + (0.846e0 * log10(temp))) - (0.137e0 * fpowi(log10(temp), 2))) * 1e-9);
     return v_chtab_100_itemp;
 }
 
-/* ch101  cheminmo.F:1260-1260  nets:17 */
+/* ch101  cheminmo.F:1261-1261  nets:17 */
 double rate_ch101(double temp, const ChemGlobals& g) {
     double v_chtab_101_itemp = GUARD_NAN;
     v_chtab_101_itemp = (1.1e-9 * exp((-(4.88e2 / temp))));
     return v_chtab_101_itemp;
 }
 
-/* ch102  cheminmo.F:1267-1273  nets:17 */
+/* ch102  cheminmo.F:1268-1274  nets:17 */
 double rate_ch102(double temp, const ChemGlobals& g) {
     double v_chtab_102_itemp = GUARD_NAN;
     if ((temp <= 2e3)) {
@@ -1127,7 +1127,7 @@ double rate_ch102(double temp, const ChemGlobals& g) {
     return v_chtab_102_itemp;
 }
 
-/* ch103  cheminmo.F:1283-1286  nets:17 */
+/* ch103  cheminmo.F:1284-1287  nets:17 */
 double rate_ch103(double temp, const ChemGlobals& g) {
     double v_chtab_103_itemp = GUARD_NAN;
     if ((temp <= 2e2)) {
@@ -1138,14 +1138,14 @@ double rate_ch103(double temp, const ChemGlobals& g) {
     return v_chtab_103_itemp;
 }
 
-/* ch104  cheminmo.F:1293-1294  nets:- */
+/* ch104  cheminmo.F:1294-1295  nets:- */
 double rate_ch104(double temp, const ChemGlobals& g) {
     double v_chtab_104_itemp = GUARD_NAN;
     v_chtab_104_itemp = ((4.46e-16 * exp((-(4.93e0 * pow(temp, (-(2e0 / 3e0))))))) / sqrt(temp));
     return v_chtab_104_itemp;
 }
 
-/* ch105  cheminmo.F:1300-1301  nets:- */
+/* ch105  cheminmo.F:1301-1302  nets:- */
 double rate_ch105(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_105_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1153,7 +1153,7 @@ double rate_ch105(double temp, const ChemGlobals& g) {
     return v_chtab_105_itemp;
 }
 
-/* ch106  cheminmo.F:1308-1308  nets:- */
+/* ch106  cheminmo.F:1309-1309  nets:- */
 double rate_ch106(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_106_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1161,14 +1161,14 @@ double rate_ch106(double temp, const ChemGlobals& g) {
     return v_chtab_106_itemp;
 }
 
-/* ch107  cheminmo.F:1314-1314  nets:- */
+/* ch107  cheminmo.F:1315-1315  nets:- */
 double rate_ch107(double temp, const ChemGlobals& g) {
     double v_chtab_107_itemp = GUARD_NAN;
     v_chtab_107_itemp = (7.7e-9 * exp((-(1.756e4 / temp))));
     return v_chtab_107_itemp;
 }
 
-/* ch108  cheminmo.F:1325-1340  nets:17 */
+/* ch108  cheminmo.F:1326-1341  nets:17 */
 double rate_ch108(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_108_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1191,7 +1191,7 @@ double rate_ch108(double temp, const ChemGlobals& g) {
     return v_chtab_108_itemp;
 }
 
-/* ch109  cheminmo.F:1351-1361  nets:17 */
+/* ch109  cheminmo.F:1352-1362  nets:17 */
 double rate_ch109(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_108_itemp = GUARD_NAN, v_chtab_109_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1224,14 +1224,14 @@ double rate_ch109(double temp, const ChemGlobals& g) {
     return v_chtab_109_itemp;
 }
 
-/* ch110  cheminmo.F:1374-1374  nets:17 */
+/* ch110  cheminmo.F:1375-1375  nets:17 */
 double rate_ch110(double temp, const ChemGlobals& g) {
     double v_chtab_110_itemp = GUARD_NAN;
     v_chtab_110_itemp = (6.9e-32 * pow(temp, (-0.4e0)));
     return v_chtab_110_itemp;
 }
 
-/* ch111  cheminmo.F:1394-1398  nets:- */
+/* ch111  cheminmo.F:1395-1399  nets:- */
 double rate_ch111(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_111_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1243,7 +1243,7 @@ double rate_ch111(double temp, const ChemGlobals& g) {
     return v_chtab_111_itemp;
 }
 
-/* ch112  cheminmo.F:1410-1414  nets:- */
+/* ch112  cheminmo.F:1411-1415  nets:- */
 double rate_ch112(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_112_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1255,7 +1255,7 @@ double rate_ch112(double temp, const ChemGlobals& g) {
     return v_chtab_112_itemp;
 }
 
-/* ch113  cheminmo.F:1421-1421  nets:- */
+/* ch113  cheminmo.F:1422-1422  nets:- */
 double rate_ch113(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_113_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1263,7 +1263,7 @@ double rate_ch113(double temp, const ChemGlobals& g) {
     return v_chtab_113_itemp;
 }
 
-/* ch114  cheminmo.F:1427-1427  nets:- */
+/* ch114  cheminmo.F:1428-1428  nets:- */
 double rate_ch114(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_114_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1271,7 +1271,7 @@ double rate_ch114(double temp, const ChemGlobals& g) {
     return v_chtab_114_itemp;
 }
 
-/* ch115  cheminmo.F:1439-1442  nets:- */
+/* ch115  cheminmo.F:1440-1443  nets:- */
 double rate_ch115(double temp, const ChemGlobals& g) {
     double v_chtab_115_itemp = GUARD_NAN;
     if ((temp <= 5e3)) {
@@ -1282,7 +1282,7 @@ double rate_ch115(double temp, const ChemGlobals& g) {
     return v_chtab_115_itemp;
 }
 
-/* ch116  cheminmo.F:1452-1452  nets:- */
+/* ch116  cheminmo.F:1453-1453  nets:- */
 double rate_ch116(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_116_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1290,7 +1290,7 @@ double rate_ch116(double temp, const ChemGlobals& g) {
     return v_chtab_116_itemp;
 }
 
-/* ch117  cheminmo.F:1458-1458  nets:- */
+/* ch117  cheminmo.F:1459-1459  nets:- */
 double rate_ch117(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_117_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1298,7 +1298,7 @@ double rate_ch117(double temp, const ChemGlobals& g) {
     return v_chtab_117_itemp;
 }
 
-/* ch118  cheminmo.F:1464-1465  nets:- */
+/* ch118  cheminmo.F:1465-1466  nets:- */
 double rate_ch118(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_118_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1306,7 +1306,7 @@ double rate_ch118(double temp, const ChemGlobals& g) {
     return v_chtab_118_itemp;
 }
 
-/* ch119  cheminmo.F:1471-1471  nets:- */
+/* ch119  cheminmo.F:1472-1472  nets:- */
 double rate_ch119(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_119_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1314,7 +1314,7 @@ double rate_ch119(double temp, const ChemGlobals& g) {
     return v_chtab_119_itemp;
 }
 
-/* ch120  cheminmo.F:1479-1479  nets:- */
+/* ch120  cheminmo.F:1480-1480  nets:- */
 double rate_ch120(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_120_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1322,7 +1322,7 @@ double rate_ch120(double temp, const ChemGlobals& g) {
     return v_chtab_120_itemp;
 }
 
-/* ch121  cheminmo.F:1492-1492  nets:- */
+/* ch121  cheminmo.F:1493-1493  nets:- */
 double rate_ch121(double temp, const ChemGlobals& g) {
     double v_te = GUARD_NAN, v_si2p_rec_rr = GUARD_NAN, v_si2p_rec_dr = GUARD_NAN, v_chtab_121_itemp = GUARD_NAN;
     v_te = (temp / C_temp_1ev);
@@ -1332,7 +1332,7 @@ double rate_ch121(double temp, const ChemGlobals& g) {
     return v_chtab_121_itemp;
 }
 
-/* ch122  cheminmo.F:1498-1498  nets:- */
+/* ch122  cheminmo.F:1499-1499  nets:- */
 double rate_ch122(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_122_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1340,7 +1340,7 @@ double rate_ch122(double temp, const ChemGlobals& g) {
     return v_chtab_122_itemp;
 }
 
-/* ch123  cheminmo.F:1502-1502  nets:- */
+/* ch123  cheminmo.F:1503-1503  nets:- */
 double rate_ch123(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_123_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1348,7 +1348,7 @@ double rate_ch123(double temp, const ChemGlobals& g) {
     return v_chtab_123_itemp;
 }
 
-/* ch124  cheminmo.F:1509-1512  nets:- */
+/* ch124  cheminmo.F:1510-1513  nets:- */
 double rate_ch124(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_124_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1360,7 +1360,7 @@ double rate_ch124(double temp, const ChemGlobals& g) {
     return v_chtab_124_itemp;
 }
 
-/* ch125  cheminmo.F:1521-1525  nets:- */
+/* ch125  cheminmo.F:1522-1526  nets:- */
 double rate_ch125(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_125_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1372,14 +1372,14 @@ double rate_ch125(double temp, const ChemGlobals& g) {
     return v_chtab_125_itemp;
 }
 
-/* ch126  cheminmo.F:1538-1539  nets:17 */
+/* ch126  cheminmo.F:1539-1540  nets:17 */
 double rate_ch126(double temp, const ChemGlobals& g) {
     double v_chtab_126_itemp = GUARD_NAN;
     v_chtab_126_itemp = ((2.7e-8 * pow(temp, (-1.27e0))) * exp((-(4.3e4 / temp))));
     return v_chtab_126_itemp;
 }
 
-/* ch127  cheminmo.F:1547-1547  nets:17 */
+/* ch127  cheminmo.F:1548-1548  nets:17 */
 double rate_ch127(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_127_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1387,7 +1387,7 @@ double rate_ch127(double temp, const ChemGlobals& g) {
     return v_chtab_127_itemp;
 }
 
-/* ch128  cheminmo.F:1553-1554  nets:- */
+/* ch128  cheminmo.F:1554-1555  nets:- */
 double rate_ch128(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_128_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1395,63 +1395,63 @@ double rate_ch128(double temp, const ChemGlobals& g) {
     return v_chtab_128_itemp;
 }
 
-/* ch129  cheminmo.F:1564-1564  nets:- */
+/* ch129  cheminmo.F:1565-1565  nets:- */
 double rate_ch129(double temp, const ChemGlobals& g) {
     double v_chtab_129_itemp = GUARD_NAN;
     v_chtab_129_itemp = (7.2e-8 / sqrt(temp));
     return v_chtab_129_itemp;
 }
 
-/* ch130  cheminmo.F:1570-1570  nets:- */
+/* ch130  cheminmo.F:1571-1571  nets:- */
 double rate_ch130(double temp, const ChemGlobals& g) {
     double v_chtab_130_itemp = GUARD_NAN;
     v_chtab_130_itemp = (1.0e-9 * exp((-(1.54e2 / temp))));
     return v_chtab_130_itemp;
 }
 
-/* ch131  cheminmo.F:1576-1576  nets:- */
+/* ch131  cheminmo.F:1577-1577  nets:- */
 double rate_ch131(double temp, const ChemGlobals& g) {
     double v_chtab_131_itemp = GUARD_NAN;
     v_chtab_131_itemp = (6e-9 * exp((-(5.09e4 / temp))));
     return v_chtab_131_itemp;
 }
 
-/* ch132  cheminmo.F:1582-1582  nets:- */
+/* ch132  cheminmo.F:1583-1583  nets:- */
 double rate_ch132(double temp, const ChemGlobals& g) {
     double v_chtab_132_itemp = GUARD_NAN;
     v_chtab_132_itemp = (6e-9 * exp((-(5.09e4 / temp))));
     return v_chtab_132_itemp;
 }
 
-/* ch133  cheminmo.F:1588-1588  nets:- */
+/* ch133  cheminmo.F:1589-1589  nets:- */
 double rate_ch133(double temp, const ChemGlobals& g) {
     double v_chtab_133_itemp = GUARD_NAN;
     v_chtab_133_itemp = (5.8e-9 * exp((-(5.29e4 / temp))));
     return v_chtab_133_itemp;
 }
 
-/* ch134  cheminmo.F:1594-1594  nets:- */
+/* ch134  cheminmo.F:1595-1595  nets:- */
 double rate_ch134(double temp, const ChemGlobals& g) {
     double v_chtab_134_itemp = GUARD_NAN;
     v_chtab_134_itemp = (5.8e-9 * exp((-(5.29e4 / temp))));
     return v_chtab_134_itemp;
 }
 
-/* ch135  cheminmo.F:693-693  nets:- */
+/* ch135  cheminmo.F:694-694  nets:- */
 double rate_ch135(double temp, const ChemGlobals& g) {
     double v_chtab_135_itemp = GUARD_NAN;
     v_chtab_135_itemp = (5.115e3 * pow(temp, 3.903e-7));
     return v_chtab_135_itemp;
 }
 
-/* ch136  cheminmo.F:695-695  nets:- */
+/* ch136  cheminmo.F:696-696  nets:- */
 double rate_ch136(double temp, const ChemGlobals& g) {
     double v_chtab_136_itemp = GUARD_NAN;
     v_chtab_136_itemp = ((-0.4956e0) - (5.494e-7 * log(temp)));
     return v_chtab_136_itemp;
 }
 
-/* ch137  cheminmo.F:1612-1621  nets:17 */
+/* ch137  cheminmo.F:1613-1622  nets:17 */
 double rate_ch137(double temp, const ChemGlobals& g) {
     double v_tfix = GUARD_NAN, v_chtab_137_itemp = GUARD_NAN;
     if ((g.iflag_3bh2a == 1)) {
@@ -1473,14 +1473,14 @@ double rate_ch137(double temp, const ChemGlobals& g) {
     return v_chtab_137_itemp;
 }
 
-/* ch138  cheminmo.F:1609-1609  nets:17 */
+/* ch138  cheminmo.F:1610-1610  nets:17 */
 double rate_ch138(double temp, const ChemGlobals& g) {
     double v_chtab_138_itemp = GUARD_NAN;
     v_chtab_138_itemp = ((6.6e-10 * pow(temp, 0.115f)) * exp((-(5.2e4 / temp))));
     return v_chtab_138_itemp;
 }
 
-/* ch139  cheminmo.F:1616-1628  nets:17 */
+/* ch139  cheminmo.F:1617-1629  nets:17 */
 double rate_ch139(double temp, const ChemGlobals& g) {
     double v_tfix = GUARD_NAN, v_chtab_139_itemp = GUARD_NAN;
     if ((g.iflag_3bh2a == 1)) {
@@ -1503,7 +1503,7 @@ double rate_ch139(double temp, const ChemGlobals& g) {
     return v_chtab_139_itemp;
 }
 
-/* ch140  cheminmo.F:1632-1633  nets:- */
+/* ch140  cheminmo.F:1633-1634  nets:- */
 double rate_ch140(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_140_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1511,14 +1511,14 @@ double rate_ch140(double temp, const ChemGlobals& g) {
     return v_chtab_140_itemp;
 }
 
-/* ch141  cheminmo.F:1637-1637  nets:- */
+/* ch141  cheminmo.F:1638-1638  nets:- */
 double rate_ch141(double temp, const ChemGlobals& g) {
     double v_chtab_141_itemp = GUARD_NAN;
     v_chtab_141_itemp = (1.0e-10 * exp((-(7.6e3 / temp))));
     return v_chtab_141_itemp;
 }
 
-/* ch142  cheminmo.F:1641-1641  nets:- */
+/* ch142  cheminmo.F:1642-1642  nets:- */
 double rate_ch142(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_142_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1526,7 +1526,7 @@ double rate_ch142(double temp, const ChemGlobals& g) {
     return v_chtab_142_itemp;
 }
 
-/* ch143  cheminmo.F:1645-1646  nets:- */
+/* ch143  cheminmo.F:1646-1647  nets:- */
 double rate_ch143(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_143_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1534,49 +1534,49 @@ double rate_ch143(double temp, const ChemGlobals& g) {
     return v_chtab_143_itemp;
 }
 
-/* ch144  cheminmo.F:1652-1652  nets:17 */
+/* ch144  cheminmo.F:1653-1653  nets:17 */
 double rate_ch144(double temp, const ChemGlobals& g) {
     double v_chtab_144_itemp = GUARD_NAN;
     v_chtab_144_itemp = ((1.2e-17 * pow(temp, 1.2f)) * exp((-(1.578e5 / temp))));
     return v_chtab_144_itemp;
 }
 
-/* ch145  cheminmo.F:1659-1659  nets:- */
+/* ch145  cheminmo.F:1660-1660  nets:- */
 double rate_ch145(double temp, const ChemGlobals& g) {
     double v_chtab_145_itemp = GUARD_NAN;
     v_chtab_145_itemp = (1.1e-17 * sqrt(temp));
     return v_chtab_145_itemp;
 }
 
-/* ch146  cheminmo.F:1663-1663  nets:- */
+/* ch146  cheminmo.F:1664-1664  nets:- */
 double rate_ch146(double temp, const ChemGlobals& g) {
     double v_chtab_146_itemp = GUARD_NAN;
     v_chtab_146_itemp = (3.8e-10 / pow(temp, 0.65f));
     return v_chtab_146_itemp;
 }
 
-/* ch147  cheminmo.F:1667-1667  nets:- */
+/* ch147  cheminmo.F:1668-1668  nets:- */
 double rate_ch147(double temp, const ChemGlobals& g) {
     double v_chtab_147_itemp = GUARD_NAN;
     v_chtab_147_itemp = (5.8e-12 * sqrt(temp));
     return v_chtab_147_itemp;
 }
 
-/* ch148  cheminmo.F:1673-1673  nets:- */
+/* ch148  cheminmo.F:1674-1674  nets:- */
 double rate_ch148(double temp, const ChemGlobals& g) {
     double v_chtab_148_itemp = GUARD_NAN;
     v_chtab_148_itemp = ((1.2e-17 * pow(temp, 1.2e0)) * exp((-(1.5782e5 / temp))));
     return v_chtab_148_itemp;
 }
 
-/* ch149  cheminmo.F:1681-1681  nets:- */
+/* ch149  cheminmo.F:1682-1682  nets:- */
 double rate_ch149(double temp, const ChemGlobals& g) {
     double v_chtab_149_itemp = GUARD_NAN;
     v_chtab_149_itemp = ((1e-12 * sqrt(temp)) * exp((-(3.1e4 / temp))));
     return v_chtab_149_itemp;
 }
 
-/* ch150  cheminmo.F:1687-1687  nets:- */
+/* ch150  cheminmo.F:1688-1688  nets:- */
 double rate_ch150(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_150_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1584,14 +1584,14 @@ double rate_ch150(double temp, const ChemGlobals& g) {
     return v_chtab_150_itemp;
 }
 
-/* ch151  cheminmo.F:1693-1693  nets:- */
+/* ch151  cheminmo.F:1694-1694  nets:- */
 double rate_ch151(double temp, const ChemGlobals& g) {
     double v_chtab_151_itemp = GUARD_NAN;
     v_chtab_151_itemp = (3.75e-11 * exp((-(26e0 / temp))));
     return v_chtab_151_itemp;
 }
 
-/* ch152  cheminmo.F:1705-1705  nets:- */
+/* ch152  cheminmo.F:1706-1706  nets:- */
 double rate_ch152(double temp, const ChemGlobals& g) {
     double v_temp3 = GUARD_NAN, v_chtab_152_itemp = GUARD_NAN;
     v_temp3 = (temp / 3e2);
@@ -1599,35 +1599,35 @@ double rate_ch152(double temp, const ChemGlobals& g) {
     return v_chtab_152_itemp;
 }
 
-/* ch153  cheminmo.F:1712-1712  nets:17 */
+/* ch153  cheminmo.F:1713-1713  nets:17 */
 double rate_ch153(double temp, const ChemGlobals& g) {
     double v_chtab_153_itemp = GUARD_NAN;
     v_chtab_153_itemp = (3.0e-8 * pow((temp / 3e2), (-0.47e0)));
     return v_chtab_153_itemp;
 }
 
-/* ch154  cheminmo.F:1716-1716  nets:17 */
+/* ch154  cheminmo.F:1717-1717  nets:17 */
 double rate_ch154(double temp, const ChemGlobals& g) {
     double v_chtab_154_itemp = GUARD_NAN;
     v_chtab_154_itemp = (3.0e-10 * exp((-(6.72e3 / temp))));
     return v_chtab_154_itemp;
 }
 
-/* ch155  cheminmo.F:1722-1723  nets:17 */
+/* ch155  cheminmo.F:1723-1724  nets:17 */
 double rate_ch155(double temp, const ChemGlobals& g) {
     double v_chtab_155_itemp = GUARD_NAN;
     v_chtab_155_itemp = ((8.0e-20 * pow((temp / 3e2), (-0.24e0))) * exp((-(temp / 4000))));
     return v_chtab_155_itemp;
 }
 
-/* ch156  cheminmo.F:1729-1730  nets:17 */
+/* ch156  cheminmo.F:1730-1731  nets:17 */
 double rate_ch156(double temp, const ChemGlobals& g) {
     double v_chtab_156_itemp = GUARD_NAN;
     v_chtab_156_itemp = ((1.04e-9 * pow((temp / 3e2), 0.13e0)) * exp((-(temp / 3.31e4))));
     return v_chtab_156_itemp;
 }
 
-/* ch157  cheminmo.F:1743-1747  nets:17 */
+/* ch157  cheminmo.F:1744-1748  nets:17 */
 double rate_ch157(double temp, const ChemGlobals& g) {
     double v_tfix = GUARD_NAN, v_chtab_157_itemp = GUARD_NAN;
     if ((g.iflag_3bh2a == 1)) {
@@ -1653,28 +1653,28 @@ double rate_ch157(double temp, const ChemGlobals& g) {
     return v_chtab_157_itemp;
 }
 
-/* ch158  cheminmo.F:1752-1752  nets:17 */
+/* ch158  cheminmo.F:1753-1753  nets:17 */
 double rate_ch158(double temp, const ChemGlobals& g) {
     double v_chtab_158_itemp = GUARD_NAN;
     v_chtab_158_itemp = ((1.75e-17 * pow(temp, 1.3f)) * exp((-(1.578e5 / temp))));
     return v_chtab_158_itemp;
 }
 
-/* ch159  cheminmo.F:1757-1757  nets:17 */
+/* ch159  cheminmo.F:1758-1758  nets:17 */
 double rate_ch159(double temp, const ChemGlobals& g) {
     double v_chtab_159_itemp = GUARD_NAN;
     v_chtab_159_itemp = ((1.54e-12 * pow(temp, 0.45f)) * exp((-(3.1e4 / temp))));
     return v_chtab_159_itemp;
 }
 
-/* ch160  cheminmo.F:1762-1763  nets:17 */
+/* ch160  cheminmo.F:1763-1764  nets:17 */
 double rate_ch160(double temp, const ChemGlobals& g) {
     double v_chtab_160_itemp = GUARD_NAN;
     v_chtab_160_itemp = exp(((((-32.912f) + (6.9498e-5 * temp)) - (3.3248e4 / temp)) - (4.08e-9 * fpowi(temp, 2))));
     return v_chtab_160_itemp;
 }
 
-/* ch161  cheminmo.F:1778-1782  nets:17 */
+/* ch161  cheminmo.F:1779-1783  nets:17 */
 double rate_ch161(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_161_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1688,7 +1688,7 @@ double rate_ch161(double temp, const ChemGlobals& g) {
     return v_chtab_161_itemp;
 }
 
-/* ch162  cheminmo.F:1783-1783  nets:17 */
+/* ch162  cheminmo.F:1784-1784  nets:17 */
 double rate_ch162(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_162_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1702,7 +1702,7 @@ double rate_ch162(double temp, const ChemGlobals& g) {
     return v_chtab_162_itemp;
 }
 
-/* ch163  cheminmo.F:1785-1788  nets:17 */
+/* ch163  cheminmo.F:1786-1789  nets:17 */
 double rate_ch163(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_163_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1716,7 +1716,7 @@ double rate_ch163(double temp, const ChemGlobals& g) {
     return v_chtab_163_itemp;
 }
 
-/* ch164  cheminmo.F:1789-1789  nets:17 */
+/* ch164  cheminmo.F:1790-1790  nets:17 */
 double rate_ch164(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_164_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1730,7 +1730,7 @@ double rate_ch164(double temp, const ChemGlobals& g) {
     return v_chtab_164_itemp;
 }
 
-/* ch165  cheminmo.F:1791-1794  nets:17 */
+/* ch165  cheminmo.F:1792-1795  nets:17 */
 double rate_ch165(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_165_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1744,7 +1744,7 @@ double rate_ch165(double temp, const ChemGlobals& g) {
     return v_chtab_165_itemp;
 }
 
-/* ch166  cheminmo.F:1795-1797  nets:17 */
+/* ch166  cheminmo.F:1796-1798  nets:17 */
 double rate_ch166(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_166_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1758,7 +1758,7 @@ double rate_ch166(double temp, const ChemGlobals& g) {
     return v_chtab_166_itemp;
 }
 
-/* ch167  cheminmo.F:1799-1803  nets:17 */
+/* ch167  cheminmo.F:1800-1804  nets:17 */
 double rate_ch167(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_167_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1772,7 +1772,7 @@ double rate_ch167(double temp, const ChemGlobals& g) {
     return v_chtab_167_itemp;
 }
 
-/* ch168  cheminmo.F:1804-1804  nets:17 */
+/* ch168  cheminmo.F:1805-1805  nets:17 */
 double rate_ch168(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_168_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1786,7 +1786,7 @@ double rate_ch168(double temp, const ChemGlobals& g) {
     return v_chtab_168_itemp;
 }
 
-/* ch169  cheminmo.F:1806-1809  nets:17 */
+/* ch169  cheminmo.F:1807-1810  nets:17 */
 double rate_ch169(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_169_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1800,7 +1800,7 @@ double rate_ch169(double temp, const ChemGlobals& g) {
     return v_chtab_169_itemp;
 }
 
-/* ch170  cheminmo.F:1810-1810  nets:17 */
+/* ch170  cheminmo.F:1811-1811  nets:17 */
 double rate_ch170(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_170_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1814,7 +1814,7 @@ double rate_ch170(double temp, const ChemGlobals& g) {
     return v_chtab_170_itemp;
 }
 
-/* ch171  cheminmo.F:1812-1815  nets:17 */
+/* ch171  cheminmo.F:1813-1816  nets:17 */
 double rate_ch171(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_171_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1828,7 +1828,7 @@ double rate_ch171(double temp, const ChemGlobals& g) {
     return v_chtab_171_itemp;
 }
 
-/* ch172  cheminmo.F:1816-1818  nets:17 */
+/* ch172  cheminmo.F:1817-1819  nets:17 */
 double rate_ch172(double temp, const ChemGlobals& g) {
     double v_temp_msm = GUARD_NAN, v_chtab_172_itemp = GUARD_NAN;
     if ((temp > 4.5e4)) {
@@ -1842,168 +1842,168 @@ double rate_ch172(double temp, const ChemGlobals& g) {
     return v_chtab_172_itemp;
 }
 
-/* ch173  cheminmo.F:1822-1823  nets:17 */
+/* ch173  cheminmo.F:1823-1824  nets:17 */
 double rate_ch173(double temp, const ChemGlobals& g) {
     double v_chtab_173_itemp = GUARD_NAN;
     v_chtab_173_itemp = (1e6 * exp(((((-33.081f) + (6.3173e-5 * temp)) - (2.3478e4 / temp)) - (1.8691e-9 * fpowi(temp, 2)))));
     return v_chtab_173_itemp;
 }
 
-/* cr1  cheminmo.F:1859-1859  nets:5,17 */
+/* cr1  cheminmo.F:1860-1860  nets:5,17 */
 double rate_cr1(double temp, const ChemGlobals& g) {
     double v_crtab_1 = GUARD_NAN;
     v_crtab_1 = 1e0;
     return v_crtab_1;
 }
 
-/* cr2  cheminmo.F:1863-1863  nets:5,17 */
+/* cr2  cheminmo.F:1864-1864  nets:5,17 */
 double rate_cr2(double temp, const ChemGlobals& g) {
     double v_crtab_2 = GUARD_NAN;
     v_crtab_2 = 2e0;
     return v_crtab_2;
 }
 
-/* cr3  cheminmo.F:1870-1870  nets:- */
+/* cr3  cheminmo.F:1871-1871  nets:- */
 double rate_cr3(double temp, const ChemGlobals& g) {
     double v_crtab_3 = GUARD_NAN;
     v_crtab_3 = 3.83e0;
     return v_crtab_3;
 }
 
-/* cr4  cheminmo.F:1874-1874  nets:- */
+/* cr4  cheminmo.F:1875-1875  nets:- */
 double rate_cr4(double temp, const ChemGlobals& g) {
     double v_crtab_4 = GUARD_NAN;
     v_crtab_4 = 5.67e0;
     return v_crtab_4;
 }
 
-/* cr5  cheminmo.F:1878-1878  nets:- */
+/* cr5  cheminmo.F:1879-1879  nets:- */
 double rate_cr5(double temp, const ChemGlobals& g) {
     double v_crtab_5 = GUARD_NAN;
     v_crtab_5 = 6.5e0;
     return v_crtab_5;
 }
 
-/* cr6  cheminmo.F:1882-1882  nets:17 */
+/* cr6  cheminmo.F:1883-1883  nets:17 */
 double rate_cr6(double temp, const ChemGlobals& g) {
     double v_crtab_6 = GUARD_NAN;
     v_crtab_6 = 1.09e0;
     return v_crtab_6;
 }
 
-/* cr7  cheminmo.F:1886-1886  nets:- */
+/* cr7  cheminmo.F:1887-1887  nets:- */
 double rate_cr7(double temp, const ChemGlobals& g) {
     double v_crtab_7 = GUARD_NAN;
     v_crtab_7 = 2.5e0;
     return v_crtab_7;
 }
 
-/* cr9  cheminmo.F:1890-1890  nets:- */
+/* cr9  cheminmo.F:1891-1891  nets:- */
 double rate_cr9(double temp, const ChemGlobals& g) {
     double v_crtab_9 = GUARD_NAN;
     v_crtab_9 = 6.52e0;
     return v_crtab_9;
 }
 
-/* cr10  cheminmo.F:1864-1864  nets:5 */
+/* cr10  cheminmo.F:1865-1865  nets:5 */
 double rate_cr10(double temp, const ChemGlobals& g) {
     double v_crtab_10 = GUARD_NAN;
     v_crtab_10 = 3.7e-2;
     return v_crtab_10;
 }
 
-/* cr11  cheminmo.F:1865-1865  nets:5 */
+/* cr11  cheminmo.F:1866-1866  nets:5 */
 double rate_cr11(double temp, const ChemGlobals& g) {
     double v_crtab_11 = GUARD_NAN;
     v_crtab_11 = 2.2e-1;
     return v_crtab_11;
 }
 
-/* cr12  cheminmo.F:1866-1866  nets:- */
+/* cr12  cheminmo.F:1867-1867  nets:- */
 double rate_cr12(double temp, const ChemGlobals& g) {
     double v_crtab_12 = GUARD_NAN;
     v_crtab_12 = 6.5e-4;
     return v_crtab_12;
 }
 
-/* crphot1  cheminmo.F:1895-1895  nets:- */
+/* crphot1  cheminmo.F:1896-1896  nets:- */
 double rate_crphot1(double temp, const ChemGlobals& g) {
     double v_crphot_1 = GUARD_NAN;
     v_crphot_1 = 2.8e3;
     return v_crphot_1;
 }
 
-/* crphot2  cheminmo.F:1897-1897  nets:- */
+/* crphot2  cheminmo.F:1898-1898  nets:- */
 double rate_crphot2(double temp, const ChemGlobals& g) {
     double v_crphot_2 = GUARD_NAN;
     v_crphot_2 = 4e3;
     return v_crphot_2;
 }
 
-/* crphot3  cheminmo.F:1899-1899  nets:- */
+/* crphot3  cheminmo.F:1900-1900  nets:- */
 double rate_crphot3(double temp, const ChemGlobals& g) {
     double v_crphot_3 = GUARD_NAN;
     v_crphot_3 = 9.6e2;
     return v_crphot_3;
 }
 
-/* crphot4  cheminmo.F:1901-1901  nets:- */
+/* crphot4  cheminmo.F:1902-1902  nets:- */
 double rate_crphot4(double temp, const ChemGlobals& g) {
     double v_crphot_4 = GUARD_NAN;
     v_crphot_4 = 2.7e3;
     return v_crphot_4;
 }
 
-/* crphot5  cheminmo.F:1903-1903  nets:- */
+/* crphot5  cheminmo.F:1904-1904  nets:- */
 double rate_crphot5(double temp, const ChemGlobals& g) {
     double v_crphot_5 = GUARD_NAN;
     v_crphot_5 = 2.7e3;
     return v_crphot_5;
 }
 
-/* crphot6  cheminmo.F:1905-1905  nets:- */
+/* crphot6  cheminmo.F:1906-1906  nets:- */
 double rate_crphot6(double temp, const ChemGlobals& g) {
     double v_crphot_6 = GUARD_NAN;
     v_crphot_6 = 1.3e3;
     return v_crphot_6;
 }
 
-/* crphot7  cheminmo.F:1907-1907  nets:- */
+/* crphot7  cheminmo.F:1908-1908  nets:- */
 double rate_crphot7(double temp, const ChemGlobals& g) {
     double v_crphot_7 = GUARD_NAN;
     v_crphot_7 = 2.8e3;
     return v_crphot_7;
 }
 
-/* crphot8  cheminmo.F:1909-1909  nets:- */
+/* crphot8  cheminmo.F:1910-1910  nets:- */
 double rate_crphot8(double temp, const ChemGlobals& g) {
     double v_crphot_8 = GUARD_NAN;
     v_crphot_8 = 5.3e3;
     return v_crphot_8;
 }
 
-/* crphot9  cheminmo.F:1911-1911  nets:- */
+/* crphot9  cheminmo.F:1912-1912  nets:- */
 double rate_crphot9(double temp, const ChemGlobals& g) {
     double v_crphot_9 = GUARD_NAN;
     v_crphot_9 = 4.1e3;
     return v_crphot_9;
 }
 
-/* crphot10  cheminmo.F:1913-1913  nets:- */
+/* crphot10  cheminmo.F:1914-1914  nets:- */
 double rate_crphot10(double temp, const ChemGlobals& g) {
     double v_crphot_10 = GUARD_NAN;
     v_crphot_10 = 6.4e2;
     return v_crphot_10;
 }
 
-/* crphot11  cheminmo.F:1915-1915  nets:- */
+/* crphot11  cheminmo.F:1916-1916  nets:- */
 double rate_crphot11(double temp, const ChemGlobals& g) {
     double v_crphot_11 = GUARD_NAN;
     v_crphot_11 = 0.21e0;
     return v_crphot_11;
 }
 
-/* crphot12  cheminmo.F:1920-1920  nets:- */
+/* crphot12  cheminmo.F:1921-1921  nets:- */
 double rate_crphot12(double temp, const ChemGlobals& g) {
     double v_crphot_12 = GUARD_NAN;
     v_crphot_12 = 5.2e3;

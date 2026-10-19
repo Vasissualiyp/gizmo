@@ -316,7 +316,8 @@ c  H_2 reformation on dust. Remainder of HM79 expression is calculated
 c  when we actually use the rate. [We can't pre-calculate it as it depends
 c  on tdust, which may vary]
 c
-         chtab(7,itemp) = dust_to_gas_ratio * deff * 3d-17 * temp2**.5d0
+c  per unit dust_to_gas_ratio: calc_dust_temp applies the cell's value
+         chtab(7,itemp) = deff * 3d-17 * temp2**.5d0
 c
 c He+ + H-  -> He + H
 c

@@ -252,7 +252,7 @@ c
       ch4  = chtab(4, itemp) + dtemp * dtch4
       ch5  = chtab(5, itemp) + dtemp * dtch5
       ch6  = chtab(6, itemp) + dtemp * dtch6
-      ch7  = chtab(7, itemp) + dtemp * dtch7
+      ch7  = (chtab(7, itemp) + dtemp * dtch7) * dust_to_gas_ratio
       ch8  = chtab(8, itemp) + dtemp * dtch8
       ch9  = chtab(9, itemp) + dtemp * dtch9
       ch10 = chtab(10, itemp) + dtemp * dtch10

@@ -827,7 +827,8 @@ c=======================================================================
           dtemp = temp - temptab(itemp)
         endif
 c
-        ch7  = chtab(7, itemp) + dtemp * dtchtab(7, itemp)
+        ch7  = (chtab(7, itemp) + dtemp * dtchtab(7, itemp))
+     $         * dust_to_gas_ratio
         cl14 = cltab(14,itemp) + dtemp * dtcltab(14,itemp)
 c
         if (nocalc .eq. 1) then
