@@ -78,6 +78,7 @@ c      REAL       HeII_tbl(51)
       REAL       abundances(nabn)
       REAL       ynh2      , ynh     , yne     , ynhp       , ynhd
       REAL       ynhe
+      REAL       qcr, qcr_HI, qcr_H2, logn
       REAL       rates(nrates)
 c
       REAL       ylam      , lnh       , r19scale
@@ -836,7 +837,26 @@ c       -- following Goldsmith & Langer (1978), we assume that
 c          each ionization deposits 20eV as heat
 c
       if (iflag_cmb .eq. 0) then
+#if CHEMISTRYNETWORK == 16
+c       Gong+17: Draine (2011) for HI, Krumholz (2014) for H2
+        qcr_HI = 6.5d0 + 26.4d0 * dsqrt(abe / (abe + 0.07d0))
+        logn = log10(yn)
+        if (logn .le. 2d0) then
+          qcr_H2 = 1d1
+        elseif (logn .lt. 4d0) then
+          qcr_H2 = 1d1 + 3d0 * (logn - 2d0) / 2d0
+        elseif (logn .lt. 7d0) then
+          qcr_H2 = 1.3d1 + 4d0 * (logn - 4d0) / 3d0
+        elseif (logn .lt. 1d1) then
+          qcr_H2 = 1.7d1 + (logn - 7d0) / 3d0
+        else
+          qcr_H2 = 1.8d1
+        endif
+        qcr = (abHI * qcr_HI + 2d0 * abh2 * qcr_H2) * 1.6d-12
+        rates(11) = - qcr * (ynh2 + ynh) * cosmic_ray_ion_rate
+#else
         rates(11) =  -3.2d-11 * (ynh2 + ynh) * cosmic_ray_ion_rate
+#endif
 #ifdef CR_HEATING_DM72
         rates(11) = -1d-11 * (ynh2 + ynh + yne) * cosmic_ray_ion_rate *
      $              (1d0 + 4.1d0 * dsqrt(abe / (abe + 7d-2) ) )

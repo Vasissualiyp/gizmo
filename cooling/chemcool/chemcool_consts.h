@@ -445,7 +445,7 @@
 #define IN2HP UNUSED
 #endif
 
-#if CHEMISTRYNETWORK == 15  /* Nelson & Langer 1999 */
+#if CHEMISTRYNETWORK == 15 || CHEMISTRYNETWORK == 16  /* Nelson & Langer 1999; Gong+17 (16) uses the same slots, M = Si */
 #define TRAC_NUM 9
 #define NSPEC 10
 #define IH2   0
@@ -602,7 +602,7 @@
 #if CHEMISTRYNETWORK == 9
 #define  NRATES_CHEM 5
 #endif
-#if CHEMISTRYNETWORK == 15
+#if CHEMISTRYNETWORK == 15 || CHEMISTRYNETWORK == 16
 #define  NRATES_CHEM 6
 #endif
 #if CHEMISTRYNETWORK == 17
@@ -614,12 +614,24 @@
 
 #define  COOL_EPS 1d-6
 #define  NCLTAB 67
+#if CHEMISTRYNETWORK == 16  /* Gong+17 adds chtab 174-181, crphot 13, cst 92-94 */
+#define  NCHTAB 181
+#else
 #define  NCHTAB 173
+#endif
 #define  NCRTAB 12
+#if CHEMISTRYNETWORK == 16
+#define  NCRPHOT 13
+#else
 #define  NCRPHOT 12
+#endif
 #define  NPHTAB 54
 #define  NPR 54
+#if CHEMISTRYNETWORK == 16
+#define  NCONST 94
+#else
 #define  NCONST 91
+#endif
 #define  ELECTRON_VOLT 1.60219e-12
 #define  BOLTZMANN   1.38066e-16
 #define  PROTONMASS  1.6726e-24

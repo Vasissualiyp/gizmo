@@ -53,7 +53,12 @@ c (ph2) -- CI ionization
 c 
 c  Rate from UMIST99, based on vD88.
 c
+#if CHEMISTRYNETWORK == 16
+c Rate from Heays et al (2017)
+      phtab(2) = 2.059d-10
+#else
       phtab(2) = 1.765d-10
+#endif
 c
 c (ph3) -- SiI ionization
 c
@@ -276,15 +281,27 @@ c
 c
 c (ph48): Photodissociation of CHx [NL99]
 c
+#if CHEMISTRYNETWORK == 16
+      phtab(48) = 5.35d-10
+#else
       phtab(48) = 1d-9
+#endif
 c
 c (ph49): Photodissociation of OHx [NL99]
 c
+#if CHEMISTRYNETWORK == 16
+      phtab(49) = 2.235d-10
+#else
       phtab(49) = 5d-10
+#endif
 c
 c (ph50): Photodissociation of HCO+ [NL99]
 c
+#if CHEMISTRYNETWORK == 16
+      phtab(50) = 0d0
+#else
       phtab(50) = 1.5d-10
+#endif
 c
 c (ph51): Photoionization of M [NL99]
 c

@@ -150,6 +150,7 @@ c
       REAL heii_rec_di, heii_rec_gs, heii_rec_A, heii_rec_B 
 c
       REAL si2p_rec_rr, si2p_rec_dr
+      REAL rr_alpha, rr_beta, rr_gamma, cp_rr, cp_dr
 c
       REAL NCO, NH2, dN
 
@@ -697,6 +698,25 @@ c
 c
 c CII gas-phase recombination (radiative plus dielectronic) [case A rate]
 c
+#if CHEMISTRYNETWORK == 16
+c Rates from Badnell (2006) [RR], plus Badnell's website [DR] (as in SGChem)
+          rr_alpha = dsqrt(temp / 6.67d-3)
+          rr_beta  = dsqrt(temp / 1.943d6)
+          rr_gamma = 0.7849d0 + 0.1597d0 * dexp(-4.955d4 / temp)
+          cp_rr    = 2.995d-9 / (rr_alpha
+     $             * (1d0 + rr_alpha)**(1d0 - rr_gamma)
+     $             * (1d0 + rr_beta)**(1d0 + rr_gamma))
+          if (temp .lt. 1d1) then
+            cp_dr = 5.96d-11
+          else
+            cp_dr  = temp**(-1.5d0) * (6.346d-09 * dexp(-1.217d1 / temp)
+     $             + 9.793d-09 * dexp(-7.38d1  / temp)
+     $             + 1.634d-06 * dexp(-1.523d4 / temp)
+     $             + 8.369d-04 * dexp(-1.207d5 / temp)
+     $             + 3.355d-04 * dexp(-2.144d5 / temp))
+          endif
+          chtab(40, itemp) = cp_rr + cp_dr
+#else
 c Based on data from NP97, fitting formulae from UMIST database.
 c 
 c Strictly speaking, the UMIST fit is not valid below 10K, but in 
@@ -714,6 +734,7 @@ c
           chtab(40,itemp) = 9.62d-8 * temp3**(-1.37d0) *
      $                      exp(-1.157862d5 / temp)
         endif
+#endif
 c
 c SiII gas-phase recombination (radiative plus dielectronic) [case A rate]
 c
@@ -1665,7 +1686,13 @@ c
 c
 c Formation of CO from OHx [NL99]: C + OHx -> CO + H
 c
+#if CHEMISTRYNETWORK == 16
+c From GONG17, based on Zanchet et al 2009 and Wakelam et al 2010
+        chtab(147, itemp) = 7.95d-10 * temp**(-0.339)
+     $                    * dexp(0.108 / temp)
+#else
         chtab(147, itemp) = 5.8d-12 * dsqrt(temp)
+#endif
 c
 c Collisional ionization of H by H: H + H -> H+ + e- + H
 c (Dominates when fractional ionization v. small or zero)
@@ -1822,6 +1849,34 @@ c H2 + H+ -> H2+ + H, LTE limit; from Coppola et al 2011
 c
         chtab(173, itemp) = 1d6 * dexp(-33.081 + 6.3173d-5 * temp
      $                    - 2.3478d4 / temp - 1.8691d-9 * temp**2)
+#if CHEMISTRYNETWORK == 16
+c Gong et al (2017) network: rates as in SGChem
+c O + H3+ -> products [from GONG17, based on de Ruette et al 2015]
+        chtab(174, itemp) = 1.99d-9 * temp**(-0.19d0)
+c H2O+ dissociative recombination: rate in GONG17, from Wakelam et al 2010
+        chtab(175, itemp) = 5.3d-6 / dsqrt(temp)
+c C+ + H2 -> products: rate from GONG17, taken from Wakelam et al 2010
+        chtab(176, itemp) = 3.3d-13 * temp**(-1.3d0)
+     $                    * dexp(-2.3d1 / temp)
+c C+ + OHx -> HCO+: rate from GONG17, based on Wakelam
+        chtab(177, itemp) = 9.15d-10 * (0.62 + 45.41 / dsqrt(temp))
+c CHx + H -> H2 + C: from GONG17, based on Wakelam et al 2010
+        chtab(178, itemp) = 2.81d-11 * temp**0.26
+c OHx + He+ -> O+ + He + H: from GONG17, based on Wakelam et al 2010
+        chtab(179, itemp) = 1.35d-9 * (0.62 + 45.41 / dsqrt(temp))
+c C + H3+ -> CHx + H2:  rate from Vissapragada et al (2016)
+        chtab(180, itemp) = 1.04d-9 * temp3**(-0.00231) + temp**(-1.5d0)
+     $                    * (3.40d-8 * dexp(-7.62d0/temp)
+     $                    +  6.97d-9 * dexp(-1.38d0/temp)
+     $                    +  1.31d-7 * dexp(-2.66d1/temp)
+     $                    +  1.51d-4 * dexp(-8.11d3/temp))
+c CHx + He+ -> C+ + He + H: UMIST12 (PH80), capped above 41000 K
+        if (temp .gt. 41000) then
+          chtab(181, itemp) = 1.1d-9 / dsqrt(4.1d4 / 3d2)
+        else
+          chtab(181, itemp) = 1.1d-9 * temp3**(-0.5d0)
+        endif
+#endif
 c
  200  continue
 c
@@ -1893,7 +1948,11 @@ c
 c Cosmic-ray induced photoprocesses
 c
 c C -> C+ + e-
+#if CHEMISTRYNETWORK == 16
+      crphot(1)  = 5.6d2
+#else
       crphot(1)  = 2.8d3
+#endif
 c CH -> C + H
       crphot(2)  = 4d3
 c CH+ -> C+ + H
@@ -1913,12 +1972,20 @@ c O2 -> O + O
 c O2 -> O2+ + e
       crphot(10) = 6.4d2
 c CO -> C + O
+#if CHEMISTRYNETWORK == 16
+      crphot(11) = 9d1
+#else
       crphot(11) = 0.21d0
+#endif
 c NO -> N + O
 c Note: this is actually the sum of two processes, direct photodissoc.
 c and photoionization to NO+, which we assume then dissociatively 
 c recombines to yield N + O...
       crphot(12) = 5.2d3
+#if CHEMISTRYNETWORK == 16
+c Si -> Si+ + e
+      crphot(13) = 8.4d3
+#endif
 c
 c Setup tables for CO shielding
 c

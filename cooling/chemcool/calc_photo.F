@@ -97,6 +97,7 @@ c
 
       REAL fshield_HD
 
+      REAL df187, df418, df388, df376, df261, df212, df266
       REAL df05, df09, df12, df15, df17, df18, df19, df21, df23,
      $     df24, df25, df28, df30, df31, df37, df38, df39, dfsp1
 
@@ -222,6 +223,15 @@ c
             df15   = dexp(-1.5d0 * AV)
             df17   = dexp(-1.5d0 * AV)
 #endif
+#if CHEMISTRYNETWORK == 16
+            df187  = dexp(-1.87d0 * AV)
+            df418  = dexp(-4.18d0 * AV)
+            df388  = dexp(-3.88d0 * AV)
+            df376  = dexp(-3.76d0 * AV)
+            df261  = dexp(-2.61d0 * AV)
+            df212  = dexp(-2.12d0 * AV)
+            df266  = dexp(-2.66d0 * AV)
+#endif
 #if CHEMISTRYNETWORK == 3 || CHEMISTRYNETWORK == 7 || CHEMISTRYNETWORK == 8 || CHEMISTRYNETWORK == 11
             df09   = dexp(-0.9d0 * AV)
             df12   = dexp(-1.2d0 * AV)
@@ -262,6 +272,13 @@ c
             df38   = 1d0
             df39   = 1d0
             dfsp1  = 1d0
+            df187  = 1d0
+            df418  = 1d0
+            df388  = 1d0
+            df376  = 1d0
+            df261  = 1d0
+            df212  = 1d0
+            df266  = 1d0
             chi_isrf = 1d0
          endif
       elseif (iphoto .eq. 2 .or. iphoto .eq. 6) then
@@ -291,6 +308,13 @@ c override below pins the key ones -- M1 already applied continuum dust attenuat
          df38       = 0d0
          df39       = 0d0
          dfsp1      = 0d0
+         df187      = 0d0
+         df418      = 0d0
+         df388      = 0d0
+         df376      = 0d0
+         df261      = 0d0
+         df212      = 0d0
+         df266      = 0d0
          chi_isrf   = 0d0
 
          nray = NPIX
@@ -339,6 +363,15 @@ c           the other dust factors, per pixel as in the single-AV branch
 #if CHEMISTRYNETWORK == 15
             df15 = df15 + fac_uv_pix * exp(-1.5d0 * AV)
             df17 = df17 + fac_uv_pix * exp(-1.5d0 * AV)
+#endif
+#if CHEMISTRYNETWORK == 16
+            df187 = df187 + fac_uv_pix * exp(-1.87d0 * AV)
+            df418 = df418 + fac_uv_pix * exp(-4.18d0 * AV)
+            df388 = df388 + fac_uv_pix * exp(-3.88d0 * AV)
+            df376 = df376 + fac_uv_pix * exp(-3.76d0 * AV)
+            df261 = df261 + fac_uv_pix * exp(-2.61d0 * AV)
+            df212 = df212 + fac_uv_pix * exp(-2.12d0 * AV)
+            df266 = df266 + fac_uv_pix * exp(-2.66d0 * AV)
 #endif
 #if CHEMISTRYNETWORK == 3 || CHEMISTRYNETWORK == 7 || CHEMISTRYNETWORK == 8 || CHEMISTRYNETWORK == 11
             df09 = df09 + fac_uv_pix * exp(-0.9d0 * AV)
@@ -391,6 +424,13 @@ c
       df38     = 1d0
       df39     = 1d0
       dfsp1    = 1d0
+      df187    = 1d0
+      df418    = 1d0
+      df388    = 1d0
+      df376    = 1d0
+      df261    = 1d0
+      df212    = 1d0
+      df266    = 1d0
 #endif
 c
 c TREE_RAY: the tree walk attenuates the STELLAR bands along each source path
@@ -424,6 +464,13 @@ c
       df38     = 1d0
       df39     = 1d0
       dfsp1    = 1d0
+      df187    = 1d0
+      df418    = 1d0
+      df388    = 1d0
+      df376    = 1d0
+      df261    = 1d0
+      df212    = 1d0
+      df266    = 1d0
 #endif
 c
 c CO self-shielding, shielding by H2.
@@ -586,6 +633,17 @@ c so only the HI terms apply; rt_phot_HI/rt_heat_HI are 0 unless RADTRANSFER.
         goto 212
       endif
 
+#if CHEMISTRYNETWORK == 16
+c Gong+17 (SGChem) dust factors; fshield_C (C column) not yet tracked
+      phrates(1)  = phtab(1)  * G0_LW * df418
+      phrates(2)  = phtab(2)  * G0 * df376
+      phrates(3)  = phtab(3)  * G0 * df261
+      phrates(10) = phtab(10) * G0 * fshield_CO * df388
+      phrates(48) = phtab(48) * G0 * df212
+      phrates(49) = phtab(49) * G0 * df266
+      UNUSED_PARAM(f_simp)
+      goto 212
+#endif
 c Other networks -- shared rates:
       phrates(4) = phtab(4)  * G0 * df05
       phrates(5) = phtab(5)  * G0 * df19
@@ -713,7 +771,11 @@ c recombination and photoelectric heating, which is based on BHRB04.
 c This treatment neglects any variation of the photoelectric 
 c heating efficiency with increasing A_V.
 c
+#if CHEMISTRYNETWORK == 16
+      G_dust = f_rsc * G0 * df187
+#else
       G_dust = f_rsc * G0 * df25
+#endif
 c
 c Optionally, call a user-defined subroutine SPECIAL_PHOTO to override
 c some or all of previous values

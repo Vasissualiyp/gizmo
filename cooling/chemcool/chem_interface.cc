@@ -145,6 +145,9 @@ void chem_fill_inputs(int target, struct ChemInputs *in)
             }
             /* NL99 "M": depleted low-IP metals, CHEMCOOL_ABUNDM_SOLAR per H at solar Z, scaled with the (capped) cell Z */
             in->abundM = CHEMCOOL_ABUNDM_SOLAR * DMIN(Zcell, Zmax_chem) / Z_solar_chem;
+#if CHEMISTRYNETWORK == 16
+            in->abundM = in->abundsi; /* Gong+17: M is silicon */
+#endif
         }
     }
 #else

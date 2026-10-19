@@ -10,6 +10,8 @@ static const double chemcool_trac_molwt[] = {2.0, 1.0, 28.0};
 static const double chemcool_trac_molwt[] = {2.0, 1.0, 28.0, 4.0, 4.0, 2.0, 3.0};
 #elif CHEMISTRYNETWORK == 15     /* H2, H+, C+, CHx, OHx, CO, HCO+, He+, M+ (M: generic low-IP metal, taken as Mg) */
 static const double chemcool_trac_molwt[] = {2.0, 1.0, 12.0, 13.0, 17.0, 28.0, 29.0, 4.0, 24.0};
+#elif CHEMISTRYNETWORK == 16     /* Gong+17: as 15, with M = Si */
+static const double chemcool_trac_molwt[] = {2.0, 1.0, 12.0, 13.0, 17.0, 28.0, 29.0, 4.0, 28.0};
 #elif CHEMISTRYNETWORK == 3      /* H2, H+, C+, Si+, O+, D+, HD, He+, He++, CO, C2, OH, H2O, O2, HCO+, CH, CH2, Si++, CH3+ */
 static const double chemcool_trac_molwt[] = {2.0, 1.0, 12.0, 28.0, 16.0, 2.0, 3.0, 4.0, 4.0, 28.0, 24.0, 17.0, 18.0, 32.0, 29.0, 13.0, 14.0, 28.0, 15.0};
 #else
@@ -26,7 +28,7 @@ static inline double chemcool_electrons(const double *ab, const struct ChemInput
     return ab[IHP] + in->abundc + in->abundsi;
 #elif CHEMISTRYNETWORK == 17
     return ab[IHP] + ab[IHEP] + 2.0*ab[IHEPP] + in->abundc + in->abundsi;
-#elif CHEMISTRYNETWORK == 15
+#elif CHEMISTRYNETWORK == 15 || CHEMISTRYNETWORK == 16
     return ab[IHP] + ab[IC] + ab[IHCOP] + ab[IHEP] + ab[IMP];
 #elif CHEMISTRYNETWORK == 3
     return ab[IHP] + ab[IDP] + ab[IHEP] + ab[IC] + ab[IO] + ab[ISi] + ab[IHCOP] + 2.0*ab[ISIPP] + ab[ICH3P] + 2.0*ab[IHEPP];
@@ -44,7 +46,7 @@ static inline void chemcool_set_ionized(double *ab, const struct ChemInputs *in)
     ab[IHEPP] = 0.0;          /* He++ negligible for most O stars */
     ab[IDP]   = in->abundD;   /* D -> D+ (same IP as H) */
     ab[IHD]   = 0.0;          /* HD dissociated */
-#elif CHEMISTRYNETWORK == 15
+#elif CHEMISTRYNETWORK == 15 || CHEMISTRYNETWORK == 16
     ab[IC] = in->abundc; ab[ICHX] = 0.0; ab[IOHX] = 0.0; ab[IHCOP] = 0.0;
     ab[IHEP] = in->abhe; ab[IMP] = in->abundM;
 #elif CHEMISTRYNETWORK == 3
@@ -78,7 +80,7 @@ static inline void chemcool_clamp_pools(double *ab, const struct ChemInputs *in)
         if(d_sum > in->abundD && d_sum > 0) {double f = in->abundD / d_sum; ab[IDP] *= f; ab[IHD] *= f;}
     }
 #endif
-#elif CHEMISTRYNETWORK == 15
+#elif CHEMISTRYNETWORK == 15 || CHEMISTRYNETWORK == 16
     {const int k[] = {IC, ICHX, ICO, IHCOP}; const double n[] = {1, 1, 1, 1}; chemcool_clamp_group(ab, k, n, 4, in->abundc);}
     {const int k[] = {IOHX, ICO, IHCOP}; const double n[] = {1, 1, 1}; chemcool_clamp_group(ab, k, n, 3, in->abundo);}
     {const int k[] = {IHEP}; const double n[] = {1}; chemcool_clamp_group(ab, k, n, 1, in->abhe);}

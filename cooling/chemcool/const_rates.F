@@ -575,7 +575,12 @@ c
 c
 c Formation of CO from CHx
 c
+#if CHEMISTRYNETWORK == 16
+c Rate from GONG17, taken from Wakelam et al 2010
+      cst(85) = 7.7d-11
+#else
       cst(85) = 2d-10
+#endif
 c
 c Formation of OHx from O + H3+ [NL99]: O + H3+ -> OHx + H2
 c
@@ -606,6 +611,14 @@ c
 c Proton transfer from N2H+ to C:  N2H+ + C -> N2 + CH+
 c
       cst(91) = 1.1d-9
+#if CHEMISTRYNETWORK == 16
+c H2O+ + H2 -- from GONG17, used as part of OHx formation calc.
+      cst(92) = 6d-10
+c O+ +  H2 --> products [from GONG17, based on Wakelam et al 2010]
+      cst(93) = 1.6d-9
+c OHx + O -> 2O + H  [from GONG17, based on Carty et al 2006]
+      cst(94) = 3.5d-11
+#endif
 c
 #endif /* CHEMCOOL */
       return

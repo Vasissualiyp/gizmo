@@ -49,7 +49,7 @@ c Networks 3 and 15: Glover's original step-size control (gadget_tnt_new, SGChem
       DATA used_for_stepsize_control /1, 1, 0, 0, 0, 0, 0, 0, 0, 0,
      $                                0, 0, 0, 0, 0, 0, 0, 0, 0, 1/
 #endif
-#if CHEMISTRYNETWORK == 15
+#if CHEMISTRYNETWORK == 15 || CHEMISTRYNETWORK == 16
       DATA safety /1d-1, 0d0, 1d-1, 0d0, 0d0, 1d-1, 0d0, 0d0,
      $             0d0, DTCOOL_SCALE_FACTOR/
       DATA used_for_stepsize_control /1, 0, 1, 0, 0, 1, 0, 0, 0, 1/
@@ -192,7 +192,7 @@ c
       ctrl_floor(ihep)  = max(atol(ihep),  eps_ctrl * abhe)
       ctrl_floor(ihepp) = max(atol(ihepp), eps_ctrl * abhe)
 #endif
-#if CHEMISTRYNETWORK == 15
+#if CHEMISTRYNETWORK == 15 || CHEMISTRYNETWORK == 16
       co_pool = min(abundc, abundo)
       ctrl_floor(ic)    = max(atol(ic),    eps_ctrl * abundc)
       ctrl_floor(ichx)  = max(atol(ichx),  eps_ctrl * abundc)
@@ -268,7 +268,7 @@ c and shielding columns).  CIE above 5e5 K: H+ = 1, He = He++, D = D+.
         y(ihepp) = abhe
         y(idp)   = abundD
 #endif
-#if CHEMISTRYNETWORK == 15
+#if CHEMISTRYNETWORK == 15 || CHEMISTRYNETWORK == 16
 c       no He++, C++ or M++ in this network: their highest tracked stages
         y(ichx)  = 0d0
         y(iohx)  = 0d0
@@ -627,7 +627,7 @@ c
         endif
       endif
 c                                                                                                                                                                                                         
-      if (nchem_network .eq. 15) then
+      if (nchem_network .eq. 15 .or. nchem_network .eq. 16) then
         max_abundance(ih2) = 0.5d0
         max_abundance(ihp) = 1.0d0
         max_abundance(ic)  = abundc
@@ -799,7 +799,7 @@ c
         endif
       endif
 c
-      if (nchem_network .eq. 15) then
+      if (nchem_network .eq. 15 .or. nchem_network .eq. 16) then
         atol(ih2)   = ATOL_H2
         atol(ihp)   = ATOL_HP
         atol(ic)    = ATOL_C
