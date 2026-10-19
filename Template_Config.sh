@@ -261,7 +261,7 @@
 #CR_SCALE_WITH_G0               # cosmic ray ionization rate scales with G0
 #CHEMCOOL_CXX                   # use the C++/CVODE chemistry backend (cooling/chemcool/cxx/) instead
                                 #   of the Fortran DVODE driver. DEFAULT OFF: the Fortran path stays the
-                                #   reference implementation. Networks 5 and 17 only. Replaces the
+                                #   reference implementation. Networks 5, 15 and 17 only. Replaces the
                                 #   integrator + RHS assembly + driver policy; the RHS leaf kernels and
                                 #   the coolinmo/cheminmo tables are still Fortran (cxx/DEVIATIONS.md D-0).
                                 #   Needs SUNDIALS CVODE >= 6.x: set SUNDIALS_DIR in the Makefile.

@@ -69,6 +69,7 @@
 // network-dependent compile-time constants are passed at runtime instead:
 // net 5: abhe=0.10, TRAC_NUM=3, NRATES_CHEM=6
 // net 17: abhe=0.079, TRAC_NUM=7, NRATES_CHEM=22
+// net 15: abhe=0.10, TRAC_NUM=9, NRATES_CHEM=6
 #define CHEM_NRATES_CHEM_MAX 22
 
 // species slots (0-based, chemcool_consts.h nets 5/17)
@@ -79,6 +80,18 @@
 #define CIHEPP 4
 #define CIDP   5
 #define CIHD   6
+
+// net 15 (NL99) species slots (0-based); energy is slot 9
+#define C15_IH2   0
+#define C15_IHP   1
+#define C15_IC    2   /* C+ */
+#define C15_ICHX  3
+#define C15_IOHX  4
+#define C15_ICO   5
+#define C15_IHCOP 6
+#define C15_IHEP  7
+#define C15_IMP   8   /* M+ */
+#define CHEM_NSPEC_MAX 10
 
 // ---------------------------------------------------------------------------
 // Immutable table state.  This is a *view* over the rate/cooling tables, NOT a
@@ -219,8 +232,8 @@ inline double chem_CL(const ChemTables& T, int k, const ChemTIdx& ti)
 // as one explicit struct (audit R2).  Passed as CVODE user_data.
 // ---------------------------------------------------------------------------
 struct ChemCell {
-    int net;               // 5 or 17
-    int trac_num;          // 3 or 7
+    int net;               // 5, 15 or 17
+    int trac_num;          // 3, 9 or 7
     int nspec;             // trac_num + 1
     double abhe;           // 0.10 (net 5) / 0.079 (net 17)
 
@@ -232,6 +245,7 @@ struct ChemCell {
 
     // elemental pools (number abundances rel. to H nuclei)
     double abundc, abundo, abundsi, abundN, abundD;
+    double abundM;         // NL99 low-IP metal "M" (net 15)
 
     // radiation / grains / CR (per-cell inputs)
     double G0, G0_LW, G0_dust;
@@ -326,6 +340,7 @@ void cxx_three_level_pops(double r01, double r02, double r12,
                           double* n0, double* n1, double* n2);
 double cxx_compute_stim(double a10, double e10, double rad_temp);
 double cxx_compute_h2_opacity(const ChemTables& T, double temp, double N_H2_eff);
+double cxx_compute_h2_heating_fraction(double T, double n, double xh2);
 
 // WSS CIE metal-line cooling (wss_z_collis.F get_coolrates_wssCIE port)
 double cxx_wss_cie_rate(const ChemTables& T, double temp, const double Zm[12]);
@@ -382,6 +397,7 @@ void chem_cxx_cell_defaults(ChemCell& c, const ChemTables& T, int net);
 #define CHEM_RHS_RECOVERABLE 1
 int chem_rhs_net5 (double t, const double* y, double* ydot, ChemCell& c);
 int chem_rhs_net17(double t, const double* y, double* ydot, ChemCell& c);
+int chem_rhs_net15(double t, const double* y, double* ydot, ChemCell& c);
 
 // ---------------------------------------------------------------------------
 // Gate-2 backend binding (chem_backend_fortran.cc).

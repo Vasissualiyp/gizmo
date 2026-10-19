@@ -90,8 +90,8 @@ extern struct {
 void chemcool_fatal_(int* code);
 }
 
-#if CHEMISTRYNETWORK != 5 && CHEMISTRYNETWORK != 17
-#error "CHEMCOOL_CXX currently supports CHEMISTRYNETWORK 5 and 17 only. \
+#if CHEMISTRYNETWORK != 5 && CHEMISTRYNETWORK != 15 && CHEMISTRYNETWORK != 17
+#error "CHEMCOOL_CXX currently supports CHEMISTRYNETWORK 5, 15 and 17 only. \
 Build without CHEMCOOL_CXX (the Fortran path) for the other networks."
 #endif
 

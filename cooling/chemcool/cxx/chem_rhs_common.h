@@ -1,4 +1,4 @@
-// chem_rhs_common.h -- shared RHS helpers for the net-5 / net-17 ports.
+// chem_rhs_common.h -- shared RHS helpers for the net-5 / net-15 / net-17 ports.
 //
 // validate_input (validate_rates.F:9-77) ported per audit R3 REDESIGN:
 // operates on a LOCAL COPY of the state vector (CVODE forbids mutating y in
@@ -42,6 +42,34 @@ inline int chem_validate_input(double* y, int nspec, int itmp0 /*0-based energy 
         }
     }
     return 0;
+}
+
+// full validate_input sweep: clips every species like the Fortran, which keeps
+// going after an excess flag.  Returns 0 ok, 1 excess flagged, -1 NaN.
+inline int chem_validate_input_full(double* y, int nspec, int itmp0, int ih2_0,
+                                    long id_current)
+{
+    int flag = 0;
+    for (int i = 0; i < nspec; i++) {
+        if (y[i] != y[i]) {
+            std::fprintf(stderr, "chem_validate_input: species %d is NaN (ID %ld)\n",
+                         i, id_current);
+            return -1;
+        }
+        if (y[i] < 0.0) y[i] = 0.0;
+        if (i != itmp0 && i != ih2_0) {
+            if (y[i] > 1.0) {
+                if (y[i] > 1.0 + CHEM_EPS_MAX) flag = 1;
+                y[i] = 1.0;
+            }
+        } else if (i == ih2_0) {
+            if (y[i] > 0.5) {
+                if (y[i] > 0.5 + CHEM_EPS_MAX) flag = 1;
+                y[i] = 0.5;
+            }
+        }
+    }
+    return flag;
 }
 
 // grain-surface H+ recombination rate (identical blocks in rate_eq_simple.F:232-253

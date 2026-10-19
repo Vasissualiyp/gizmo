@@ -273,13 +273,14 @@ void chem_bind_cell(ChemCell& c, const ChemTables& T, int net)
 {
     std::memset(&c, 0, sizeof(ChemCell));
     c.net = net;
-    c.trac_num = (net == 5) ? 3 : 7;
+    c.trac_num = (net == 5) ? 3 : (net == 15) ? 9 : 7;
     c.nspec = c.trac_num + 1;
     c.abhe = CHEM_COMP.abhe;
 
     c.abundc = COOLR.abundc;   c.abundo = COOLR.abundo;
     c.abundsi = COOLR.abundsi; c.abundN = COOLR.abundN;
     c.abundD = COOLR.abundD;
+    c.abundM = COOLR.abundM;
 
     c.G0 = COOLR.G0; c.G0_LW = COOLR.G0_LW; c.G0_dust = COOLR.G0_dust;
     c.dust_to_gas_ratio = COOLR.dust_to_gas_ratio;

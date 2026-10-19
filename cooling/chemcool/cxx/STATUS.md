@@ -211,8 +211,10 @@ documented in DEVIATIONS D-16.
    snapshots between OFF and ON.
 3. **Flip the default only after (1) and (2)**; the Fortran path stays
    available as the fallback (Uli's standing requirement).
-4. **Networks other than 5/17** in `calc_photo` are not ported (DEVIATIONS
-   D-14); `chem_gizmo_backend.cc` already `#error`s on them.
+4. **Network 15** (NL99) RHS + driver ported 2026-10-19 (DEVIATIONS D-22);
+   `chem_gizmo_backend.cc` accepts 5/15/17 and `#error`s on the rest.
+   **Networks other than 5/17** in the C++ `calc_photo` are not ported
+   (DEVIATIONS D-14); GIZMO still uses the Fortran `CALC_PHOTO_WRAPPER`.
 5. **Flag to Uli separately from the port:** `co_cool` indexes the CO
    *vibrational* table with the *rotational* column (DEVIATIONS D-13, latent
    Fortran bug, reproduced literally), and the dense-cold T_eq spread of ~1%

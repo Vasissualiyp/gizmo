@@ -357,9 +357,9 @@ print and return **without touching** `ylam` or `rates`.
 
 ## D-18. (Gate 3) not ported from `cool_util.F` / `calc_photo.F`
 
-* `compute_h2_heating_fraction` (and the whole `h2heat.h` 3509-element table):
-  its only call site, `rate_eq_simple.F:392`, is commented out. No live caller
-  in nets 5 or 17.
+* `compute_h2_heating_fraction` (and the `h2heat.h` table): its call site in
+  `rate_eq_simple.F:392` is commented out, so no live caller in nets 5 or 17.
+  **Now ported for net 15** (live in `rate_eq_nl99.F:390`), see D-22.
 * `dma_calc`: guarded by `#if defined DMA`, which no Stella build sets, and its
   body returns hard zeros for both outputs anyway.
 * `chi`'s `index == 200` branch is a bare Fortran `stop` (D-4 class). The port
@@ -369,6 +369,46 @@ print and return **without touching** `ylam` or `rates`.
   lines) but `column_est` is hard-zero in production, as D-5 records.
 
 ---
+
+## D-22. Network 15 (NL99, `rate_eq_nl99.F`) — `chem_rhs_net15.cc`
+
+Ported 2026-10-19 with the same contract as nets 5/17 (calc_photo stays the
+Fortran `CALC_PHOTO_WRAPPER` in GIZMO, D-14). Driver: Glover's step control
+(safety/used for H2, C+, CO, energy only), net-15 pool floors, atol, max
+abundances and the hot-gas state (H+=1, C+=abundc, He+=abhe, M+=abundM,
+molecules and CHx/OHx/HCO+ zero) from `evolve_abundances.F`.
+`compute_h2_heating_fraction` + `h2_rv_heat` (machine-extracted by
+`tables_extract.py`, float32 literals) ported into `chem_cool_util.cc`.
+
+Differences from nets 5/17 that the port reproduces, not "fixes":
+* `validate_input` does not short-circuit `rate_eq_nl99`: ydot is built from
+  the clipped copy even when the input is flagged (and for `temp <= 0`, at
+  `tmin`). The port builds the full ydot too and returns
+  `CHEM_RHS_RECOVERABLE` at the end, so the driver's `dt_est` sees the same
+  ydot as the Fortran. Clipping continues past an excess flag, as in
+  `validate_rates.F` (`chem_validate_input_full`).
+* `calc_H2_shielding_factor` is called for every `iphoto` (no `iphoto==0 →
+  fshield=1` shortcut), `NH = 0.5*yn*dl`, grain recombination uses `phi < 1`
+  and no `exp(-T/3e4)` factor, no `T < 100 K` zeroing of rates_chem(6).
+* `rate_eq_nl99.F` never writes `lambda_chem`, so the C++ cell publishes
+  zeros there too (they enter `cooling_rate` in `chemcool.cc`).
+* Default-REAL literals: `PI` in L_jeans (3.1415927410125732) and the `1.4`
+  in the UV-pumping `cdex` are float32, as compiled (D-10 class).
+
+Deviations (same classes as D-1/D-3): a NaN input species returns at once
+with ydot = 0 (Fortran continues with NaN); a NaN ydot returns recoverable
+(net 15 has no `validate_output`); `validate_input` acts on a copy, so the
+driver's own `y` is not clipped in place.
+
+One-zone A/B through GIZMO's cooling path (2026-10-19, 15 cells, 400 steps):
+nH <= 100 at T0 <= 8000 K agree to <= 4.4e-9 in T; nH = 1e3-1e4 differ by up
+to 7.8e-5, except the fast-cooling starts (1e4/8000 K: 3.2e-3; T0 = 1e6: up to
+3.5e-2 mid-trajectory, final T <= 1.6e-4; net 5 shows 1.9e-2 / 1.1e-4 there).
+That is integrator
+truncation: only H2/C+/CO/energy limit the outer substep in net 15, and each
+backend moves 1e-3..2e-2 in T between RTOL 1e-4 and 1e-8, while at RTOL 1e-8
+the F-vs-C gap falls to <= 5.6e-6 in final T (1000/100: 7.1e-5 -> 6.8e-9).
+Removing the Fortran in-place clip (D-1) changed only three hot cells.
 
 ## KEPT deliberately (audit KEEP items — listed so they are not "fixed" later)
 

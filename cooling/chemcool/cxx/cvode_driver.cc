@@ -61,6 +61,7 @@ static int chem_legacy_lambda()
 
 static inline int rhs_dispatch(double t, const double* y, double* ydot, ChemCell& c)
 {
+    if (c.net == 15) return chem_rhs_net15(t, y, ydot, c);
     return (c.net == 5) ? chem_rhs_net5(t, y, ydot, c)
                         : chem_rhs_net17(t, y, ydot, c);
 }
@@ -86,10 +87,15 @@ static void cvode_err_handler(int error_code, const char* module,
         std::fprintf(stderr, "[CVODE] %s::%s: %s\n", module, function, msg);
 }
 
-// init_tolerances port (evolve_abundances.F:647-756, nets 5/17 branches)
+// init_tolerances port (evolve_abundances.F:647-756, nets 5/15/17 branches)
 static void chem_atol(int net, double* atol)
 {
-    if (net == 5) {
+    if (net == 15) {
+        atol[C15_IH2] = 1e-7;   atol[C15_IHP] = 1e-12;  atol[C15_IC] = 1e-16;
+        atol[C15_ICHX] = 1e-14; atol[C15_IOHX] = 1e-14; atol[C15_ICO] = 1e-14;
+        atol[C15_IHCOP] = 1e-18; atol[C15_IHEP] = 1e-14; atol[C15_IMP] = 1e-14;
+        atol[9] = 0.0;
+    } else if (net == 5) {
         atol[CIH2] = 1e-7;  atol[CIHP] = 1e-12; atol[CICO] = 1e-14;
         atol[3] = 0.0;                       // ATOL_TMP = 0d0
     } else {
@@ -100,16 +106,29 @@ static void chem_atol(int net, double* atol)
     }
 }
 
-// check_abundances port (evolve_abundances.F:430-631, nets 5/17 branches).
+// check_abundances port (evolve_abundances.F:430-631, nets 5/15/17 branches).
 // Returns 0 ok (y possibly clipped), 1 reject.
 static int chem_check_abundances(double* y, ChemCell& c, const double* atol)
 {
     const int nspec = c.nspec;
     const int itmp = nspec - 1;
-    double max_abundance[8];
-    max_abundance[CIH2] = 0.5;
-    max_abundance[CIHP] = 1.0;
-    max_abundance[CICO] = (c.abundc < c.abundo) ? c.abundc : c.abundo;
+    double max_abundance[CHEM_NSPEC_MAX];
+    if (c.net == 15) {
+        const double co_max = (c.abundo < c.abundc) ? c.abundo : c.abundc;
+        max_abundance[C15_IH2]   = 0.5;
+        max_abundance[C15_IHP]   = 1.0;
+        max_abundance[C15_IC]    = c.abundc;
+        max_abundance[C15_ICHX]  = c.abundc;
+        max_abundance[C15_IOHX]  = c.abundo;
+        max_abundance[C15_ICO]   = co_max;
+        max_abundance[C15_IHCOP] = co_max;
+        max_abundance[C15_IHEP]  = c.abhe;
+        max_abundance[C15_IMP]   = c.abundM;
+    } else {
+        max_abundance[CIH2] = 0.5;
+        max_abundance[CIHP] = 1.0;
+        max_abundance[CICO] = (c.abundc < c.abundo) ? c.abundc : c.abundo;
+    }
     if (c.net == 17) {
         max_abundance[CIHEP] = c.abhe;
         max_abundance[CIHEPP] = c.abhe;
@@ -159,11 +178,11 @@ struct CvWork {
 // keeps the wall-time comparison fair (DEVIATIONS D-7), and making the cache
 // thread_local is what makes the C++ path OpenMP-safe -- a shared CVode memory
 // object cannot be entered concurrently.  Cost: one workspace per (thread,net).
-static thread_local CvWork g_work[2];   // [0] -> nspec 4 (net 5), [1] -> nspec 8 (net 17)
+static thread_local CvWork g_work[3];   // [0] nspec 4 (net 5), [1] nspec 8 (net 17), [2] nspec 10 (net 15)
 
 static CvWork* cv_get(int nspec, const double* atol, double t0, const double* y)
 {
-    CvWork* w = &g_work[(nspec == 4) ? 0 : 1];
+    CvWork* w = &g_work[(nspec == 4) ? 0 : (nspec == 10) ? 2 : 1];
     if (w->mem == nullptr) {
         if (SUNContext_Create(NULL, &w->ctx)) return nullptr;
         w->nspec = nspec;
@@ -201,29 +220,44 @@ int cxx_evolve_abundances(double time, double dl, double yn, double divv,
 {
     const int nspec = c.nspec;
     const int itmp = nspec - 1;
-    const int ih2 = CIH2, ihp = CIHP, ico = CICO;
+    const int ih2 = CIH2, ihp = CIHP;
+    const int ico = (c.net == 15) ? C15_ICO : CICO;
 
     if (time < 0.0) return 0;                                // .F:72-74
 
     cxx_stat_calls++;
     c.yn = yn; c.dl = dl; c.divv = divv;
 
-    double y[8], y_old[8], ydot[8];
+    double y[CHEM_NSPEC_MAX], y_old[CHEM_NSPEC_MAX], ydot[CHEM_NSPEC_MAX];
     for (int i = 0; i < c.trac_num; i++) y[i] = non_eq_abundances[i];
     y[itmp] = *energy;
     for (int i = 0; i < nspec; i++) { y_old[i] = y[i]; ydot[i] = 0.0; }
 
-    double atol[8];
+    double atol[CHEM_NSPEC_MAX];
     chem_atol(c.net, atol);
 
-    // safety factors + ctrl_floor (.F:35-43, 166-181)
-    double safety[8];
-    for (int i = 0; i < nspec; i++) safety[i] = 1e-1;
+    // safety factors + ctrl_floor (.F:35-56, 166-195)
+    double safety[CHEM_NSPEC_MAX];
+    int used[CHEM_NSPEC_MAX];
+    for (int i = 0; i < nspec; i++) { safety[i] = 1e-1; used[i] = 1; }
     safety[itmp] = DTCOOL_SCALE_FACTOR;
+    if (c.net == 15) {   // Glover's control: H2, C+, CO and energy only
+        static const int used15[9] = {1, 0, 1, 0, 0, 1, 0, 0, 0};
+        for (int i = 0; i < 9; i++) { used[i] = used15[i]; safety[i] = used15[i] ? 1e-1 : 0.0; }
+    }
     const double eps_ctrl = 1e-6;
-    double ctrl_floor[8];
+    double ctrl_floor[CHEM_NSPEC_MAX];
     for (int j = 0; j < nspec; j++) ctrl_floor[j] = atol[j];
-    {
+    if (c.net == 15) {
+        double co_pool = (c.abundc < c.abundo) ? c.abundc : c.abundo;
+        ctrl_floor[C15_IC]    = std::fmax(atol[C15_IC],    eps_ctrl * c.abundc);
+        ctrl_floor[C15_ICHX]  = std::fmax(atol[C15_ICHX],  eps_ctrl * c.abundc);
+        ctrl_floor[C15_IOHX]  = std::fmax(atol[C15_IOHX],  eps_ctrl * c.abundo);
+        ctrl_floor[C15_ICO]   = std::fmax(atol[C15_ICO],   eps_ctrl * co_pool);
+        ctrl_floor[C15_IHCOP] = std::fmax(atol[C15_IHCOP], eps_ctrl * co_pool);
+        ctrl_floor[C15_IHEP]  = std::fmax(atol[C15_IHEP],  eps_ctrl * c.abhe);
+        ctrl_floor[C15_IMP]   = std::fmax(atol[C15_IMP],   eps_ctrl * c.abundM);
+    } else {
         double co_pool = (c.abundc < c.abundo) ? c.abundc : c.abundo;
         double f = eps_ctrl * co_pool;
         if (f > ctrl_floor[ico]) ctrl_floor[ico] = f;
@@ -256,12 +290,20 @@ int cxx_evolve_abundances(double time, double dl, double yn, double divv,
                 y[CIHEPP] = c.abhe;
                 y[CIDP] = c.abundD;
             }
+            if (c.net == 15) {   // highest tracked stages (.F:232-240)
+                y[C15_ICHX]  = 0.0;
+                y[C15_IOHX]  = 0.0;
+                y[C15_IHCOP] = 0.0;
+                y[C15_IC]    = c.abundc;
+                y[C15_IHEP]  = c.abhe;
+                y[C15_IMP]   = c.abundM;
+            }
             int done = 0;
             for (long nbyp = 1; nbyp <= 100000; nbyp++) {
                 // ipar-clear semantics: RHS retval ignored; a flagged eval
-                // left ydot all-zero, exactly like the Fortran zero-ydot path.
-                if (c.net == 5) chem_rhs_net5(t_start, y, ydot, c);
-                else            chem_rhs_net17(t_start, y, ydot, c);
+                // left ydot all-zero, exactly like the Fortran zero-ydot path
+                // (net 15 builds the full ydot, as rate_eq_nl99 does).
+                rhs_dispatch(t_start, y, ydot, c);
                 double dt_byp;
                 if (std::fabs(ydot[itmp]) > 0.0)
                     dt_byp = std::fmin(t_end - t_start,
@@ -302,11 +344,10 @@ int cxx_evolve_abundances(double time, double dl, double yn, double divv,
             for (int j = 0; j < nspec; j++) y_old[j] = y[j];
             tdust_old = c.tdust;
 
-            int rerr = (c.net == 5) ? chem_rhs_net5(t_start, y, ydot, c)
-                                    : chem_rhs_net17(t_start, y, ydot, c);
+            int rerr = rhs_dispatch(t_start, y, ydot, c);
             dt_est = 1e18;
             for (int j = 0; j < nspec; j++) {
-                if (ydot[j] != 0.0 && safety[j] != 0.0 && y[j] > ctrl_floor[j]) {
+                if (used[j] && ydot[j] != 0.0 && safety[j] != 0.0 && y[j] > ctrl_floor[j]) {
                     double e = std::fabs(safety[j] * y[j] / ydot[j]);
                     if (e < dt_est) dt_est = e;
                 }
@@ -392,7 +433,7 @@ out:
         // call already makes.  Set CHEMCXX_LEGACY_LAMBDA=1 to restore the
         // Fortran semantics for a bit-comparable A/B (DEVIATIONS D-19).
         if (!chem_legacy_lambda()) {
-            double ydot_final[8];
+            double ydot_final[CHEM_NSPEC_MAX];
             (void)rhs_dispatch(t_start, y, ydot_final, c);
         }
     }

@@ -7,13 +7,13 @@
 //   three_level_pops        (cool_util.F:385-422)
 //   compute_stim            (cool_util.F:439-456)
 //   compute_h2_opacity      (cool_util.F:506-560)
+//   compute_h2_heating_fraction (cool_util.F:574-680; live in net 15 only)
 //   calc_dust_temp          (cool_util.F:802-1007, incl. the 2026-07 bounded
 //                            Newton fix and the hot/dust-free tdust cap)
 //
 // NOT ported (see DEVIATIONS.md D-12): load_H2_table lives in
 // chem_tables_build.cc (it is table construction, not a kernel);
-// compute_h2_heating_fraction has no live caller in nets 5/17
-// (rate_eq_simple.F:392 is commented out); dma_calc is `#if defined DMA`,
+// dma_calc is `#if defined DMA`,
 // which no Stella build sets and whose body returns hard zeros anyway.
 //
 // Every integer index below is the Fortran 1-based index; the accessors
@@ -21,6 +21,7 @@
 
 #include "../../../GIZMO_config.h"
 #include "chem_types.h"
+#include "chem_tables_data.h"
 #include <cmath>
 #include <cstdio>
 
@@ -304,6 +305,92 @@ double cxx_compute_h2_opacity(const ChemTables& T, double temp, double N_H2_eff)
         o2 = chem_f2(T.h2_opac, nh2op, ii, jj + 1);
     }
     return std::pow(10.0, o1 + dN * (o2 - o1));
+}
+
+// ===========================================================================
+// compute_h2_heating_fraction (cool_util.F:574-680)
+// ===========================================================================
+double cxx_compute_h2_heating_fraction(double T, double n, double xh2)
+{
+    auto h2_rv_heat = [](int k) { return dat_h2_rv_heat[k - 1]; };   // Fortran 1-based
+    double logT = std::log10(T);
+    double logn = std::log10(n);
+    int idx1, idx2, idx3, offset;
+    double dT, dn, nscale, dh2, f1, f2, f3, f4, fr1, fr2, frac1, frac2;
+
+    if (logT < 1.0)      { idx1 = 1;  dT = 0.0; }
+    else if (logT > 3.5) { idx1 = 11; dT = 0.0; }
+    else {
+        idx1 = 1 + f_int(4.0 * (logT - 1.0));
+        dT = 4.0 * (logT - 1.0) - (idx1 - 1);
+    }
+
+    if (logn < 1.0)      { idx2 = 1;  dn = 0.0; nscale = (n / 1e1); }
+    else if (logn > 8.0) { idx2 = 29; dn = 0.0; nscale = 1.0; }
+    else {
+        idx2 = 1 + f_int(4.0 * (logn - 1.0));
+        dn = 4.0 * (logn - 1.0) - (idx2 - 1);
+        nscale = 1.0;
+    }
+
+    if (xh2 == 0.5) { idx3 = 6; dh2 = 0.0; }
+    else {
+        idx3 = 1 + f_int(xh2 / 1e-1);
+        dh2  = xh2 / 1e-1 - (idx3 - 1);
+    }
+
+    offset = 319 * (idx3 - 1) + 29 * (idx1 - 1) + idx2;
+    if (dT == 0.0) {
+        if (dn == 0.0) {
+            frac1 = nscale * h2_rv_heat(offset);
+        } else {
+            f1 = h2_rv_heat(offset);
+            f2 = h2_rv_heat(offset + 1);
+            frac1 = f1 + dn * (f2 - f1);
+        }
+    } else {
+        if (dn == 0.0) {
+            f1 = nscale * h2_rv_heat(offset);
+            f2 = nscale * h2_rv_heat(offset + 29);
+            frac1 = f1 + dT * (f2 - f1);
+        } else {
+            f1 = h2_rv_heat(offset);
+            f2 = h2_rv_heat(offset + 1);
+            f3 = h2_rv_heat(offset + 29);
+            f4 = h2_rv_heat(offset + 30);
+            fr1 = f1 + dT * (f2 - f1);
+            fr2 = f3 + dT * (f4 - f3);
+            frac1 = fr1 + dn * (fr2 - fr1);
+        }
+    }
+
+    if (dh2 == 0.0) return frac1;
+
+    offset = 319 * idx3 + 29 * (idx1 - 1) + idx2;
+    if (dT == 0.0) {
+        if (dn == 0.0) {
+            frac2 = nscale * h2_rv_heat(offset);
+        } else {
+            f1 = h2_rv_heat(offset);
+            f2 = h2_rv_heat(offset + 1);
+            frac2 = f1 + dn * (f2 - f1);
+        }
+    } else {
+        if (dn == 0.0) {
+            f1 = nscale * h2_rv_heat(offset);
+            f2 = nscale * h2_rv_heat(offset + 29);
+            frac2 = f1 + dT * (f2 - f1);
+        } else {
+            f1 = h2_rv_heat(offset);
+            f2 = h2_rv_heat(offset + 1);
+            f3 = h2_rv_heat(offset + 29);
+            f4 = h2_rv_heat(offset + 30);
+            fr1 = f1 + dT * (f2 - f1);
+            fr2 = f3 + dT * (f4 - f3);
+            frac2 = fr1 + dn * (fr2 - fr1);
+        }
+    }
+    return frac1 + dh2 * (frac2 - frac1);
 }
 
 // ===========================================================================

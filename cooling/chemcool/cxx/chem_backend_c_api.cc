@@ -54,7 +54,7 @@ extern "C" {
 
 int chemcxx_init(int net)
 {
-    if (net != 5 && net != 17) return 1;
+    if (net != 5 && net != 15 && net != 17) return 1;
     if (!g_bound) {
         const char* mode = std::getenv("CHEMCXX_TABLES");
         if (mode && std::strcmp(mode, "fortran") == 0) {
