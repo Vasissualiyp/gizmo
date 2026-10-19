@@ -357,9 +357,9 @@ print and return **without touching** `ylam` or `rates`.
 
 ## D-18. (Gate 3) not ported from `cool_util.F` / `calc_photo.F`
 
-* `compute_h2_heating_fraction` (and the `h2heat.h` table): its call site in
-  `rate_eq_simple.F:392` is commented out, so no live caller in nets 5 or 17.
-  **Now ported for net 15** (live in `rate_eq_nl99.F:390`), see D-22.
+* `compute_h2_heating_fraction` (and the `h2heat.h` table): originally no live
+  caller in nets 5 or 17. **Now ported** (D-22) and live in every network:
+  H2 formation heating is (h2_form_kin + f_ex * h2_form_ex) * 4.48 eV.
 * `dma_calc`: guarded by `#if defined DMA`, which no Stella build sets, and its
   body returns hard zeros for both outputs anyway.
 * `chi`'s `index == 200` branch is a bare Fortran `stop` (D-4 class). The port

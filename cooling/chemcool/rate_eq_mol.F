@@ -37,6 +37,7 @@ c
       parameter (eqtol = 1d-3)
 c
       REAL    dtemp
+      REAL    f_ex, f_tot
       integer itemp, I
 c
       REAL abundances(nabn), rates(nrates),
@@ -1585,8 +1586,15 @@ c H-   -- 3.53eV
 c H2+  -- 1.83eV
 c 3-body -- 4.48eV
 c
-c Dust route: the h2_form_kin share of 4.48 eV, as in nets 5, 15, 17
-      rates_chem(5) = - 4.48d0 * eV * h2_form_kin * RH2
+c Dust route: kinetic plus de-excited share of 4.48 eV (nets 5/15/16/17)
+      if (RH2 .gt. 0d0) then
+        call compute_h2_heating_fraction(temp, yn, abh2, f_ex)
+        f_ex = f_ex * h2_form_ex
+      else
+        f_ex = 0d0
+      endif
+      f_tot = h2_form_kin + f_ex
+      rates_chem(5) = - 4.48d0 * eV * f_tot * RH2
 c
       rates_chem(6) = - 3.53d0 * eV * ch22 * abHI * abhm * ynsq
      $                * (1d0 - h2var0)

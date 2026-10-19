@@ -461,7 +461,9 @@ int chem_rhs_net17(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     rc[18] = 0.0;
     rc[19] = -(ph42 * abHI + ph43 * abheI + ph44 * abhep) * yn;
     rc[20] = (0.75 * CHEM_EV + CHEM_KBOLTZ * temp) * ch21 * abHI * abe * ynsq;
-    rc[21] = -4.48 * CHEM_EV * c.h2_form_kin * RH2;
+    double f_ex = (RH2 > 0.0)
+        ? cxx_compute_h2_heating_fraction(temp, yn, abh2) * c.h2_form_ex : 0.0;
+    rc[21] = -4.48 * CHEM_EV * (c.h2_form_kin + f_ex) * RH2;
 
     double ylam_chem = 0.0;
     for (int i = 0; i < 22; i++) {

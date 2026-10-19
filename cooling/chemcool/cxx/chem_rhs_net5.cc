@@ -144,7 +144,8 @@ int chem_rhs_net5(double /*t*/, const double* y_in, double* ydot, ChemCell& c)
     double fpheat = cdex / (cdex + rdex);
     rates_chem[2] = -2.0 * CHEM_EV * abh2 * yn * ykdis * 8.5 * fpheat;
 
-    double f_ex = 0.0;                                // .F:391-397 (call commented out)
+    double f_ex = (RH2 > 0.0)
+        ? cxx_compute_h2_heating_fraction(temp, yn, abh2) * c.h2_form_ex : 0.0;
     double f_tot = c.h2_form_kin + f_ex;
     rates_chem[3] = -4.48 * CHEM_EV * f_tot * RH2;
 

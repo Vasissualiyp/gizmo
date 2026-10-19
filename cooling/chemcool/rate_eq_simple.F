@@ -389,9 +389,8 @@ c
 c Dust -- 4.48eV 
 c
       if (RH2 .gt. 0d0) then
-c        call compute_h2_heating_fraction(temp, yn, abh2, f_ex)
-c        f_ex = f_ex * h2_form_ex
-        f_ex = 0d0
+        call compute_h2_heating_fraction(temp, yn, abh2, f_ex)
+        f_ex = f_ex * h2_form_ex
       else
         f_ex = 0d0
       endif

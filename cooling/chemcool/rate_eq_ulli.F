@@ -29,6 +29,7 @@ c
       parameter (eqtol = 1d-3)
 c
       REAL    dtemp
+      REAL    f_ex, f_tot
       integer itemp, I, J, K
 c
       REAL abundances(nabn), rates(nrates),
@@ -977,9 +978,16 @@ c
      $               * ch21 * abHI * abe * ynsq
 c
 c Dust -- H2 formation heating (4.48eV)
-c h2_form_kin is set in the COOLR common block (cool.h)
+c h2_form_kin, h2_form_ex are set in the COOLR common block (cool.h)
 c
-      rates_chem(22) = - 4.48d0 * eV * h2_form_kin * RH2
+      if (RH2 .gt. 0d0) then
+        call compute_h2_heating_fraction(temp, yn, abh2, f_ex)
+        f_ex = f_ex * h2_form_ex
+      else
+        f_ex = 0d0
+      endif
+      f_tot = h2_form_kin + f_ex
+      rates_chem(22) = - 4.48d0 * eV * f_tot * RH2
 c
       ylam_chem = 0d0
       do I = 1, nrates_chem
