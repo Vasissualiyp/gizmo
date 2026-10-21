@@ -187,8 +187,7 @@ OPT     += -DUSE_MPI_IN_PLACE -DHDF5_DISABLE_VERSION_CHECK
 ## Notes [Vasilii Pustovoit], Oct 2026:
 ##
 ## CITA cluster, queue starq (nodes tpb9x): AMD EPYC 7763 = 128 cores, 1 TB per node.
-## The module system was updated in August 2026 (non-starq CITA queues and interactive nodes). Modules to load,
-## before building AND in the job script:
+##  Modules to load, before building AND in the job script:
 ##    module load gcc/13.2.0 openmpi/4.1.2-ucx gsl/2.7.1 hdf5/1.12.1-ucx fftw/3.3.10-openmpi-ucx
 ##
 ## Your .params file should contain MaxMemsize 7500 (otherwise the code grabs a lot of memory/threads).
@@ -222,6 +221,65 @@ OPT     += -DUSE_MPI_IN_PLACE -DHDF5_DISABLE_VERSION_CHECK
 ##    UPSTREAM: c_shock[2-4], fire_rtsources[2-2], rt, read_ic_binary[sensitivity_demands_temperature].
 ##    Passes needing long runs: hernquist[tidal_ags] 8.2 h (192 cores), hernquist[ags] 19.5 min (1 node, 96 cores),
 ##    kh_wengen 2.95 h, shu_jets 2.0 h each, sbcluster 55 min, zeldovich_mhd 26 min.
+endif
+
+#----------------------------------------------------------------------------------------------
+ifeq ($(SYSTYPE),"CITAbob")
+CC       =  mpicc
+CXX      =  mpicxx
+FC       =  $(CC)
+OPTIMIZE =  -O3 -ffast-math -march=znver3 -mtune=znver3 -funroll-loops -finline-functions -march=native -flto -fno-fat-lto-objects
+OPTIMIZE+= -g -Wall # For debugging
+ifeq (OPENMP,$(findstring OPENMP,$(CONFIGVARS)))
+    OPTIMIZE += -fopenmp   # openmp required compiler flags
+endif
+GSL_INCL =  -I/cita/modules/gsl/2.7.1/include/gsl
+GSL_LIBS =  -L/cita/modules/gsl/2.7.1/lib -lgsl -lgslcblas
+FFTW_INCL=  -I/cita/modules/fftw/3.3.10-openmpi-ucx/include
+FFTW_LIBS=  -L/cita/modules/fftw/3.3.10-openmpi-ucx/lib -lfftw3
+MPICHLIB =
+HDF5INCL =  -I/cita/modules/hdf5/1.12.1-ucx/include -DH5_USE_16_API
+HDF5LIB  =  -L/cita/modules/hdf5/1.12.1-ucx/lib -lhdf5 -lz
+OPT     += -DUSE_MPI_IN_PLACE -DHDF5_DISABLE_VERSION_CHECK
+## Notes [Vasilii Pustovoit], Oct 2026:
+##
+## CITA cluster, queue greenq (nodes tpb*): 2x Intel Xeon Gold 6130 = 32 cores / 64 hw threads, 128 GB per node.
+## Modules to load, before building AND in the job script:
+##    module load gcc/13.2.0 openmpi/4.1.2-ucx gsl/2.7.1 hdf5/1.12.1-ucx fftw/3.3.10-openmpi-ucx
+##
+## Your .params file should contain MaxMemsize 7500 (otherwise the code grabs a lot of memory/threads).
+##
+## hypre (only for MHD_MODIFIED_GRADIENT): there is no CITA hypre module. Build hypre 2.32.0 with the modules above
+## (--enable-shared --without-superlu --without-openmp) on SHARED storage visible from the compute nodes (NOT
+## /home on interactive nodes).
+##
+## Running (greenq lets all users together run at most 384 cores at once; a 6-node job can wait for days):
+##    (example) qsub -q greenq -l select=1:ncpus=32:mpiprocs=32 -l place=scatter:excl -l walltime=24:00:00 job.sh
+##    job.sh: module load (above); export OMP_NUM_THREADS=2; mpirun --use-hwthread-cpus --oversubscribe -np 32 ./GIZMO p.params
+##    Long tests: 6 nodes, select=6:ncpus=32:mpiprocs=16, 96 ranks x 2 OpenMP = 192 cores.
+##
+#############
+## TESTING ##
+#############
+##
+## Test-parameter changes needed:
+##   aneos_giant_impact : PartAllocFactor                         2    -> 4
+##   forgedinfire       : Max_Memory_Per_MPI_Task_in_MB           5000 -> 16000
+##   forgedinfire       : ParticleNumberMemoryImbalance_Limit     1.9  -> 4
+##   shu_jets, SN_singlestar, wind_singlestar: call get_cooling_tables() before building/running (data staging:
+##     COOL_METAL_LINES_BY_SPECIES otherwise makes GIZMO curl spcool_tables.tgz itself, which fails offline)
+##
+## Tests: ran 2026-10-15 -> 2026-10-16 (full suite, 1 node = 32 ranks x 2 OpenMP, 1800 s per-test
+##    timeout), then reruns of the long tests, 22 h, 6 nodes = 192 cores, until 2026-10-20 (queue time mostly).
+##    317 results: PASS 293, XFAIL 8, NOT IMPL 8, UPSTREAM 5, TIMEOUT 3.
+##    TIMEOUT: forgedinfire (2 ranks fixed by the test, 22 h), core (192 cores, killed at the 24 h walltime, baseline
+##    see test_reports/cita_greenq.md for the variant reached), isodisk[baseline] (GIZMO's default TimeLimitCPU stops it at 20.3 h, t = 0.099 of 0.5;
+##    params do not set TimeLimitCPU).
+##    UPSTREAM: c_shock[2-4], fire_rtsources[2-2], rt, read_ic_binary[sensitivity_demands_temperature],
+##    aneos_giant_impact[2-2] (NaN on Intel CPUs: Riemann solver "failed to find positive pressure").
+##    Passes needing long runs on 192 cores: kh_wengen 3.3 h, shu_jets 2.1 h (rad-jets_merge) / 2.0 h (nomerge),
+##    hernquist[ewald] 1.3 h, mri 50 min, sbcluster 47 min, blob 22 min, zeldovich_mhd 22 min.
+##    Per-test cores / hours / outcome: see test_reports/PR_DRAFT.md.
 endif
 
 #----------------------------------------------------------------------------------------------
