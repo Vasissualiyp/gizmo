@@ -446,11 +446,7 @@ double DoCooling(double u_old, double rho, double dt, double ne_guess, double *n
     {
         du = dt * cell[target].DtInternalEnergy / ( (UNIT_SPECEGY_IN_CGS/UNIT_TIME_IN_CGS) * (PROTONMASS_CGS/HYDROGEN_MASSFRAC));
         u_old += 0.5*du;
-#if (COOL_GRACKLE_APIVERSION >= 3)
         u = CallGrackle(u_old, rho, dt, ne_guess, target, 0, ne_eval, pp, cell);
-#else
-        u = CallGrackle(u_old, rho, dt, ne_guess, target, 0);
-#endif
         /* now we attempt to correct for what the solution would have been if we had included the remaining half-step heating
          term in the full implicit solution. The term "r" below represents the exact solution if the cooling function has
          the form d(u-u0)/dt ~ -a*(u-u0)  around some u0 which is close to the "ufinal" returned by the cooling routine,
@@ -463,11 +459,7 @@ double DoCooling(double u_old, double rho, double dt, double ne_guess, double *n
      but can lead to artificial noise at high densities and low temperatures, especially if something
      like artificial pressure (but not temperature) floors are used such that the temperature gets
      'contaminated' by the pressure terms */
-#if (COOL_GRACKLE_APIVERSION >= 3)
     u = CallGrackle(u_old, rho, dt, ne_guess, target, 0, ne_eval, pp, cell);
-#else
-    u = CallGrackle(u_old, rho, dt, ne_guess, target, 0);
-#endif
 #endif
     return DMAX(u,All.MinEgySpec);
 #endif
@@ -561,15 +553,9 @@ double DoCooling(double u_old, double rho, double dt, double ne_guess, double *n
 double GetCoolingTime(double u_old, double rho, double ne_guess, double *ne_eval, int target, struct particle_data *pp, struct gas_cell_data *cell)
 {
 #if defined(COOL_GRACKLE) && !defined(GALSF_EFFECTIVE_EQS)
-#if (COOL_GRACKLE_APIVERSION >= 3)
     double tcool = CallGrackle(u_old, rho, 0.0, ne_guess, target, 1, NULL, pp, cell); /* Grackle: code time units, negative for net cooling */
     if(tcool >= 0) {return 0;} /* net heating */
     return -tcool;
-#else
-    double LambdaNet = CallGrackle(u_old, rho, 0.0, ne_guess, target, 1);
-    if(LambdaNet >= 0) LambdaNet = 0.0;
-    return LambdaNet / UNIT_TIME_IN_CGS;
-#endif
 #else
     rho *= UNIT_DENSITY_IN_CGS;	/* convert to physical cgs units */
     u_old *= UNIT_SPECEGY_IN_CGS;
@@ -2563,7 +2549,7 @@ double ThermalProperties(double u, double rho, int target, double *mu_guess, dou
     double temp = ChimesGasVars[target].temperature;
     *mu_guess = Get_Gas_Mean_Molecular_Weight_mu(temp, rho, nH0_guess, ne_guess, 0, target, pp, cell);
     return temp;
-#elif defined(COOL_GRACKLE) && (COOL_GRACKLE_APIVERSION >= 3)
+#elif defined(COOL_GRACKLE)
     /* Grackle owns the thermochemistry: the temperature comes from Grackle (its species, or for the tabular mode its Cloudy mean molecular
        weight), the abundances per H nucleus from the Grackle species (tabular: the usual guess from Ne), and mu is the value consistent
        with u and that temperature. The in-code network (convert_u_to_temp) would give a different temperature for the same state. */
